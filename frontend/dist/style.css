@@ -343,7 +343,7 @@ body.mode-guide #guide, body.mode-antenna #antenna, body.mode-settings #settings
 .ad-hint { font: 400 11px var(--f-mono); color: var(--faint); }
 
 .a-right { display: grid; grid-template-rows: minmax(0, 1fr) auto; gap: 16px; min-height: 0; }
-.a-tablewrap { overflow: auto; min-height: 0; scrollbar-width: thin; }
+.a-tablewrap { overflow: auto; min-height: 0; scrollbar-width: thin; scroll-padding: 40px 0 12px; } /* rows scroll clear of the sticky header */
 .a-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .a-table th { position: sticky; top: 0; z-index: 1; background: var(--ink); text-align: left; font: 500 10px var(--f-mono); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); padding: 8px; border-bottom: 1px solid var(--line-2); }
 .a-table td { padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; white-space: nowrap; }
