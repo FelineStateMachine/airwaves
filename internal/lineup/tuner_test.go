@@ -94,7 +94,7 @@ func TestForTuner(t *testing.T) {
 	carries := map[string][]string{}
 	for _, s := range out.Stations {
 		carries[s.CallSign] = s.Carries
-		if s.Signal == nil || len(s.Signal) != 0 {
+		if s.Signal != nil {
 			t.Errorf("%s signal %v", s.CallSign, s.Signal)
 		}
 	}
@@ -111,7 +111,7 @@ func TestForTuner(t *testing.T) {
 		t.Errorf("stations not nearest first, or the report changed: %+v", out.Stations[0])
 	}
 	raw, _ := json.Marshal(out)
-	for _, bad := range []string{"noiseMarginDb", "tier", `"presets"`} {
+	for _, bad := range []string{"noiseMarginDb", "tier", `"presets"`, `"signal"`} {
 		if strings.Contains(string(raw), bad) {
 			t.Errorf("report has %s", bad)
 		}

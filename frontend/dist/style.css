@@ -21,11 +21,6 @@
   --amber-2: #c98714;
   --teal: #3fe0c5;
   --red: #ff5d4a;
-  --t-strong: #ffc247;
-  --t-good: #e59c2f;
-  --t-fair: #a9813f;
-  --t-weak: #6d5f4a;
-  --t-unlikely: #34312d;
   --f-display: "Shoulders", "Impact", sans-serif;
   --f-body: "Schibsted", "Helvetica Neue", sans-serif;
   --f-mono: "Plex Mono", "Menlo", monospace;
@@ -289,60 +284,96 @@ body.mode-guide #guide, body.mode-antenna #antenna, body.mode-settings #settings
 .rail-stats dd { margin: 4px 0 0; font: 800 36px/1 var(--f-display); color: var(--paper); }
 .rail-stats dd small { display: block; margin-top: 5px; font: 400 12px/1.35 var(--f-body); color: var(--muted); }
 .main { min-height: 0; }
-.a-body { display: grid; grid-template-columns: minmax(340px, 42%) minmax(0, 1fr); gap: 30px; }
-.a-left { display: grid; grid-template-rows: minmax(0, 1fr) auto auto; min-height: 0; }
+/* The tuner, and Measure now with its progress, in the rail. */
+.a-tuner { display: grid; gap: 3px; padding: 12px 14px; border-radius: 3px; background: var(--ink-2); box-shadow: inset 3px 0 0 var(--line-2); }
+.at-label { font: 500 10px var(--f-mono); letter-spacing: .16em; text-transform: uppercase; color: var(--faint); }
+.at-name { font: 800 30px/1 var(--f-display); color: var(--paper); margin: 3px 0 2px; }
+.at-line { font-size: 13px; color: var(--muted); }
+.at-warn { color: var(--amber); }
+.at-note { font-size: 12px; color: var(--teal); margin-top: 4px; }
+.at-model { font: 400 10px var(--f-mono); color: var(--faint); margin-top: 4px; }
+.a-measure { display: grid; gap: 8px; margin-top: -14px; }
+.a-measure .btn { justify-self: stretch; text-align: center; }
+.a-measure .btn.busy:not(:focus) { background: var(--ink-3); color: var(--amber); box-shadow: inset 0 0 0 1px var(--amber-2); }
+.a-mprog { height: 4px; border-radius: 2px; background: var(--ink-4); overflow: hidden; }
+.a-mprog[hidden] { display: none; }
+.a-mprog i { display: block; height: 100%; width: 0; background: var(--amber); transition: width .4s var(--ease); }
+.a-mnote { font-size: 12px; line-height: 1.35; color: var(--muted); padding: 0 2px; }
+
+.a-body { display: grid; grid-template-columns: minmax(280px, 34%) minmax(0, 1fr); gap: 28px; }
+.a-left { display: grid; grid-template-rows: minmax(0, 1fr) auto; min-height: 0; gap: 10px; }
 .radar-box { position: relative; min-height: 0; }
-.radar { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.radar { position: absolute; inset: 0; width: 100%; height: 100%; overflow: hidden; }
 .radar .ring { fill: none; stroke: var(--line-2); stroke-dasharray: 2 4; }
 .radar .ring.edge { stroke-dasharray: none; stroke: var(--line); }
 .radar .axis { stroke: var(--line); }
 .radar text { font: 400 11px var(--f-mono); fill: var(--faint); letter-spacing: .08em; }
 .radar text.card { font: 600 17px var(--f-display); fill: var(--muted); letter-spacing: .1em; }
 .radar text.site { font: 500 13px var(--f-mono); fill: var(--paper); paint-order: stroke; stroke: var(--ink); stroke-width: 3px; }
-.radar .beam { fill: url(#beam); }
 .radar .home { fill: var(--paper); }
-.radar .site-dot { cursor: pointer; stroke: var(--ink); stroke-width: 1.5px; transition: r .2s; }
-.radar .site-dot.ng { stroke: var(--teal); stroke-width: 2px; }
+.radar .site-dot { cursor: pointer; stroke: var(--ink); stroke-width: 1.5px; transition: r .2s; fill: var(--ink-4); }
+.radar .site-dot.s-lock { fill: var(--amber); }
+.radar .site-dot.s-part { fill: var(--amber-2); }
+.radar .site-dot.s-off { fill: var(--red); }
 .radar .site-dot.sel { stroke: var(--paper); stroke-width: 2.5px; }
 .radar .ray { stroke: var(--amber); stroke-width: 1; stroke-dasharray: 3 3; opacity: .7; }
-.a-profile { padding-top: 12px; }
-.ap-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; font: 400 12px var(--f-mono); color: var(--muted); }
-.ap-head b { font: 600 20px var(--f-display); color: var(--paper); letter-spacing: .03em; }
-.ap-svg { width: 100%; height: 150px; display: block; margin-top: 8px; }
-.ap-svg .terrain { fill: url(#terrainfill); stroke: #6d6253; stroke-width: 1; vector-effect: non-scaling-stroke; }
-.ap-svg .los { fill: none; stroke: var(--amber); stroke-width: 1.5; stroke-dasharray: 5 4; vector-effect: non-scaling-stroke; }
-.ap-svg .los.blocked { stroke: var(--red); }
-.ap-svg .mast { stroke: var(--paper); stroke-width: 2; vector-effect: non-scaling-stroke; }
-.ap-svg .hit { fill: var(--red); }
-.ap-foot { display: flex; gap: 18px; flex-wrap: wrap; font: 400 12px var(--f-mono); color: var(--muted); margin-top: 8px; }
-.ap-foot b { font-weight: 500; }
+
+/* The picked RF channel: its last reading, its readings over time (a bar
+   a stretch: the mean quality, the low as a notch), its channels and the
+   stations licensed on it. */
+.a-detail { display: grid; gap: 8px; min-height: 0; }
+.a-detail:empty { display: none; }
+.ad-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; font: 400 12px var(--f-mono); color: var(--muted); }
+.ad-head b { font: 800 26px/1 var(--f-display); color: var(--paper); }
+.ad-scan { margin-left: auto; }
+.ad-sig { display: flex; gap: 14px; align-items: center; }
+.ad-label { font: 600 22px/1 var(--f-display); letter-spacing: .02em; }
+.ad-sub { font-size: 12px; color: var(--muted); margin-top: 3px; }
+.ad-hist { display: flex; align-items: flex-end; gap: 3px; height: 46px; padding-bottom: 1px; border-bottom: 1px solid var(--line-2); }
+.ad-hist i { position: relative; flex: 1 1 0; max-width: 14px; height: var(--h); border-radius: 2px 2px 0 0; background: var(--amber); }
+.ad-hist i::after { content: ""; position: absolute; left: 0; right: 0; bottom: var(--lo); height: 1px; background: var(--ink); opacity: .55; }
+.ad-hist i.h-part { background: var(--amber-2); }
+.ad-hist i.h-off { background: var(--red); height: 4px; }
+.ad-hist i.h-off::after { display: none; }
+.ad-axis { display: flex; justify-content: space-between; font: 400 10px var(--f-mono); color: var(--faint); }
+.ad-chans { display: flex; flex-wrap: wrap; gap: 3px 14px; font-size: 12px; color: var(--muted); }
+.ad-chans b { font: 500 11px var(--f-mono); color: var(--paper); }
+.ad-stations { margin: 0; padding: 0; list-style: none; display: grid; gap: 2px; font-size: 12px; color: var(--muted); max-height: calc(14 * var(--vh)); overflow: hidden; }
+.ad-stations b { color: var(--paper); font-weight: 500; }
+.ad-hint { font: 400 11px var(--f-mono); color: var(--faint); }
 
 .a-right { display: grid; grid-template-rows: minmax(0, 1fr) auto; gap: 16px; min-height: 0; }
 .a-tablewrap { overflow: auto; min-height: 0; scrollbar-width: thin; }
 .a-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .a-table th { position: sticky; top: 0; z-index: 1; background: var(--ink); text-align: left; font: 500 10px var(--f-mono); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); padding: 8px; border-bottom: 1px solid var(--line-2); }
-.a-table td { padding: 8px; border-bottom: 1px solid var(--line); vertical-align: middle; white-space: nowrap; }
+.a-table td { padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; white-space: nowrap; }
 .a-table .r { text-align: right; } .a-table .c { text-align: center; }
-.a-table tr { cursor: pointer; transition: background .15s; }
-.a-table tbody tr:hover { background: var(--ink-2); }
+.a-table tr[data-rf] { cursor: pointer; transition: background .15s; }
+.a-table tbody tr[data-rf]:hover { background: var(--ink-2); }
 .a-table tr.sel { background: var(--ink-3); box-shadow: inset 3px 0 0 var(--amber-2); }
-.a-table tr.dim td { opacity: .42; }
+.a-table tr.nf td { color: var(--muted); }
+.a-table tr.nf .call, .a-table tr.nf .rf b { color: var(--muted); }
+.a-table .rf b { font: 800 24px/1 var(--f-display); }
 .a-table .call { font: 600 18px var(--f-display); letter-spacing: .03em; }
 .a-table .sub { font-size: 11px; color: var(--muted); }
 .a-table .mono { font-family: var(--f-mono); font-size: 12px; }
-.a-table .carries { font: 400 11px var(--f-mono); color: var(--muted); white-space: normal; max-width: 220px; }
-.nm { display: inline-block; min-width: 48px; padding: 3px 0; border-radius: 2px; font: 500 11px var(--f-mono); text-align: center; color: var(--ink); background: var(--c); }
-.nm.dark { color: var(--paper); }
+.a-table .carries { font: 400 11px var(--f-mono); color: var(--paper); white-space: normal; max-width: 150px; }
+.a-table .carries span { white-space: nowrap; }
+.a-table .errs { color: var(--red); }
+.a-table tr.a-sect td { padding: 18px 8px 6px; font: 500 10px var(--f-mono); letter-spacing: .14em; text-transform: uppercase; color: var(--faint); border-bottom: 1px solid var(--line-2); }
+.meter.m-none i { background: var(--ink-4); }
+.meter.m-off i:first-child { background: var(--red); }
 
-.a-nextgen { max-height: calc(36 * var(--vh)); overflow: auto; scrollbar-width: thin; padding: 14px 18px; background: var(--ink-2); border-top: 2px solid var(--teal); border-radius: 3px; }
+.a-nextgen { max-height: calc(24 * var(--vh)); overflow: hidden; padding: 12px 18px; background: var(--ink-2); border-top: 2px solid var(--teal); border-radius: 3px; }
 .a-nextgen:empty { display: none; }
-.ng-label { font: 500 11px var(--f-mono); letter-spacing: .16em; text-transform: uppercase; color: var(--teal); margin-bottom: 10px; }
-.ng-hosts { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px 22px; }
-.ng-host b { font: 600 17px var(--f-display); letter-spacing: .03em; }
-.ng-host .mono { font: 400 11px var(--f-mono); color: var(--muted); }
-.ng-host ul { margin: 4px 0 0; padding: 0; list-style: none; font-size: 13px; }
-.ng-host li span { font-family: var(--f-mono); font-size: 11px; color: var(--teal); margin-right: 8px; }
-.ng-host li em { color: var(--muted); font-style: normal; font-size: 12px; }
+.ng-label { font: 500 11px var(--f-mono); letter-spacing: .16em; text-transform: uppercase; color: var(--teal); margin-bottom: 10px; display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap; }
+.ng-label small { font: 400 11px var(--f-body); letter-spacing: 0; text-transform: none; color: var(--muted); }
+.ng-hosts { display: grid; gap: 4px; }
+.ng-host { font-size: 13px; color: var(--muted); line-height: 1.5; }
+.ng-host b { font: 600 17px var(--f-display); letter-spacing: .03em; color: var(--paper); margin-right: 4px; }
+.ng-host em { font: 400 11px var(--f-mono); font-style: normal; margin-right: 10px; }
+.ng-host span { white-space: nowrap; margin-right: 10px; }
+.ng-host span i { font: 400 11px var(--f-mono); font-style: normal; color: var(--teal); }
 
 /* ---------- Settings ---------- */
 /* One list of rows (settingsRows in app.js), moved through with a remote or
@@ -530,19 +561,6 @@ body:not(.mode-guide) .g-cell.rec-on::after { animation: none; } /* hidden, so s
 .r-card.watched .r-art { filter: saturate(.4) brightness(.7); }
 .r-hint { list-style: none; padding: 14px 16px; font: 400 11px var(--f-mono); color: var(--faint); letter-spacing: .06em; }
 
-/* ---------- Reception preview ---------- */
-.rail-preview { padding: 0 14px; }
-.rail-preview label { display: grid; gap: 6px; font: 500 10px var(--f-mono); letter-spacing: .16em; text-transform: uppercase; color: var(--faint); }
-.rail-preview input {
-  background: var(--ink); border: 1px solid var(--line-2); border-radius: 3px; padding: 9px 11px; width: 100%;
-  font: 400 15px var(--f-mono); color: var(--paper); outline: none; letter-spacing: .06em; -webkit-user-select: text; user-select: text;
-}
-.rail-preview input:focus { border-color: var(--amber); }
-.rail-previewing { display: grid; gap: 10px; padding: 14px; border-radius: 3px; background: var(--ink-2); box-shadow: inset 3px 0 0 var(--teal); }
-.rail-previewing[hidden], .rail-preview[hidden] { display: none; }
-.rail-previewing .rail-stats { padding: 0; }
-.rail-previewing .btn { justify-self: stretch; text-align: center; }
-
 /* ---------- Weather ---------- */
 /* The frame never takes focus, so channel keys keep working on WX. */
 /* Always 854x480, the display's own size, scaled by fitWX in app.js to
@@ -713,7 +731,7 @@ body.lite { --glow: 0 0 0 0 transparent; }
 }
 /* A filled button keeps its fill, ringed apart from it. */
 .btn.fx:not(.ghost):focus { background-color: var(--amber); color: var(--ink); box-shadow: 0 0 0 2px var(--ink), 0 0 0 5px var(--amber), var(--glow); }
-.wx-main .fx:focus, .rail-preview label.fx:focus { box-shadow: var(--ring-in), var(--glow); }
+.wx-main .fx:focus, .a-tuner.fx:focus { box-shadow: var(--ring-in), var(--glow); }
 body:not(.dock-nav) #guide[data-zone="grid"] .g-cell.sel,
 body:not(.dock-nav) .s-row.focus,
 body:not(.dock-nav) #recordings[data-zone="list"] .r-item.sel,
@@ -726,7 +744,6 @@ body:not(.dock-nav) #recordings[data-zone="list"] .r-card.sel { box-shadow: var(
 /* Where the focus goes back to when it's elsewhere in the view. */
 .rm-item.fx:focus { box-shadow: var(--ring-in), var(--glow); }
 .g-filters button.fx:focus { box-shadow: var(--ring-in); color: var(--amber); }
-.rail-preview label.fx { margin: -8px -10px; padding: 8px 10px; border-radius: 3px; }
 .wx-main > .fx { border-radius: 3px; }
 .wx-main .wx-block.fx, .wx-main .wx-days.fx, .wx-main .wx-maps.fx { padding: 10px 12px; margin: -10px -12px; }
 .wx-main { padding: 12px 20px 12px 14px; }
@@ -740,5 +757,5 @@ body:not(.dock-nav) #recordings[data-zone="list"] .r-card.sel { box-shadow: var(
 .act.armed { box-shadow: inset 0 0 0 1px var(--red); color: var(--red); }
 .act.fx.armed:focus { box-shadow: var(--ring), var(--glow); color: var(--red); }
 /* A field being typed in has the ring, not its row. */
-.boot-connect input:focus, .rail-preview input:focus, .s-row input:focus { box-shadow: var(--ring); border-color: var(--amber); }
+.boot-connect input:focus, .s-row input:focus { box-shadow: var(--ring); border-color: var(--amber); }
 body:not(.dock-nav) .s-row.focus:focus-within { box-shadow: inset 0 0 0 1px var(--line-2); transform: none; }

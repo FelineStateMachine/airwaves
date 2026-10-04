@@ -159,30 +159,20 @@ func TestClientServerRoundTrip(t *testing.T) {
 	}
 }
 
-// TestNoEstimates: the reception estimates the app used to ask for are
-// gone, with a reason old app versions show; the presets they still load
-// at start remain.
+// TestNoEstimates: the reception estimates the app used to ask for, and
+// the antenna presets they were for, are gone.
 func TestNoEstimates(t *testing.T) {
 	srv := httptest.NewServer((&Server{Backend: &fake{}}).Handler())
 	defer srv.Close()
-	for _, path := range []string{"/api/preview?zip=80302", "/api/profile?facility=1&rf=2"} {
+	for _, path := range []string{"/api/preview?zip=80302", "/api/profile?facility=1&rf=2", "/api/presets"} {
 		resp, err := http.Get(srv.URL + path)
 		if err != nil {
 			t.Fatal(err)
 		}
-		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		if resp.StatusCode != http.StatusGone || !strings.Contains(string(body), "otascan") {
-			t.Errorf("%s: %d %s", path, resp.StatusCode, body)
+		if resp.StatusCode != http.StatusNotFound {
+			t.Errorf("%s: %d", path, resp.StatusCode)
 		}
-	}
-	resp, err := http.Get(srv.URL + "/api/presets")
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("presets: %d", resp.StatusCode)
 	}
 }
 

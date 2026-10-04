@@ -103,9 +103,8 @@ type Info struct {
 // Snapshot is the lineup with its listings.
 type Snapshot struct {
 	// Report is what is on record at the location: the FCC's transmitters
-	// (with no estimates: their "signal" is empty), the ATSC 3.0 hosts and
-	// the data sources. Its Channels are the tuner's lineup, as Antenna
-	// has it, in the shape app versions before the measured lineup read.
+	// (with no estimates), the ATSC 3.0 hosts and the data sources. Its
+	// Channels are empty: the channels are the tuner's, in Antenna.
 	Report *lineup.Report `json:"report"`
 	// Guide is the listings of the tuner's channels.
 	Guide *guide.Guide `json:"guide"`
@@ -535,7 +534,6 @@ func (s *Service) Snapshot(ctx context.Context, refresh bool) (*Snapshot, error)
 		chans[i] = c.TunerChannel
 	}
 	out.Report = lineup.ForTuner(snap.Report, chans)
-	out.Report.Channels = compatChannels(a)
 	if len(a.Channels) == 0 && a.Tuner.Reason != "" {
 		out.Report.Warnings = append(slices.Clone(out.Report.Warnings), "No antenna channels: "+a.Tuner.Reason)
 	}

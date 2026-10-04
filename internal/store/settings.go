@@ -19,11 +19,6 @@ type Settings struct {
 	Token  string `json:"token"`
 	// ClientID identifies this app to the server so its streams are its own.
 	ClientID string `json:"clientId"`
-	// Antenna is the reception preset used to decide what is receivable:
-	// "indoor", "attic" or "rooftop".
-	Antenna string `json:"antenna"`
-	// ShowAll lists every channel in the lineup, not just receivable ones.
-	ShowAll bool `json:"showAll"`
 	// LastChannel is restored on launch.
 	LastChannel string `json:"lastChannel"`
 	// Favorites and Hidden hold channel keys: "number|callSign" for antenna
@@ -41,15 +36,10 @@ type Settings struct {
 
 // DefaultSettings returns settings for a first launch.
 func DefaultSettings() Settings {
-	return Settings{Antenna: "rooftop"}
+	return Settings{}
 }
 
 func (s Settings) normalized() Settings {
-	switch s.Antenna {
-	case "indoor", "attic", "rooftop":
-	default:
-		s.Antenna = DefaultSettings().Antenna
-	}
 	if s.Scale != 0 && (s.Scale < 50 || s.Scale > 300) {
 		s.Scale = 0
 	}

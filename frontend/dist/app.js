@@ -15,23 +15,93 @@ const clock = (t) => clockFormat.format(new Date(t));
 const COMPASS = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
 const compass = (deg) => COMPASS[Math.round(deg / 22.5) % 16];
 
-const TIERS = ['unknown', 'unlikely', 'weak', 'fair', 'good', 'strong'];
-const TIER_LABEL = { strong: 'Strong', good: 'Good', fair: 'Fair', weak: 'Weak', unlikely: 'Unlikely', unknown: 'Unknown' };
-const TIER_COLOR = { strong: 'var(--t-strong)', good: 'var(--t-good)', fair: 'var(--t-fair)', weak: 'var(--t-weak)', unlikely: 'var(--t-unlikely)', unknown: 'var(--t-unlikely)' };
-const rankOf = (t) => Math.max(0, TIERS.indexOf(t));
-const receivable = (t) => t === 'strong' || t === 'good' || t === 'fair';
-const EARTH_M = 8_495_000; // 4/3 effective earth radius
-
 function log(level, msg) {
   try { api().Log(level, String(msg)); } catch { /* not in Wails */ }
 }
 
-function meter(tier, big) {
-  const lit = rankOf(tier);
-  let html = '';
-  for (let i = 1; i <= 5; i++) html += `<i class="${i <= lit ? 'on' : ''}"></i>`;
-  return `<span class="meter${big ? ' big' : ''}" style="--c:${TIER_COLOR[tier] || TIER_COLOR.unknown}">${html}</span>`;
+// ---------- signal ----------
+// Everything shown of reception was measured by the server's tuners (its
+// /api/signal): per RF channel, the latest reading and the latest stretch
+// of readings (recent: the last Measure now, or the last while something
+// watched it), with lows and means. The stretch is what's shown: a single
+// reading of a marginal signal jumps around. An HDHomeRun reports strength
+// and quality (its signal-to-noise quality) as percentages; other tuners
+// may report SNR in dB.
+const SIG_COLOR = { lock: 'var(--amber)', part: 'var(--amber-2)', off: 'var(--red)', none: 'var(--faint)' };
+
+// sigOf sums up a measurement ({ signal, recent }, of a channel or an RF
+// channel): its state ('lock' throughout, 'part' some of the time, 'off'
+// none, 'none' never measured), bars to show (0 to 5, from the measured
+// quality), a label and the details.
+function sigOf(m) {
+  const r = m && m.recent;
+  const sig = m && m.signal;
+  if (!r && !sig) return { state: 'none', bars: 0, label: 'Not measured yet', color: SIG_COLOR.none, quality: '', strength: '', errors: null, at: 0, source: '', lockedPct: 0 };
+  const lockedPct = r ? r.lockedPct : sig.lock ? 100 : 0;
+  const state = lockedPct >= 100 ? 'lock' : lockedPct > 0 ? 'part' : 'off';
+  // From the stretch, its means; else the one reading.
+  const val = (key) => (r ? (r[key] ? r[key].avg : null) : sig[key]);
+  const src = r || sig;
+  const q = val('qualityPct');
+  const snr = val('snrDb');
+  const strengthPct = val('strengthPct');
+  const strengthDbm = val('strengthDbm');
+  let bars = 0;
+  if (state !== 'off') {
+    if (q != null) bars = q >= 70 ? 5 : q >= 55 ? 4 : q >= 40 ? 3 : q >= 25 ? 2 : q > 0 ? 1 : 0;
+    else if (snr != null) bars = snr >= 30 ? 5 : snr >= 25 ? 4 : snr >= 20 ? 3 : snr >= 17 ? 2 : snr > 0 ? 1 : 0;
+    else bars = 3;
+  }
+  const quality = q != null ? `${Math.round(q)}%` : snr != null ? `${snr.toFixed(1)} dB` : '';
+  const strength = strengthPct != null ? `${Math.round(strengthPct)}%` : strengthDbm != null ? `${strengthDbm.toFixed(1)} dBm` : '';
+  const errors = sig && sig.errorsPerSec != null ? sig.errorsPerSec : null;
+  const label = state === 'off' ? 'No lock'
+    : state === 'part' ? `Locked ${Math.round(lockedPct)}% of the time`
+      : quality ? `Quality ${quality}` : 'Locked';
+  return { state, bars, label, color: SIG_COLOR[state], quality, strength, errors, at: Date.parse(src.to || src.at), source: src.source, lockedPct };
 }
+
+// meter draws a measurement's bars.
+function meter(s, big) {
+  let html = '';
+  for (let i = 1; i <= 5; i++) html += `<i class="${i <= s.bars ? 'on' : ''}"></i>`;
+  return `<span class="meter${big ? ' big' : ''} m-${s.state}" style="--c:${s.color}">${html}</span>`;
+}
+
+// ago says how long ago a time was, roughly.
+function ago(t) {
+  const m = Math.round((Date.now() - t) / MIN);
+  if (m < 1) return 'just now';
+  if (m < 60) return `${m} min ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h} h ago`;
+  return new Date(t).toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
+// agoShort is ago for a table: "10 min", "3 h", "Oct 3".
+function agoShort(t) {
+  const m = Math.round((Date.now() - t) / MIN);
+  if (m < 1) return 'now';
+  if (m < 60) return `${m} min`;
+  if (m < 24 * 60) return `${Math.round(m / 60)} h`;
+  return new Date(t).toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
+// sigDetail is a measurement's details in words: "strength 82%, 18
+// errors a second, 5 min ago".
+function sigDetail(s) {
+  if (s.state === 'none') return 'Measure now in Reception reads it';
+  const parts = [];
+  if (s.state !== 'lock' && s.quality && s.state !== 'off') parts.push(`quality ${s.quality}`);
+  if (s.strength) parts.push(`strength ${s.strength}`);
+  if (s.errors != null && s.state !== 'off') parts.push(s.errors >= 1 ? `${Math.round(s.errors)} errors a second` : 'no errors');
+  parts.push(`${ago(s.at)}${s.source === 'active' ? ', while tuned' : ''}`);
+  return parts.join(', ');
+}
+
+// trouble is a measurement that explains a bad picture: no lock, a lock
+// that comes and goes, or a stream breaking up (5 errors a second or more).
+const trouble = (s) => s.state === 'off' || s.state === 'part' || (s.errors != null && s.errors >= 5);
 
 let toastTimer = 0;
 function toast(msg, ms = 3500, html = false) {
@@ -64,11 +134,14 @@ document.body.classList.toggle('android-tv', androidTV);
 const state = {
   boot: null,
   settings: null,
-  presets: [],
   report: null,
   guide: null,
-  byFacility: new Map(), // facilityId -> best station
+  byFacility: new Map(), // facilityId -> nearest station
   bySite: new Map(),     // "facilityId:rf" -> station
+  antenna: null,   // the tuner and its RF channels, as last measured (/api/signal)
+  antennaChans: [], // the tuner's channels, hidden ones too
+  byRF: new Map(), // RF channel -> what's known of it (antenna.muxes)
+  sigStamp: 0,     // counts signal updates, for redraws
   lineup: [],
   custom: [],      // the server's own channels: the weather channel, folder, Jellyfin and YouTube channels
   current: null,
@@ -85,8 +158,7 @@ const state = {
   gSpan: 150,
   gRow: 0,
   gTime: 0,
-  aSel: null,
-  tuners: [],
+  aRF: 0,          // the RF channel picked in Reception
   info: null,      // backend: local engine or a server
   config: null,    // location the lineup is built for
   dvr: null,       // recording state from the server
@@ -106,6 +178,13 @@ async function scan(refresh) {
   const snap = await api().Scan(refresh);
   state.report = snap.report;
   state.guide = snap.guide || { programs: {} };
+  // The antenna channels are the tuner's: those its scan found, described
+  // from the FCC's records and the listings. Their keys (for favorites and
+  // hidden channels) carry the listings' call sign where there is one
+  // ("2.1|KWGNDT"), as keys always have, else the station's.
+  state.antennaChans = (snap.antenna ? snap.antenna.channels : snap.report.channels || [])
+    .map((c) => ({ ...c, key: `${c.number}|${c.guideCallSign || c.callSign}` }));
+  if (snap.antenna) applySignal(snap.antenna);
   // The server's own channels, with the details set on its admin page. The
   // weather channel plays here, from the WeatherStar display; the others'
   // schedules join the guide like a station's, under their own guide id,
@@ -130,11 +209,11 @@ async function scan(refresh) {
 function indexData() {
   state.byFacility.clear();
   state.bySite.clear();
-  for (const s of state.report.stations) {
+  const stations = [...state.report.stations].sort((a, b) => a.distanceKm - b.distanceKm);
+  for (const s of stations) {
     if (!state.byFacility.has(s.facilityId)) state.byFacility.set(s.facilityId, s);
     state.bySite.set(`${s.facilityId}:${s.rfChannel}`, s);
   }
-  for (const c of state.report.channels) c.key = `${c.number}|${c.callSign}`;
   const progs = (state.guide && state.guide.programs) || {};
   for (const list of Object.values(progs)) {
     for (const p of list) { p._s = Date.parse(p.start); p._e = Date.parse(p.end); }
@@ -146,7 +225,6 @@ function indexData() {
 // number or name: the weather channel has one key, and a custom channel's
 // carries its name as well as its number (migrateKeys follows either).
 const WEATHER_KEY = 'weather';
-const OWN_TIER = { indoor: 'strong', attic: 'strong', rooftop: 'strong' };
 
 // A custom channel's category counts as these genres for its programs, so
 // the guide's filters find it; categories with no filter of their own get
@@ -169,7 +247,7 @@ function ownChannel(c) {
     call: c.callSign || '', callSign: c.callSign || '', baseCall: c.callSign || '',
     kind: c.kind || 'folder', category: c.category || 'Other', description: c.description || '',
     logo: c.logo ? state.boot.serverUrl + c.logo : '',
-    own: true, weather, custom: !weather, guideId: weather ? '' : `custom:${c.number}`, tier: OWN_TIER,
+    own: true, weather, custom: !weather, guideId: weather ? '' : `custom:${c.number}`,
   };
 }
 
@@ -177,7 +255,7 @@ function ownChannel(c) {
 const OLD_WX = {
   key: WEATHER_KEY, number: 'WX', major: 0, minor: 0, name: 'Airwaves Weather', network: 'Local Forecast',
   call: 'WX', callSign: 'WX', baseCall: 'WX', kind: 'weather', category: 'Weather', description: '', logo: '',
-  own: true, weather: true, custom: false, guideId: '', tier: OWN_TIER,
+  own: true, weather: true, custom: false, guideId: '',
 };
 
 const weatherChannel = () => state.custom.find((c) => c.weather) || null;
@@ -185,19 +263,23 @@ const weatherChannel = () => state.custom.find((c) => c.weather) || null;
 // migrateKeys moves saved favorites and hidden channels to where the
 // server's own channels are now: the weather channel's from the old WX key,
 // and a custom channel's to its current number and name (found by name, or
-// else by number). Keys of channels not listed now are kept for when they
-// are. A saved last channel of WX becomes the weather channel's number, and
-// one no longer in use the new number of the custom channel a saved key
-// names with it.
+// else by number). An antenna channel's whose call sign changed moves to
+// the one channel with its number. Keys of channels not listed now are kept
+// for when they are. A saved last channel of WX becomes the weather
+// channel's number, and one no longer in use the new number of the custom
+// channel a saved key names with it.
 async function migrateKeys() {
   const s = state.settings;
   const custom = state.custom.filter((c) => !c.weather);
-  const known = new Set([...state.custom, ...state.report.channels].map((c) => c.key));
+  const known = new Set([...state.custom, ...state.antennaChans].map((c) => c.key));
   const fix = (k) => {
     if (k === 'WX|WX') return WEATHER_KEY;
     if (known.has(k)) return k;
     const [num, kind, ...rest] = String(k).split('|');
-    if (kind !== 'custom') return k;
+    if (kind !== 'custom') {
+      const same = state.antennaChans.filter((c) => c.number === num);
+      return same.length === 1 && kind ? same[0].key : k;
+    }
     const name = rest.join('|').toLowerCase();
     const named = name ? custom.filter((c) => c.name.toLowerCase() === name) : [];
     if (named.length === 1) return named[0].key;
@@ -208,7 +290,7 @@ async function migrateKeys() {
   const hidden = [...new Set((s.hidden || []).map(fix))];
   const wx = weatherChannel();
   let lastChannel = s.lastChannel;
-  const numbers = new Set([...state.custom, ...state.report.channels].map((c) => c.number));
+  const numbers = new Set([...state.custom, ...state.antennaChans].map((c) => c.number));
   if (lastChannel === 'WX' && wx) lastChannel = wx.number;
   else if (lastChannel && !numbers.has(lastChannel)) {
     const old = [...(s.favorites || []), ...(s.hidden || [])].find((k) => k.startsWith(`${lastChannel}|custom|`));
@@ -237,13 +319,13 @@ function numberKey(c) {
 const byNumber = (a, b) => (a.major - b.major) || (a.minor - b.minor);
 
 // buildLineup is the channels to show, by number: the server's own and the
-// antenna channels expected at this antenna, less those hidden. A custom
-// channel takes the place of an antenna channel with its number, as it does
-// on the server, which plays it for that number.
+// tuner's, less those hidden. A tuner's channel stays when its signal is
+// weak now; tuning it then says so. A custom channel takes the place of an
+// antenna channel with its number, as it does on the server, which plays it
+// for that number.
 function buildLineup() {
-  const preset = state.settings.antenna;
   const taken = new Set(state.custom.map(numberKey));
-  const antenna = state.report.channels.filter((c) => !taken.has(numberKey(c)) && !isHidden(c) && (state.settings.showAll || receivable(c.tier && c.tier[preset])));
+  const antenna = state.antennaChans.filter((c) => !taken.has(numberKey(c)) && !isHidden(c));
   state.lineup = [...state.custom.filter((c) => !isHidden(c)), ...antenna].sort(byNumber);
   if (state.current) state.current = state.lineup.find((c) => c.key === state.current.key) || state.current;
 }
@@ -251,7 +333,14 @@ function buildLineup() {
 const programsFor = (ch) => (ch && ch.weather ? wxPrograms() : (ch && ch.guideId && state.guide && state.guide.programs[ch.guideId]) || []);
 const airingAt = (ch, t) => programsFor(ch).find((p) => p._s <= t && t < p._e);
 const nextAfter = (ch, t) => programsFor(ch).find((p) => p._s > t);
-const stationFor = (ch) => ch && state.byFacility.get(ch.facilityId);
+// stationFor is the licensed transmitter a channel comes from, on its RF
+// channel.
+const stationFor = (ch) => ch && (state.bySite.get(`${ch.facilityId}:${ch.rf}`) || state.byFacility.get(ch.facilityId));
+// sigFor is what was measured of a channel's RF channel.
+const sigFor = (ch) => (ch && !ch.own ? { signal: ch.signal, recent: ch.recent } : null);
+// nextGen reports whether the tuners take in ATSC 3.0: through Tvheadend
+// they never do, so NextGen viewing (its guide filter) stays out of sight.
+const nextGen = () => !!(state.info && state.info.tuner && state.info.tuner.atsc3);
 // displayCall is a channel's short label: a station's call sign, or an own
 // channel's call sign, "Airwaves" when it has none.
 const displayCall = (ch) => (ch && ch.own ? ch.call || 'Airwaves' : (ch && (ch.baseCall || ch.callSign)) || '');
@@ -261,7 +350,7 @@ function findChannel(number) {
   const n = number;
   return state.lineup.find((c) => c.number === n)
     || state.lineup.find((c) => c.major === Number(n) && (c.minor === 1 || c.minor === 0))
-    || state.report.channels.find((c) => c.number === n)
+    || state.antennaChans.find((c) => c.number === n)
     || state.custom.find((c) => c.number === n);
 }
 
@@ -309,7 +398,7 @@ async function init() {
   }
   f($('#boot'), 'sub').textContent = state.info.name;
   for (const w of state.report.warnings || []) bootLog(w, true);
-  bootLog(`Ready: ${state.lineup.length} channels you can likely receive`);
+  bootLog(`Ready: ${state.lineup.length} channels`);
   setTimeout(() => document.body.classList.remove('booting'), 700);
   // Gone once faded out, so its title stops animating.
   setTimeout(() => { $('#boot').hidden = true; }, 700 + 1200);
@@ -329,6 +418,7 @@ async function init() {
   setInterval(() => scan(false).then(renderAll).catch((e) => log('warn', e)), 30 * MIN);
   setInterval(() => { if (state.view === 'guide' || state.view === 'recordings') loadDVR(); }, MIN);
   setInterval(loadWeather, 2 * MIN);
+  setInterval(signalTick, 2000);
   loadDVR();
   loadWeather();
 }
@@ -362,7 +452,6 @@ function showConnect(err) {
 function applyBoot(b) {
   state.boot = b;
   state.settings = b.settings;
-  state.presets = b.presets;
   state.info = b.info || { name: '', tuner: {}, dvr: false };
   state.config = b.config || {};
   document.body.classList.toggle('has-dvr', !!state.info.dvr);
@@ -509,6 +598,8 @@ async function tune(ch, { quiet = false } = {}) {
     if (token !== state.tuneToken) return;
     log('warn', `tune ${ch.number}: ${e}`);
     showNoSignal(ch, String(e && e.message ? e.message : e));
+    // The server read the tuner while it tried.
+    if (!ch.own) loadSignal();
   } finally {
     if (token === state.tuneToken) setTimeout(() => stage.classList.remove('tuning'), 200);
   }
@@ -640,10 +731,10 @@ function renderBanner() {
   // What's on is being recorded, or will be.
   const rec = p && state.dvrKeys.get(airingKey(ch, p));
   f(b, 'chips').innerHTML = (rec ? `<span class="chip live">${rec.status === 'recording' ? 'Recording' : 'Will record'}</span>` : '') + chipsFor(p, ch);
-  f(b, 'title').textContent = p ? p.title : ch.atsc3Only ? 'ATSC 3.0 service' : 'No listings';
+  f(b, 'title').textContent = p ? p.title : 'No listings';
   f(b, 'ep').textContent = episodeLine(p);
   f(b, 'progress').style.width = p ? `${Math.min(100, ((now - p._s) / (p._e - p._s)) * 100)}%` : '0';
-  f(b, 'desc').textContent = p ? p.description || '' : ch.atsc3Only ? 'Broadcast only in ATSC 3.0, which needs a NextGen TV tuner. No Gracenote listings for this service.' : ch.description || '';
+  f(b, 'desc').textContent = p ? p.description || '' : ch.description || '';
   f(b, 'next').textContent = nx ? `${clock(nx._s)}  ${nx.title}` : '';
 
   f(b, 'note').textContent = state.note || '';
@@ -660,23 +751,27 @@ function renderBanner() {
     return;
   }
 
-  // Reception is shown only when asked for (I twice) or when it is weak
-  // enough to explain a bad picture.
-  const preset = state.settings.antenna;
-  const tier = (ch.tier && ch.tier[preset]) || 'unknown';
-  const weak = tier === 'weak' || tier === 'unlikely';
-  b.classList.toggle('warn', weak);
+  // The signal is shown when asked for (I twice, or the controls' I) or
+  // when what was measured explains a bad picture.
+  const sig = sigOf(sigFor(ch));
+  b.classList.toggle('warn', trouble(sig));
+  f(b, 'meter').outerHTML = meter(sig, true).replace('class="meter big', 'data-f="meter" class="meter big');
+  f(b, 'meter').hidden = false;
+  f(b, 'tier').textContent = sig.label;
+  f(b, 'tier').style.color = sig.state === 'none' ? '' : sig.color;
   const st = stationFor(ch);
-  f(b, 'meter').outerHTML = meter(tier, true).replace('class="meter big"', 'class="meter big" data-f="meter"');
-  f(b, 'tier').textContent = weak ? 'Weak signal' : `${TIER_LABEL[tier]} signal`;
-  f(b, 'tier').style.color = TIER_COLOR[tier];
+  const mux = state.byRF.get(ch.rf);
+  const where = ch.rf ? `RF ${ch.rf} ${(mux && mux.band) || (st && st.band) || ''}`.trim() : '';
+  const lines = [];
   if (st) {
-    const sig = st.signal[preset];
-    f(b, 'tx').innerHTML = `${ch.via ? `On ${esc(st.callSign)}'s transmitter, ` : `${esc(st.callSign)} `}RF ${st.rfChannel} ${esc(st.band)}<br>${st.distanceKm.toFixed(0)} km ${compass(st.bearingDeg)}, ${sig && sig.tier !== 'unknown' ? `margin ${sig.noiseMarginDb > 0 ? '+' : ''}${sig.noiseMarginDb.toFixed(0)} dB, ${preset} antenna` : 'margin unknown'}`;
-  } else {
-    f(b, 'tx').textContent = 'No licensed transmitter matched';
+    lines.push(`${ch.via ? `On ${esc(st.callSign)}'s transmitter, ` : `${esc(st.callSign)} `}${where}`);
+    lines.push(`${st.distanceKm.toFixed(0)} km ${compass(st.bearingDeg)}, ${st.erpKw >= 10 ? st.erpKw.toFixed(0) : st.erpKw.toFixed(1)} kW`);
+  } else if (where) {
+    lines.push(`${where}, no licensed transmitter on record`);
   }
-  f(b, 'atsc3').textContent = ch.atsc3 ? `Also in ATSC 3.0 on ${ch.atsc3.hostCall} RF ${ch.atsc3.rf}` : '';
+  lines.push(esc(sigDetail(sig)));
+  f(b, 'tx').innerHTML = lines.join('<br>');
+  f(b, 'atsc3').textContent = ch.atsc3 ? `Also in ATSC 3.0 on ${ch.atsc3.hostCall} RF ${ch.atsc3.rf}${nextGen() ? '' : ', which needs a NextGen TV tuner'}` : '';
 }
 
 // What the server's own channels play, for the banner's details.
@@ -697,7 +792,7 @@ function showChannelLogo(b, ch) {
 }
 
 // The banner shows briefly on a channel change and on request. Pressing I
-// cycles: banner, banner with reception details, hidden. With the
+// cycles: banner, banner with the measured signal, hidden. With the
 // on-screen controls up it stays as long as they do.
 function showBanner(detail = false) {
   renderBanner();
@@ -1044,7 +1139,6 @@ function seekTimeline(frac) {
   osdTouch();
 }
 
-const presetLabel = (name) => (state.presets.find((p) => p.name === name) || { label: name }).label;
 
 // ---------- number entry ----------
 function entryKey(k) {
@@ -1651,9 +1745,10 @@ const FILTERS = [
 // guideFilters adds a filter for each category of the lineup's own channels
 // that none of FILTERS covers ("Kids", "Gaming"), in the order categories
 // are listed on the admin page. Not Weather: the weather channel leads the
-// guide anyway.
+// guide anyway. NextGen only with a tuner that takes in ATSC 3.0.
 function guideFilters() {
-  const keys = new Set([...FILTERS.map(([k]) => k), 'weather']);
+  const base = FILTERS.filter(([k]) => k !== 'nextgen' || nextGen());
+  const keys = new Set([...base.map(([k]) => k), 'weather']);
   const extra = [];
   for (const category of Object.keys(CATEGORY_GENRES)) {
     const k = categoryGenres(category)[0];
@@ -1661,7 +1756,7 @@ function guideFilters() {
     keys.add(k);
     extra.push([k, category]);
   }
-  return [...FILTERS, ...extra];
+  return [...base, ...extra];
 }
 
 function guideChannels() {
@@ -1910,7 +2005,7 @@ function renderGuide() {
   const rows = $('.g-rows');
   const lo = state.gStart;
   const now = Date.now();
-  const shown = [state.guideFilter, lo, rows.clientWidth, Math.floor(now / MIN), state.lineup, state.guide, state.dvrKeys, state.settings, state.current && state.current.key, state.wx];
+  const shown = [state.guideFilter, lo, rows.clientWidth, Math.floor(now / MIN), state.lineup, state.guide, state.dvrKeys, state.settings, state.current && state.current.key, state.wx, state.sigStamp];
   if (shown.every((v, i) => v === guideShown[i])) return moveGuideSelection(list, lo);
   guideShown = shown;
   const chw = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--chw')) || 260;
@@ -1946,16 +2041,18 @@ function renderGuide() {
   const sel = selectedProgram(list);
   let html = '';
   list.forEach((ch, r) => {
-    const tier = (ch.tier && ch.tier[state.settings.antenna]) || 'unknown';
+    // A channel's measured signal shows only when it explains a bad picture.
+    const sig = ch.own ? null : sigOf(sigFor(ch));
+    const bad = sig && trouble(sig);
     const cls = ['g-row', r === state.gRow ? 'sel' : '', state.current && ch.key === state.current.key ? 'cur' : ''].join(' ');
     html += `<div class="${cls}"><div class="g-ch" data-row="${r}">
       <div class="num${ch.number.length > 4 ? ' long' : ''}">${esc(ch.number)}</div>
-      <div class="who"><div class="net">${isFav(ch) ? '<span class="fav">★</span>' : ''}${esc(ch.network || displayCall(ch))}</div><div class="call">${tier === 'weak' || tier === 'unlikely' ? meter(tier) : ''}<span>${esc(displayCall(ch))}</span></div></div>
+      <div class="who"><div class="net">${isFav(ch) ? '<span class="fav">★</span>' : ''}${esc(ch.network || displayCall(ch))}</div><div class="call"${bad ? ` title="${esc(`${sig.label}: ${sigDetail(sig)}`)}"` : ''}>${bad ? meter(sig) : ''}<span>${esc(displayCall(ch))}</span></div></div>
       ${ch.logo ? `<div class="logo${ch.own ? ' own' : ''}" style="background-image:url('${esc(ch.logo)}')"></div>` : '<div></div>'}
     </div><div class="g-progs">`;
     const progs = programsFor(ch).filter((p) => p._e > lo && p._s < hi);
     if (!progs.length) {
-      const label = ch.weather ? 'Local forecast, around the clock' : ch.custom ? ch.description || 'Nothing scheduled yet' : ch.atsc3Only ? 'ATSC 3.0 only, no listings' : 'No listings';
+      const label = ch.weather ? 'Local forecast, around the clock' : ch.custom ? ch.description || 'Nothing scheduled yet' : 'No listings';
       html += `<div class="g-cell empty${r === state.gRow ? ' sel' : ''}" data-row="${r}" style="left:2px;width:${width - 4}px"><div class="t">${label}</div></div>`;
     }
     for (const p of progs) {
@@ -2103,7 +2200,7 @@ function renderGuideDetail(ch, p) {
   }
   const now = Date.now();
   f(g, 'kicker').innerHTML = `<span>${esc(ch.number)} ${esc(ch.own ? ch.call : displayCall(ch))}</span><span style="color:var(--muted)">${p ? `${clock(p._s)} to ${clock(p._e)}` : ''}</span>`;
-  f(g, 'title').textContent = p ? p.title : ch.atsc3Only ? `${ch.network} (ATSC 3.0)` : ch.own ? ch.name : 'No listings';
+  f(g, 'title').textContent = p ? p.title : ch.own ? ch.name : 'No listings';
   f(g, 'ep').textContent = episodeLine(p);
   // An own channel's category is among its programs' genres; with nothing
   // listed it shows on its own, with the channel's description.
@@ -2122,176 +2219,326 @@ function renderGuideDetail(ch, p) {
 }
 
 // ---------- reception ----------
+// Reception is what the tuners measured, by RF channel, with what the FCC
+// licenses on each; nothing in it is estimated. The rail has the tuner and
+// Measure now, which has the server read every RF channel worth reading
+// on a tuner nobody is using, the ones its scan found first. The table
+// lists the RF channels, those found first; the radar places their
+// transmitters, and the detail under it is the picked RF channel's
+// readings over time and the stations on it.
+
+// applySignal takes in what the server measured: a snapshot's antenna
+// section, or /api/signal.
+function applySignal(sig) {
+  const was = state.antenna && state.antenna.sweep;
+  state.antenna = { tuner: sig.tuner || {}, muxes: sig.muxes || [], sweep: sig.sweep || {} };
+  state.byRF = new Map(state.antenna.muxes.map((m) => [m.rf, m]));
+  const by = new Map((sig.channels || []).map((c) => [c.number, c]));
+  for (const ch of state.antennaChans) {
+    const c = by.get(ch.number);
+    if (c) [ch.signal, ch.recent] = [c.signal, c.recent];
+  }
+  state.sigStamp++;
+  const sw = state.antenna.sweep;
+  if (was && was.running && !sw.running && state.view === 'antenna') {
+    toast(sw.note ? `Measure now ${sw.note}` : `Measured ${sw.done} RF channels`, 4000);
+  }
+}
+
+let signalAt = 0;
+let signalBusy = false;
+
+// loadSignal fetches what was measured and redraws what shows it.
+async function loadSignal() {
+  if (!state.info || state.info.antenna === false || signalBusy || !api().Signal) return;
+  signalBusy = true;
+  try {
+    applySignal(await api().Signal());
+  } catch (e) {
+    log('warn', `signal: ${e}`);
+    return;
+  } finally {
+    signalBusy = false;
+    signalAt = Date.now();
+  }
+  if (state.view === 'antenna') renderAntenna();
+  if (state.view === 'guide') renderGuide();
+  if (state.view === 'tv' && $('#banner').classList.contains('show')) renderBanner();
+}
+
+// signalTick reads the signal again while it's on screen: every 2 s while
+// Measure now runs, every 10 s in Reception or with an antenna channel's
+// banner up, every 30 s in the guide.
+function signalTick() {
+  if (!state.info || state.info.antenna === false || document.hidden) return;
+  const running = !!(state.antenna && state.antenna.sweep.running);
+  const banner = state.view === 'tv' && state.current && !state.current.own && $('#banner').classList.contains('show');
+  const every = running ? 2000 : state.view === 'antenna' || banner ? 10_000 : state.view === 'guide' ? 30_000 : 0;
+  if (every && Date.now() - signalAt >= every - 100) loadSignal();
+}
+
+// measureNow starts Measure now on the server.
+async function measureNow() {
+  const sw = state.antenna && state.antenna.sweep;
+  if (sw && sw.running) return toast(`Measuring: ${sw.done} of ${sw.total} RF channels`, 2000);
+  try {
+    const st = await api().Measure();
+    if (state.antenna) state.antenna.sweep = st;
+    signalAt = 0;
+    renderMeasure();
+  } catch (e) {
+    toast(String(e && e.message ? e.message : e), 6000);
+  }
+  return undefined;
+}
+
 function wireAntenna() {
   const a = $('#antenna');
-  f(a, 'preview').addEventListener('submit', (e) => {
-    e.preventDefault();
-    const zip = e.target.elements.zip;
-    zip.blur();
-    antZone('rail', 'zip');
-    // Once previewing, the focus goes to the preview's first button.
-    antUI.key = 'copy';
-    startPreview(zip.value.trim());
-  });
-  $('.rail', a).addEventListener('focusin', (e) => {
-    const el = e.target.closest('[data-p], [data-act], .rail-preview label');
-    if (el) antUI.key = el.dataset.p || el.dataset.act || 'zip';
-  });
-  f(a, 'previewing').addEventListener('click', (e) => {
-    const b = e.target.closest('[data-act]');
-    if (!b) return;
-    if (b.dataset.act === 'back') endPreview();
-    if (b.dataset.act === 'copy') api().CopyText(receptionSummary()).then(() => toast('Summary copied', 1800)).catch((err) => toast(String(err), 6000));
-  });
+  f(a, 'measure').addEventListener('click', () => measureNow());
   $('.a-table tbody').addEventListener('click', (e) => {
-    const tr = e.target.closest('tr[data-k]');
-    if (tr) selectStation(tr.dataset.k);
+    const tr = e.target.closest('tr[data-rf]');
+    if (tr) pickRF(Number(tr.dataset.rf));
   });
   $('.radar').addEventListener('click', (e) => {
-    const dot = e.target.closest('[data-k]');
-    if (dot) selectStation(dot.dataset.k);
+    const dot = e.target.closest('[data-rf]');
+    if (dot) pickRF(Number(dot.dataset.rf));
   });
 }
 
-// Reception's parts take the focus in turn (data-zone): the transmitters'
-// table, and the rail beside it, Left from the table: while previewing,
-// Copy summary and Back to my setup; the antenna presets (OK picks one);
-// and Preview a ZIP code, where OK brings up the keyboard.
-const antUI = { zone: 'table', key: '' };
+// Reception's parts take the focus in turn (data-zone): the RF channels'
+// table, and the rail beside it, Left from the table: the tuner's card and
+// Measure now. OK on an RF channel with channels watches the first.
+const antUI = { zone: 'table', key: 'measure' };
 
 function openAntenna() {
   renderAntenna();
-  antZone(stationOrder().length ? 'table' : 'rail');
+  signalAt = 0;
+  antZone(antRows().length ? 'table' : 'rail');
 }
 
-function antRail() {
-  const a = $('#antenna');
-  return [...$$('[data-f="previewing"] .fx', a), ...$$('[data-f="presets"] .fx', a), $('.rail-preview label', a)].filter(isShown);
-}
+const antRail = () => $$('#antenna .rail .fx').filter(isShown);
 
 function antZone(zone, key = '') {
   antUI.zone = zone;
   $('#antenna').dataset.zone = zone;
   if (key) antUI.key = key;
   if (state.dock >= 0 || state.view !== 'antenna') return;
-  if (zone === 'table') return blurIn($('#antenna'));
+  renderRFDetail(); // its OK hint is the table's
+  if (zone === 'table') {
+    blurIn($('#antenna'));
+    scrollRF();
+    return;
+  }
   const items = antRail();
-  const keyOf = (el) => el.dataset.p || el.dataset.act || 'zip';
-  focusEl(items.find((el) => keyOf(el) === antUI.key) || items.find((el) => el.classList.contains('on')) || items[0]);
+  focusEl(items.find((el) => el.dataset.act === antUI.key) || items[items.length - 1]);
 }
 
 function antRefocus() {
   if (state.view !== 'antenna' || state.dock >= 0 || antUI.zone !== 'rail') return;
   const el = document.activeElement;
-  if (el && el.matches(TEXT_INPUT)) return;
   if (!$('#antenna').contains(el) || !isShown(el)) antZone('rail');
 }
 
 function antennaKey(e) {
-  if (e.key === '1' || e.key === '2' || e.key === '3') return setPreset(state.presets[Number(e.key) - 1].name);
   if (antUI.zone === 'rail') {
     const items = antRail();
     const el = document.activeElement;
     const i = items.indexOf(el);
     switch (e.key) {
       case 'ArrowUp': if (i > 0) focusEl(items[i - 1]); else openDock(); break;
-      case 'ArrowDown': focusEl(items[Math.min(items.length - 1, i + 1)]); break;
-      case 'ArrowRight': if (stationOrder().length) antZone('table'); break;
+      case 'ArrowDown': if (i < 0) antZone('rail'); else if (i < items.length - 1) focusEl(items[i + 1]); break;
+      case 'ArrowRight': if (antRows().length) antZone('table'); break;
       case 'ArrowLeft': openDock(); break;
       case 'Enter':
-        if (el && el.matches('.rail-preview label')) {
-          const input = $('input', el);
-          input.focus();
-          input.select();
-        } else if (i >= 0) el.click();
-        else antZone('rail');
+        if (el && el.dataset.act === 'measure') measureNow();
+        else if (i < 0) antZone('rail');
         break;
       default: return;
     }
+    // Where the focus comes back to, from the dock.
+    const now = document.activeElement;
+    if (now && now.dataset.act && $('#antenna').contains(now)) antUI.key = now.dataset.act;
     e.preventDefault();
     return;
   }
-  const keys = stationOrder().map((s) => `${s.facilityId}:${s.rfChannel}`);
-  let i = keys.indexOf(state.aSel);
-  if (e.key === 'ArrowUp' && i <= 0) { e.preventDefault(); return openDock(); }
-  if (e.key === 'ArrowLeft') { e.preventDefault(); return antZone('rail'); }
-  if (e.key === 'ArrowDown') i = Math.min(keys.length - 1, i + 1);
-  else if (e.key === 'ArrowUp') i = Math.max(0, i - 1);
-  else return;
+  const rows = antRows();
+  let i = rows.indexOf(state.aRF);
+  switch (e.key) {
+    case 'ArrowUp':
+      if (i <= 0) { e.preventDefault(); openDock(); return; }
+      i--;
+      break;
+    case 'ArrowDown': i = Math.min(rows.length - 1, i + 1); break;
+    case 'PageDown': i = Math.min(rows.length - 1, i + 8); break;
+    case 'PageUp': i = Math.max(0, i - 8); break;
+    case 'ArrowLeft': e.preventDefault(); antZone('rail'); return;
+    case 'Enter': {
+      e.preventDefault();
+      const m = state.byRF.get(state.aRF);
+      const ch = m && m.channels.length && findChannel(m.channels[0]);
+      if (ch) watchChannel(ch);
+      return;
+    }
+    default: return;
+  }
   e.preventDefault();
-  selectStation(keys[i]);
-  const tr = $(`.a-table tr[data-k="${keys[i]}"]`);
-  if (tr) tr.scrollIntoView({ block: 'nearest' });
+  pickRF(rows[Math.max(0, i)]);
 }
 
-// rx is what the reception view shows: the server's own location, or a
-// previewed ZIP code.
-const rx = () => state.preview || { report: state.report, bySite: state.bySite, byFacility: state.byFacility, zip: '' };
-
-function stationOrder() {
-  const p = state.settings.antenna;
-  return [...rx().report.stations].sort((a, b) => (b.signal[p]?.noiseMarginDb ?? -999) - (a.signal[p]?.noiseMarginDb ?? -999));
+// antMuxes is the RF channels to list: those the scan found (by RF), then
+// those a licensed station nearby uses; others hold nothing to see.
+function antMuxes() {
+  const all = state.antenna ? state.antenna.muxes : [];
+  const found = all.filter(muxFound);
+  const rest = all.filter((m) => !muxFound(m) && m.stations.length);
+  return [...found, ...rest];
 }
+const muxFound = (m) => m.channels.length > 0 || !!(m.scan && m.scan.lock);
+const antRows = () => antMuxes().map((m) => m.rf);
+const muxSig = (m) => sigOf(m && { signal: m.signal, recent: m.history && m.history.windows.length ? m.history.windows[m.history.windows.length - 1] : null });
 
-async function setPreset(name) {
-  await saveAppSettings({ ...state.settings, antenna: name });
-  buildLineup();
-  renderAntenna();
-  renderBanner();
-  toast(`Antenna: ${presetLabel(name)}. ${state.lineup.length} channels in your lineup.`);
+// tunerName names the tuner from its model as Tvheadend reports it.
+function tunerName(t) {
+  if (!t || !t.model) return 'Tuner';
+  if (/^hdhomerun/i.test(t.model)) return 'HDHomeRun';
+  return t.model;
 }
 
 function renderAntenna() {
-  if (!state.report || state.info?.antenna === false) return;
+  if (!state.report || !state.info || state.info.antenna === false) return;
   const a = $('#antenna');
-  const rep = rx().report;
-  renderPreviewRail(rep);
-  const preset = state.settings.antenna;
-  const stations = stationOrder();
-  const good = stations.filter((s) => receivable(s.signal[preset]?.tier));
-  const chans = rep.channels.filter((c) => receivable(c.tier && c.tier[preset]));
-
-  const where = { indoor: 'Inside, by a window', attic: 'Under the roof', rooftop: 'Outside, 30 ft up' };
-  f(a, 'presets').innerHTML = state.presets.map((p, i) => {
-    const n = rep.channels.filter((c) => receivable(c.tier && c.tier[p.name])).length;
-    return `<button type="button" role="radio" aria-checked="${p.name === preset}" class="rm-item fx ${p.name === preset ? 'on' : ''}" data-p="${p.name}" title="Key ${i + 1}">
-      <span class="rm-label">${esc(p.name[0].toUpperCase() + p.name.slice(1))}</span><span class="rm-count">${n}</span>
-      <small>${where[p.name] || ''}</small></button>`;
-  }).join('');
-  $$('button', f(a, 'presets')).forEach((b) => b.addEventListener('click', () => setPreset(b.dataset.p)));
-  const aim = aimOf(stations, preset);
+  const muxes = antMuxes();
+  if (!muxes.some((m) => m.rf === state.aRF)) state.aRF = muxes.length ? muxes[0].rf : 0;
+  renderTunerCard();
+  renderMeasure();
+  const found = muxes.filter(muxFound);
+  const locked = found.filter((m) => muxSig(m).state === 'lock').length;
+  const chans = state.lineup.filter((c) => !c.own).length;
   f(a, 'stats').innerHTML = `
-    <div><dt>Channels</dt><dd>${chans.length}<small>from ${good.length} of ${stations.length} transmitters</small></dd></div>
-    ${aim ? `<div><dt>Aim</dt><dd>${aim.deg.toFixed(0)}° ${compass(aim.deg)}<small>${aim.within} of ${aim.total} channels within ${aim.spread}°</small></dd></div>` : ''}`;
-
-  renderRadar(stations, preset);
-  renderTable(stations, preset);
-  renderNextGen(preset);
-  if (!state.aSel && good[0]) state.aSel = `${good[0].facilityId}:${good[0].rfChannel}`;
-  if (state.aSel) selectStation(state.aSel, true);
+    <div><dt>Channels</dt><dd>${chans}<small>on ${found.length} RF channels the scan found</small></dd></div>
+    ${found.length ? `<div><dt>Locked</dt><dd>${locked}<small>of those ${found.length} at their last reading</small></dd></div>` : ''}`;
+  renderRFTable(muxes);
+  renderRadar(muxes);
+  renderRFDetail();
+  renderNextGen();
   antRefocus();
 }
 
-function renderTable(stations, preset) {
-  const rows = stations.map((s) => {
-    const k = `${s.facilityId}:${s.rfChannel}`;
-    const t = s.signal[preset]?.tier || 'unknown';
-    const nm = (name) => {
-      const e = s.signal[name];
-      if (!e || e.tier === 'unknown') return '<span class="nm dark" style="--c:var(--ink-3)">?</span>';
-      return `<span class="nm ${rankOf(e.tier) <= 2 ? 'dark' : ''}" style="--c:${TIER_COLOR[e.tier]}">${e.noiseMarginDb > 0 ? '+' : ''}${e.noiseMarginDb.toFixed(0)}</span>`;
-    };
-    const carries = (s.carries || []).length ? compactCarries(s.carries) : '';
-    return `<tr data-k="${k}" class="${receivable(t) ? '' : 'dim'} ${k === state.aSel ? 'sel' : ''}">
-      <td><div class="call">${esc(s.callSign)}${s.atsc3 ? ' <span class="chip ng">3.0</span>' : ''}</div><div class="sub">${esc(s.city)}, ${esc(s.service)}</div></td>
-      <td class="mono">${s.rfChannel} <span class="sub">${esc(s.band)}</span></td>
-      <td class="carries">${esc(carries)}</td>
-      <td class="r mono">${s.distanceKm.toFixed(0)} km ${compass(s.bearingDeg)}</td>
-      <td class="r mono">${s.erpKw >= 10 ? s.erpKw.toFixed(0) : s.erpKw.toFixed(1)} kW</td>
-      <td class="c">${nm('indoor')}</td><td class="c">${nm('attic')}</td><td class="c">${nm('rooftop')}</td>
-    </tr>`;
-  });
-  $('.a-table tbody').innerHTML = rows.join('');
+function renderTunerCard() {
+  const t = (state.antenna && state.antenna.tuner) || state.info.tuner || {};
+  const n = t.tuners || 0;
+  const use = t.inUse ? `${t.inUse} of ${n} in use` : n ? `${n > 1 ? 'Both' : 'It'} free` : '';
+  f($('#antenna'), 'tuner').innerHTML = `
+    <div class="at-label">Tuner</div>
+    <div class="at-name">${esc(tunerName(t))}</div>
+    <div class="at-line">${n ? `${n} tuner${n > 1 ? 's' : ''}, ${esc((t.standards || []).join(', ') || 'ATSC')}` : 'No tuner'}</div>
+    ${use ? `<div class="at-line">${esc(use)}</div>` : ''}
+    ${t.scanning ? '<div class="at-line at-warn">Scanning for channels</div>' : ''}
+    ${t.reason ? `<div class="at-line at-warn">${esc(t.reason)}</div>` : ''}
+    ${n && !t.atsc3 ? '<div class="at-note">NextGen TV (ATSC 3.0) needs another tuner</div>' : ''}
+    ${t.model ? `<div class="at-model">${esc(t.model)}</div>` : ''}`;
+}
+
+// renderMeasure shows Measure now's progress on its button: the RF
+// channel being read, how many are done, the found ones first.
+function renderMeasure() {
+  const a = $('#antenna');
+  const sw = (state.antenna && state.antenna.sweep) || {};
+  const btn = f(a, 'measure');
+  btn.classList.toggle('busy', !!sw.running);
+  f(a, 'mlabel').textContent = sw.running ? (sw.rf ? `Measuring RF ${sw.rf}` : 'Measuring') : 'Measure now';
+  f(a, 'mbar').style.width = sw.running && sw.total ? `${Math.round((sw.done / sw.total) * 100)}%` : '0';
+  f(a, 'mprog').hidden = !sw.running;
+  let note = 'Reads every RF channel on a free tuner, a few seconds each, the ones the scan found first';
+  if (sw.running) {
+    const found = sw.found || 0;
+    note = sw.done < found
+      ? `${sw.done} of the ${found} found by the scan, then ${sw.total - found} more nearby stations use`
+      : `All ${found} found, now ${sw.done - found} of ${sw.total - found} more nearby stations use`;
+  } else if (sw.finishedAt) {
+    note = `Last measured ${ago(Date.parse(sw.finishedAt))}, ${sw.done} of ${sw.total} RF channels${sw.note ? `: ${sw.note}` : ''}`;
+  }
+  f(a, 'mnote').textContent = note;
+}
+
+function renderRFTable(muxes) {
+  const rows = [];
+  let shownRest = false;
+  for (const m of muxes) {
+    const found = muxFound(m);
+    if (!found && !shownRest) {
+      shownRest = true;
+      rows.push('<tr class="a-sect"><td colspan="7">Not found by the scan: RF channels nearby stations use</td></tr>');
+    }
+    const s = muxSig(m);
+    const st = muxStation(m);
+    const more = m.stations.length > 1 ? `, +${m.stations.length - 1} more` : '';
+    rows.push(`<tr data-rf="${m.rf}" class="${m.rf === state.aRF ? 'sel' : ''}${found ? '' : ' nf'}">
+      <td class="rf"><b>${m.rf}</b><div class="sub">${m.frequencyMhz} MHz ${esc(m.band)}</div></td>
+      <td>${st ? `<div class="call">${esc(st.callSign)}${st.atsc3 ? ' <span class="chip ng">3.0</span>' : ''}</div><div class="sub">${esc(st.city)}, ${st.distanceKm.toFixed(0)} km ${compass(st.bearingDeg)}${more}</div>` : '<div class="sub">No licensed station nearby</div>'}</td>
+      <td class="carries">${compactCarries(m.channels).split('  ').filter(Boolean).map((g) => `<span>${esc(g)}</span>`).join(' ')}</td>
+      <td class="c">${meter(s)}</td>
+      <td class="r mono" style="${s.state === 'off' ? 'color:var(--red)' : ''}">${s.state === 'none' ? '' : s.state === 'off' ? 'No lock' : s.quality || 'Lock'}<div class="sub">${s.strength ? `strength ${s.strength}` : ''}</div></td>
+      <td class="r mono">${s.state === 'none' || s.state === 'off' || s.errors == null ? '' : s.errors >= 1 ? `<span class="errs">${Math.round(s.errors)}/s</span>` : '0'}</td>
+      <td class="r mono">${s.state === 'none' ? '' : esc(agoShort(s.at))}</td>
+    </tr>`);
+  }
+  $('.a-table tbody').innerHTML = rows.join('') || `<tr class="a-sect"><td colspan="7">${esc((state.antenna && state.antenna.tuner.reason) || 'No RF channels yet')}</td></tr>`;
+}
+
+// muxStation is the transmitter an RF channel's channels come from, else
+// the nearest station licensed on it.
+function muxStation(m) {
+  const tx = state.antennaChans.find((c) => c.rf === m.rf && c.transmitter);
+  return (tx && m.stations.find((x) => x.callSign === tx.transmitter)) || m.stations[0] || null;
+}
+
+// pickRF picks an RF channel in the table.
+function pickRF(rf) {
+  state.aRF = rf;
+  $$('.a-table tr[data-rf]').forEach((tr) => tr.classList.toggle('sel', Number(tr.dataset.rf) === rf));
+  scrollRF();
+  renderRFDetail();
+  markRadar();
+}
+
+function scrollRF() {
+  const tr = $(`.a-table tr[data-rf="${state.aRF}"]`);
+  if (tr) tr.scrollIntoView({ block: 'nearest' });
+}
+
+// renderRFDetail is the picked RF channel: its last reading, its readings
+// over time, its channels and the stations licensed on it.
+function renderRFDetail() {
+  const box = f($('#antenna'), 'detail');
+  const m = state.byRF.get(state.aRF);
+  if (!m) {
+    box.innerHTML = '';
+    return;
+  }
+  const s = muxSig(m);
+  const scan = m.scan ? `${m.scan.lock ? 'Found by the scan' : 'Not found by the scan'}, ${new Date(m.scan.at).toLocaleDateString([], { month: 'short', day: 'numeric' })}` : 'Not scanned yet';
+  const wins = (m.history && m.history.windows) || [];
+  const bars = wins.map((w) => {
+    const q = w.qualityPct ? w.qualityPct.avg : w.snrDb ? Math.min(100, w.snrDb.avg * 3) : 0;
+    const lo = w.qualityPct ? w.qualityPct.min : 0;
+    const st = w.lockedPct >= 100 ? 'lock' : w.lockedPct > 0 ? 'part' : 'off';
+    const tip = `${new Date(w.from).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}: ${w.samples} reading${w.samples > 1 ? 's' : ''}${w.source === 'active' ? ' while watched' : ''}, locked ${Math.round(w.lockedPct)}%${w.qualityPct ? `, quality ${w.qualityPct.min} to ${w.qualityPct.max}%` : ''}`;
+    return `<i class="h-${st}" style="--h:${Math.max(4, q)}%;--lo:${lo}%" title="${esc(tip)}"></i>`;
+  }).join('');
+  const chans = m.channels.map((n) => {
+    const c = state.antennaChans.find((x) => x.number === n);
+    return `<span><b>${esc(n)}</b> ${esc(c ? displayCall(c) : '')}${c && c.network ? ` ${esc(c.network)}` : ''}</span>`;
+  }).join('');
+  const stations = m.stations.map((x) => `<li><b>${esc(x.callSign)}</b>${x.virtualChannel ? ` (${x.virtualChannel})` : ''} ${esc(x.city)}, ${x.distanceKm.toFixed(0)} km ${compass(x.bearingDeg)}, ${x.erpKw >= 10 ? x.erpKw.toFixed(0) : x.erpKw.toFixed(1)} kW${x.haatM ? `, ${x.haatM.toFixed(0)} m up` : ''}${x.atsc3 ? ' <span class="chip ng">ATSC 3.0</span>' : ''}</li>`).join('');
+  const first = m.channels.length ? m.channels[0] : '';
+  box.innerHTML = `
+    <div class="ad-head"><b>RF ${m.rf}</b><span>${m.frequencyMhz} MHz ${esc(m.band)}</span><span class="ad-scan">${esc(scan)}</span></div>
+    <div class="ad-sig">${meter(s, true)}<div><div class="ad-label" style="color:${s.state === 'none' ? 'var(--muted)' : s.color}">${esc(s.label)}</div><div class="ad-sub">${esc(sigDetail(s))}</div></div></div>
+    ${bars ? `<div class="ad-hist" aria-label="Readings over time">${bars}</div><div class="ad-axis"><span>${esc(ago(Date.parse(wins[0].from)))}</span><span>${esc(ago(Date.parse(wins[wins.length - 1].to)))}</span></div>` : ''}
+    ${chans ? `<div class="ad-chans">${chans}</div>` : ''}
+    ${stations ? `<ul class="ad-stations">${stations}</ul>` : ''}
+    ${first && antUI.zone === 'table' ? `<div class="ad-hint">${hints([['Enter', 'Enter', `watches ${first}`]])}</div>` : ''}`;
 }
 
 // compactCarries turns ["4.1","4.2","2.1 (3.0)"] into "4.1-2  3.0: 2.1".
@@ -2317,46 +2564,18 @@ const svgEl = (tag, attrs, text) => {
   return el;
 };
 
-// aimOf is the circular mean bearing of receivable transmitters, weighted by
-// the ATSC 1.0 channels each carries, and how many channels lie near it.
-function aimOf(stations, preset) {
-  const spread = 22;
-  const v1 = (s) => (s.carries || []).filter((c) => !c.endsWith('(3.0)')).length;
-  const good = stations.filter((s) => receivable(s.signal[preset]?.tier) && v1(s));
-  if (!good.length) return null;
-  let sx = 0; let sy = 0;
-  for (const s of good) {
-    sx += v1(s) * Math.sin(s.bearingDeg * Math.PI / 180);
-    sy += v1(s) * Math.cos(s.bearingDeg * Math.PI / 180);
-  }
-  const deg = (Math.atan2(sx, sy) * 180 / Math.PI + 360) % 360;
-  const near = good.filter((s) => Math.abs(((s.bearingDeg - deg + 540) % 360) - 180) <= spread);
-  return { deg, spread, within: near.reduce((n, s) => n + v1(s), 0), total: good.reduce((n, s) => n + v1(s), 0) };
-}
-
-function renderRadar(stations, preset) {
+// renderRadar places the listed RF channels' transmitters around home, by
+// tower site, colored by what was measured on their RF channels.
+function renderRadar(muxes) {
   const svg = $('.radar');
   svg.innerHTML = '';
   const R = 200;
-  const maxKm = rx().report.radiusKm;
+  const maxKm = state.report.radiusKm || 160;
   const rad = (km) => R * Math.sqrt(Math.min(km, maxKm) / maxKm);
   const pos = (km, deg) => {
     const a = (deg - 90) * Math.PI / 180;
     return [rad(km) * Math.cos(a), rad(km) * Math.sin(a)];
   };
-
-  const defs = svgEl('defs');
-  defs.innerHTML = `<radialGradient id="beam" cx="0" cy="0" r="200" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#ffb224" stop-opacity=".38"/><stop offset="1" stop-color="#ffb224" stop-opacity="0"/></radialGradient>`;
-  svg.append(defs);
-
-  const aim = aimOf(stations, preset);
-  if (aim) {
-    const [x1, y1] = pos(maxKm, aim.deg - aim.spread);
-    const [x2, y2] = pos(maxKm, aim.deg + aim.spread);
-    svg.append(svgEl('path', { class: 'beam', d: `M0 0 L${x1} ${y1} A${R} ${R} 0 0 1 ${x2} ${y2} Z` }));
-  }
-
   for (const km of [25, 50, 100, maxKm]) {
     svg.append(svgEl('circle', { class: `ring${km === maxKm ? ' edge' : ''}`, r: rad(km) }));
     svg.append(svgEl('text', { x: 3, y: -rad(km) - 3 }, `${km} km`));
@@ -2366,140 +2585,88 @@ function renderRadar(stations, preset) {
   for (const [t, x, y] of [['N', 0, -R - 8], ['E', R + 10, 4], ['S', 0, R + 16], ['W', -R - 10, 4]]) {
     svg.append(svgEl('text', { class: 'card', x, y, 'text-anchor': 'middle' }, t));
   }
-
-  // group transmitters by tower site
+  // Tower sites: the stations on the listed RF channels, by place.
+  const rank = { lock: 3, part: 2, off: 1, none: 0 };
   const sites = new Map();
-  for (const s of stations) {
-    const key = `${s.point.lat.toFixed(3)},${s.point.lon.toFixed(3)}`;
-    if (!sites.has(key)) sites.set(key, []);
-    sites.get(key).push(s);
+  for (const m of muxes) {
+    const sig = muxSig(m);
+    for (const x of m.stations) {
+      const full = state.bySite.get(`${x.facilityId}:${m.rf}`);
+      if (!full || !full.point) continue;
+      const k = `${full.point.lat.toFixed(3)},${full.point.lon.toFixed(3)}`;
+      const site = sites.get(k) || { x, rfs: [], calls: [], state: 'none', found: 0 };
+      site.rfs.push(m.rf);
+      site.calls.push(x.callSign);
+      if (rank[sig.state] > rank[site.state]) site.state = sig.state;
+      if (muxFound(m)) site.found++;
+      sites.set(k, site);
+    }
   }
-  const ordered = [...sites.values()].sort((a, b) => rankOf(a[0].signal[preset]?.tier) - rankOf(b[0].signal[preset]?.tier));
-  // Label the largest receivable site per city to keep the map readable.
   const labelled = new Map();
-  for (const group of sites.values()) {
-    const live = group.filter((s) => receivable(s.signal[preset]?.tier));
-    if (live.length < 2) continue;
-    const city = group[0].city;
-    if (!labelled.has(city) || labelled.get(city).length < live.length) labelled.set(city, group);
+  for (const site of sites.values()) {
+    if (site.found < 2) continue;
+    const city = site.x.city;
+    if (!labelled.has(city) || labelled.get(city).found < site.found) labelled.set(city, site);
   }
-  const labelSet = new Set([...labelled.values()]);
+  const ordered = [...sites.values()].sort((a, b) => rank[a.state] - rank[b.state]);
   const labels = [];
-  for (const group of ordered) {
-    const best = group.reduce((m, s) => ((s.signal[preset]?.noiseMarginDb ?? -999) > (m.signal[preset]?.noiseMarginDb ?? -999) ? s : m));
-    const tier = best.signal[preset]?.tier || 'unknown';
-    const [x, y] = pos(best.distanceKm, best.bearingDeg);
-    const r = 3 + Math.min(7, Math.sqrt(group.length) * 2);
-    const ng = group.some((s) => s.atsc3);
-    const k = `${best.facilityId}:${best.rfChannel}`;
-    const dot = svgEl('circle', { class: `site-dot${ng ? ' ng' : ''}`, cx: x, cy: y, r, fill: TIER_COLOR[tier], 'data-k': k });
-    dot.dataset.site = group.map((s) => `${s.facilityId}:${s.rfChannel}`).join(' ');
-    dot.append(svgEl('title', {}, `${group.map((s) => s.callSign).join(', ')}\n${best.city}, ${best.distanceKm.toFixed(0)} km ${compass(best.bearingDeg)}`));
+  for (const site of ordered) {
+    const [x, y] = pos(site.x.distanceKm, site.x.bearingDeg);
+    const r = 3 + Math.min(7, Math.sqrt(site.rfs.length) * 2);
+    const dot = svgEl('circle', { class: `site-dot s-${site.state}`, cx: x, cy: y, r, 'data-rf': site.rfs[0] });
+    dot.dataset.rfs = site.rfs.join(' ');
+    dot.append(svgEl('title', {}, `${site.calls.join(', ')}\n${site.x.city}, ${site.x.distanceKm.toFixed(0)} km ${compass(site.x.bearingDeg)}, RF ${site.rfs.join(', ')}`));
     svg.append(dot);
-    if (labelSet.has(group)) labels.push({ x, y, r, text: `${best.city} ${group.length}` });
+    if ([...labelled.values()].includes(site)) labels.push({ x, y, r, text: `${site.x.city} ${site.found}` });
   }
-  // Place labels outward from the center, skipping any that would collide.
   const placed = [];
   for (const l of labels.sort((a, b) => a.text.length - b.text.length)) {
     const left = l.x < 0;
     const w = l.text.length * 7.8;
     const x0 = left ? l.x - l.r - 5 - w : l.x + l.r + 5;
     const box = { x0, x1: x0 + w, y0: l.y - 9, y1: l.y + 6 };
-    if (placed.some((b) => box.x0 < b.x1 && b.x0 < box.x1 && box.y0 < b.y1 && b.y0 < box.y1)) continue;
+    if (box.x0 < -224 || box.x1 > 224 || placed.some((b) => box.x0 < b.x1 && b.x0 < box.x1 && box.y0 < b.y1 && b.y0 < box.y1)) continue;
     placed.push(box);
     svg.append(svgEl('text', { class: 'site', x: left ? l.x - l.r - 5 : l.x + l.r + 5, y: l.y + 4, 'text-anchor': left ? 'end' : 'start' }, l.text));
   }
   svg.append(svgEl('circle', { class: 'home', r: 4 }));
   svg.append(svgEl('line', { class: 'ray', id: 'ray', x1: 0, y1: 0, x2: 0, y2: 0 }));
+  markRadar();
 }
 
-async function selectStation(k, quiet) {
-  state.aSel = k;
-  $$('.a-table tr').forEach((tr) => tr.classList.toggle('sel', tr.dataset.k === k));
-  $$('.radar .site-dot').forEach((d) => d.classList.toggle('sel', (d.dataset.site || '').split(' ').includes(k)));
-  const s = rx().bySite.get(k);
-  if (!s) return;
+// markRadar marks the picked RF channel's transmitter, with a ray to it.
+function markRadar() {
+  $$('.radar .site-dot').forEach((d) => d.classList.toggle('sel', (d.dataset.rfs || '').split(' ').includes(String(state.aRF))));
   const ray = $('#ray');
-  if (ray) {
-    const R = 200;
-    const rr = R * Math.sqrt(Math.min(s.distanceKm, rx().report.radiusKm) / rx().report.radiusKm);
-    const a = (s.bearingDeg - 90) * Math.PI / 180;
-    ray.setAttribute('x2', rr * Math.cos(a));
-    ray.setAttribute('y2', rr * Math.sin(a));
+  const m = state.byRF.get(state.aRF);
+  const st = m && muxStation(m);
+  if (!ray) return;
+  if (!st) {
+    ray.setAttribute('x2', 0);
+    ray.setAttribute('y2', 0);
+    return;
   }
-  const a = $('#antenna');
-  f(a, 'phead').innerHTML = `<b>${esc(s.callSign)}</b><span>RF ${s.rfChannel} ${esc(s.band)} | ${s.erpKw} kW | ${s.distanceKm.toFixed(1)} km at ${s.bearingDeg.toFixed(0)}° ${compass(s.bearingDeg)}</span>`;
-  try {
-    const prof = await api().Profile(s.facilityId, s.rfChannel, rx().zip);
-    if (state.aSel !== k) return;
-    drawProfile(prof, s);
-  } catch (e) {
-    if (!quiet) toast(String(e));
-  }
+  const maxKm = state.report.radiusKm || 160;
+  const rr = 200 * Math.sqrt(Math.min(st.distanceKm, maxKm) / maxKm);
+  const a = (st.bearingDeg - 90) * Math.PI / 180;
+  ray.setAttribute('x2', rr * Math.cos(a));
+  ray.setAttribute('y2', rr * Math.sin(a));
 }
 
-function drawProfile(prof, s) {
-  const svg = $('.ap-svg');
-  const preset = state.presets.find((p) => p.name === state.settings.antenna) || state.presets[0];
-  const W = 600; const H = 180;
-  const D = prof.distanceKm * 1000;
-  const n = prof.elevations.length;
-  const xs = prof.elevations.map((_, i) => (D * i) / (n - 1));
-  const z = prof.elevations.map((e, i) => e + (xs[i] * (D - xs[i])) / (2 * EARTH_M));
-  const rxH = prof.rxGroundM + preset.heightM;
-  const txH = prof.txHeightM;
-  const lo = Math.min(...z) - 40;
-  const hi = Math.max(...z, rxH, txH) + 60;
-  const X = (x) => (x / D) * W;
-  const Y = (h) => H - ((h - lo) / (hi - lo)) * H;
-
-  // obstruction: highest terrain above the line of sight
-  let worst = -Infinity; let wi = -1;
-  for (let i = 1; i < n - 1; i++) {
-    const los = rxH + ((txH - rxH) * xs[i]) / D;
-    if (z[i] - los > worst) { worst = z[i] - los; wi = i; }
-  }
-  const blocked = worst > 0;
-
-  let d = `M0 ${H} `;
-  z.forEach((h, i) => { d += `L${X(xs[i]).toFixed(1)} ${Y(h).toFixed(1)} `; });
-  d += `L${W} ${H} Z`;
-  svg.innerHTML = `<defs><linearGradient id="terrainfill" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#4a4236"/><stop offset="1" stop-color="#15130f"/></linearGradient></defs>
-    <path class="terrain" d="${d}"/>
-    <line class="los${blocked ? ' blocked' : ''}" x1="${X(0)}" y1="${Y(rxH)}" x2="${X(D)}" y2="${Y(txH)}"/>
-    <line class="mast" x1="1" y1="${Y(prof.rxGroundM)}" x2="1" y2="${Y(rxH)}"/>
-    <line class="mast" x1="${W - 1}" y1="${Y(prof.elevations[n - 1])}" x2="${W - 1}" y2="${Y(txH)}"/>
-    ${blocked ? `<circle class="hit" cx="${X(xs[wi])}" cy="${Y(z[wi])}" r="4"/>` : ''}`;
-
-  const sig = prof.signal;
-  const parts = state.presets.map((p) => {
-    const e = sig[p.name];
-    if (!e || e.tier === 'unknown') return `${p.name} ?`;
-    return `${p.name} <b style="color:${TIER_COLOR[e.tier]}">${e.noiseMarginDb > 0 ? '+' : ''}${e.noiseMarginDb.toFixed(0)} dB</b>`;
-  });
-  const e = sig[preset.name] || {};
-  const why = blocked
-    ? `<span style="color:var(--red)">Blocked: terrain ${(xs[wi] / 1000).toFixed(0)} km out rises ${worst.toFixed(0)} m above the line of sight</span>`
-    : '<span style="color:var(--amber)">Clear line of sight</span>';
-  f($('#antenna'), 'pfoot').innerHTML = `${why}<span>${parts.join('  ')}</span><span>diffraction ${e.diffractionDb ?? '?'} dB</span><span>field ${e.fieldDbuVm ?? '?'} dBuV/m</span>`;
-}
-
-function renderNextGen(preset) {
+// renderNextGen lists the stations broadcasting ATSC 3.0 here, as facts
+// about them: what this tuner can't take in.
+function renderNextGen() {
   const box = f($('#antenna'), 'nextgen');
-  const hosts = rx().report.atsc3 || [];
+  const hosts = state.report.atsc3 || [];
   if (!hosts.length) {
     box.innerHTML = '';
     return;
   }
   const items = hosts.map((h) => {
-    const s = rx().byFacility.get(h.facilityId);
-    const e = s && s.signal[preset];
-    const tier = e ? e.tier : 'unknown';
-    const svcs = (h.services || []).map((v) => `<li><span>${esc(v.display.replace('-', '.'))}</span>${esc(v.network)} ${esc(v.name)}${v.atsc1Call && v.atsc1Call.split('-')[0] !== v.name.split('-')[0] ? ` <em>(1.0 on ${esc(v.atsc1Call)})</em>` : ''}</li>`).join('');
-    return `<div class="ng-host"><b>${esc(h.callSign)}</b> ${meter(tier)} <div class="mono">RF ${esc(h.rf)}${h.launched ? `, since ${esc(h.launched)}` : ''}${e && tier !== 'unknown' ? `, ${e.noiseMarginDb > 0 ? '+' : ''}${e.noiseMarginDb.toFixed(0)} dB` : ''}</div><ul>${svcs}</ul></div>`;
+    const svcs = (h.services || []).map((v) => `<span><i>${esc(v.display.replace('-', '.').replace(/^0/, ''))}</i> ${esc(v.network || v.name)}</span>`).join(' ');
+    return `<div class="ng-host"><b>${esc(h.callSign)}</b> <em>RF ${esc(h.rf)}</em> ${svcs}</div>`;
   }).join('');
-  box.innerHTML = `<div class="ng-label">NextGen TV (ATSC 3.0)</div><div class="ng-hosts">${items}</div>`;
+  box.innerHTML = `<div class="ng-label">NextGen TV (ATSC 3.0) on the air here${nextGen() ? '' : '<small>This tuner takes in ATSC 1.0 only</small>'}</div><div class="ng-hosts">${items}</div>`;
 }
 
 // ---------- settings ----------
@@ -2535,7 +2702,7 @@ const CONTROLS = [
   ['Enter', 'A', 'Enter', 'Choose. On TV, Enter (the remote\'s OK) brings up the controls, Guide first, and A plays and pauses'],
   ['Escape', 'B', 'Esc, Back', 'Back, and puts the controls away'],
   ['g', 'Y', 'G', 'Guide'],
-  ['i', 'X', 'I', 'Program info, twice for reception. In the guide, more for a program: record, favorite, hide'],
+  ['i', 'X', 'I', 'Program info, twice for the measured signal. In the guide, more for a program: record, favorite, hide'],
   ['PageUp PageDown', 'LB, RB', 'Page Up, Page Down', 'Channel down or up, a page of the guide or of Settings'],
   ['ShiftLeft ShiftRight', 'LT, RT', 'Shift Left, Shift Right', 'Back or ahead a minute'],
   ['Space', 'R3', 'Space, Play', 'Pause'],
@@ -2609,20 +2776,6 @@ function settingsRows() {
     choices: PAD_LABELS.map(([k, label]) => [k, k ? label : `Auto, ${detected}`]), get: () => localStorage.getItem(padLabelsKey) || '', set: setPadLabels,
   });
 
-  if (info.antenna !== false) {
-    add('Watching', {
-      id: 'antenna', kind: 'choice', label: 'Antenna', choices: state.presets.map((p) => [p.name, p.label]), get: () => s.antenna, set: setPreset,
-      subFor: (name) => {
-        const p = state.presets.find((x) => x.name === name);
-        const n = state.report ? state.report.channels.filter((c) => receivable(c.tier && c.tier[name])).length : 0;
-        return p ? `${p.heightM} m above ground${n ? `, ${n} channels` : ''}` : '';
-      },
-    });
-    add('Watching', {
-      id: 'showAll', kind: 'switch', label: 'Unlikely channels', sub: 'List channels you probably can\'t receive too',
-      get: () => !!s.showAll, set: setShowAll,
-    });
-  }
   const hours = (state.config && state.config.guideHours) || 24;
   add('Watching', {
     id: 'guideHours', kind: 'choice', delay: true, label: 'Listings', sub: 'How far ahead the guide goes',
@@ -2658,13 +2811,17 @@ function settingsRows() {
     id: 'test', kind: 'action', verb: 'tests it', label: 'Test connection',
     value: settingsUI.tested || (info.name ? `Connected to ${info.name}` : 'Test'), run: testServer,
   });
-  add('Server', { id: 'refresh', kind: 'action', verb: 'refreshes', label: 'Refresh all data', sub: 'Transmitters, reception and listings, fetched again', value: 'Refresh', run: refreshAll });
+  add('Server', { id: 'refresh', kind: 'action', verb: 'refreshes', label: 'Refresh all data', sub: 'Transmitters and listings, fetched again', value: 'Refresh', run: refreshAll });
 
   add('About', { id: 'app', kind: 'info', label: 'Airwaves', value: state.boot && state.boot.version ? `Version ${state.boot.version}` : '' });
   if (info.name) {
     add('About', { id: 'server-info', kind: 'info', label: 'Server', value: info.name, sub: [info.version && `Version ${info.version}`, s.server].filter(Boolean).join(', ') });
   }
-  if (info.tuner && info.tuner.name) add('About', { id: 'tuner', kind: 'info', label: 'Tuner', value: info.tuner.name, sub: info.tuner.detail || '' });
+  if (info.antenna !== false && info.tuner) {
+    const t = info.tuner;
+    const what = t.tuners ? `${t.tuners} tuner${t.tuners > 1 ? 's' : ''}, ${(t.standards || []).join(', ')}` : 'No tuner yet';
+    add('About', { id: 'tuner', kind: 'info', label: 'Tuner', value: t.tuners ? tunerName(t) : what, sub: [t.tuners && what, t.model, t.tuners && !t.atsc3 && 'NextGen TV (ATSC 3.0) needs another tuner'].filter(Boolean).join(', ') });
+  }
   add('About', { id: 'controls', kind: 'open', label: SETTINGS_LISTS.controls, open: 'controls' });
   if (state.report && state.report.sources.length) add('About', { id: 'sources', kind: 'open', label: SETTINGS_LISTS.sources, value: `${state.report.sources.length}`, open: 'sources' });
   for (const [i, w] of ((state.report && state.report.warnings) || []).entries()) add('About', { id: `warning${i}`, kind: 'info', label: 'Note', sub: w });
@@ -2677,7 +2834,7 @@ function settingsList(name) {
   const rows = [];
   const add = (row) => rows.push({ section: title, ...row });
   if (name === 'hidden') {
-    const known = state.report ? [...state.custom, ...state.report.channels] : [];
+    const known = [...state.custom, ...state.antennaChans];
     const hidden = (state.settings.hidden || []).map((k) => known.find((c) => c.key === k) || unlistedChannel(k));
     if (hidden.length > 1) add({ id: 'all', kind: 'action', verb: 'shows them', label: 'All of them', value: 'Show', run: () => showHidden(hidden.map((c) => c.key)) });
     for (const c of hidden) {
@@ -2900,12 +3057,6 @@ function closeSettingsList() {
 }
 
 // ---------- what the settings rows do ----------
-async function setShowAll(on) {
-  await saveAppSettings({ ...state.settings, showAll: on });
-  buildLineup();
-  renderAll();
-  toast(`${on ? 'Listing' : 'Not listing'} channels you probably can't receive. ${state.lineup.length} channels.`, 2500);
-}
 
 async function setGuideHours(hours) {
   toast('Updating the listings...', 30000);
@@ -2935,7 +3086,8 @@ async function setWatched(days) {
 
 async function hideShopping() {
   if (!state.report) return;
-  const shop = state.report.channels.filter((c) => SHOPPING.test(c.network || '')).map((c) => c.key);
+  // By the listings' network, or the broadcast's own name ("ShopLC").
+  const shop = state.antennaChans.filter((c) => SHOPPING.test(c.network || '') || SHOPPING.test(c.name || '')).map((c) => c.key);
   const was = new Set(state.settings.hidden || []);
   const added = shop.filter((k) => !was.has(k)).length;
   if (!added) return toast(shop.length ? 'Shopping channels are hidden already' : 'No shopping channels to hide', 2500);
@@ -4349,72 +4501,6 @@ function updatePlaybackState() {
   if (!mediaSession) return;
   const wx = state.current && state.current.weather && !state.recording;
   mediaSession.playbackState = !state.current && !state.recording ? 'none' : wx || !video.paused ? 'playing' : 'paused';
-}
-
-// ---------- preview another ZIP code ----------
-async function startPreview(zip) {
-  if (!/^\d{5}$/.test(zip)) return toast('Enter a 5-digit ZIP code');
-  toast(`Estimating reception at ${zip}`, 30000);
-  try {
-    const rep = (await api().Preview(zip)).report;
-    const bySite = new Map();
-    const byFacility = new Map();
-    for (const st of rep.stations) {
-      if (!byFacility.has(st.facilityId)) byFacility.set(st.facilityId, st);
-      bySite.set(`${st.facilityId}:${st.rfChannel}`, st);
-    }
-    for (const c of rep.channels) c.key = `${c.number}|${c.callSign}`;
-    state.preview = { report: rep, bySite, byFacility, zip };
-    state.aSel = null;
-    renderAntenna();
-    toast(`Previewing ${rep.place.name}, ${rep.place.state}`, 2000);
-  } catch (e) {
-    toast(String(e && e.message ? e.message : e), 6000);
-  }
-}
-
-function endPreview() {
-  state.preview = null;
-  state.aSel = null;
-  renderAntenna();
-}
-
-function renderPreviewRail(rep) {
-  const a = $('#antenna');
-  const on = !!state.preview;
-  f(a, 'preview').hidden = on;
-  f(a, 'previewing').hidden = !on;
-  if (on) f(a, 'pvplace').innerHTML = `<dt>Preview</dt><dd>${esc(rep.place.name)}, ${esc(rep.place.state)}<small>ZIP ${esc(rep.place.zip)}</small></dd>`;
-}
-
-// receptionSummary is a shareable plain-text version of the reception view.
-function receptionSummary() {
-  const rep = rx().report;
-  const order = ['indoor', 'attic', 'rooftop'];
-  const best = (c) => order.find((p) => receivable(c.tier && c.tier[p]));
-  // One line per station: its main channel, deduplicated by number.
-  const mains = new Map();
-  for (const c of rep.channels) {
-    if (c.atsc3Only || (c.minor !== 1 && c.minor !== 0)) continue;
-    const prev = mains.get(c.number);
-    if (!prev || order.indexOf(best(c) ?? 'x') < order.indexOf(best(prev) ?? 'x')) mains.set(c.number, c);
-  }
-  const name = (c) => `${c.number} ${c.network || displayCall(c)}`;
-  const group = (p) => [...mains.values()].filter((c) => best(c) === p).map(name);
-  const lines = [`Over-the-air TV at ${rep.place.name}, ${rep.place.state} ${rep.place.zip}`, ''];
-  lines.push(`Channels by antenna: ${order.map((p) => `${p} ${rep.channels.filter((c) => receivable(c.tier && c.tier[p])).length}`).join(', ')}`);
-  const aim = aimOf([...rep.stations], 'rooftop');
-  if (aim) lines.push(`Point an outdoor antenna ${aim.deg.toFixed(0)}° ${compass(aim.deg)}`);
-  lines.push('');
-  for (const [p, label] of [['indoor', 'With an indoor antenna'], ['attic', 'Adds with an attic antenna'], ['rooftop', 'Adds with a rooftop antenna']]) {
-    const g = group(p);
-    if (g.length) lines.push(`${label}: ${g.join(', ')}`);
-  }
-  if ((rep.atsc3 || []).length) {
-    lines.push('', `NextGen TV (ATSC 3.0): ${rep.atsc3.map((h) => h.callSign).join(', ')}`);
-  }
-  lines.push('', 'Estimated from FCC transmitter data and terrain. Walls, trees and nearby buildings can cost more.');
-  return lines.join('\n');
 }
 
 // ---------- weather ----------

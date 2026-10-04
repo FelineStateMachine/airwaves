@@ -89,36 +89,27 @@
     </div>
   </section>
 
-  <!-- Reception -->
+  <!-- Reception: what the tuners measured, by RF channel (app.js) -->
   <section id="antenna" class="view railed" aria-label="Reception">
     <nav class="rail">
-      <div class="rail-previewing" data-f="previewing" hidden>
-        <dl class="rail-stats" data-f="pvplace"></dl>
-        <button type="button" class="btn fx" data-act="copy">Copy summary</button>
-        <button type="button" class="btn ghost fx" data-act="back">Back to my setup</button>
+      <div class="a-tuner fx" data-f="tuner" data-act="tuner" tabindex="-1"></div>
+      <div class="a-measure">
+        <button type="button" class="btn fx" data-act="measure" data-f="measure"><span data-f="mlabel">Measure now</span></button>
+        <div class="a-mprog" data-f="mprog" hidden><i data-f="mbar"></i></div>
+        <div class="a-mnote" data-f="mnote"></div>
       </div>
-      <div class="rail-menu" data-f="presets" role="radiogroup" aria-label="Antenna"></div>
       <dl class="rail-stats" data-f="stats"></dl>
-      <form class="rail-preview" data-f="preview" autocomplete="off">
-        <!-- OK on the label puts the cursor in the field (app.js). -->
-        <label class="fx" tabindex="-1">Preview a ZIP code <input name="zip" inputmode="numeric" maxlength="5" placeholder="80302"></label>
-      </form>
     </nav>
     <div class="main a-body">
       <div class="a-left">
         <div class="radar-box"><svg class="radar" viewBox="-226 -226 452 452" role="img" aria-label="Transmitter map"></svg></div>
-        <div class="a-profile">
-          <div class="ap-head" data-f="phead"></div>
-          <svg class="ap-svg" viewBox="0 0 600 180" preserveAspectRatio="none"></svg>
-          <div class="ap-foot" data-f="pfoot"></div>
-        </div>
+        <div class="a-detail" data-f="detail"></div>
       </div>
       <div class="a-right">
         <div class="a-tablewrap">
           <table class="a-table">
             <thead><tr>
-              <th>Transmitter</th><th>RF</th><th>Carries</th><th class="r">Dist</th><th class="r">ERP</th>
-              <th class="c" title="Noise margin, indoor">In</th><th class="c" title="Noise margin, attic">Attic</th><th class="c" title="Noise margin, rooftop">Roof</th>
+              <th>RF</th><th>Transmitter</th><th>Channels</th><th class="c">Signal</th><th class="r">Quality</th><th class="r">Errors</th><th class="r">Measured</th>
             </tr></thead>
             <tbody></tbody>
           </table>

@@ -17,7 +17,6 @@ import (
 	"airwaves/internal/guide"
 	"airwaves/internal/hdhr"
 	"airwaves/internal/lineup/lineuptest"
-	"airwaves/internal/reception"
 	"airwaves/internal/signal"
 	"airwaves/internal/tuner"
 	"airwaves/internal/tvh"
@@ -126,23 +125,10 @@ func TestTunerLineup(t *testing.T) {
 		t.Errorf("RF 34 = %+v", m)
 	}
 
-	// The report: the same channels for app versions that read it, with
-	// a measured tier; the records with no estimates; the listings of the
-	// tuner's channels only.
-	var compat []string
-	for _, c := range snap.Report.Channels {
-		compat = append(compat, c.Number)
-		// The listings' call sign, which that shape had (and app
-		// versions key favorites by).
-		if c.Number == "20.1" && (c.CallSign != "KTVDDT" || c.BaseCall != "KTVD") {
-			t.Errorf("report 20.1 = %+v", c)
-		}
-		if c.Tier["indoor"] != reception.Good || c.Tier["rooftop"] != reception.Good {
-			t.Errorf("%s tier %v", c.Number, c.Tier)
-		}
-	}
-	if !slices.Equal(compat, numbers) {
-		t.Errorf("report channels %v", compat)
+	// The report: the records with no estimates and no channels of its
+	// own (they're the tuner's); the listings of the tuner's channels only.
+	if snap.Report.Channels == nil || len(snap.Report.Channels) != 0 {
+		t.Errorf("report channels %v", snap.Report.Channels)
 	}
 	var ids []string
 	for _, c := range snap.Guide.Channels {
@@ -155,12 +141,12 @@ func TestTunerLineup(t *testing.T) {
 		t.Error("the server's own listings were trimmed")
 	}
 	raw, _ := json.Marshal(snap)
-	for _, bad := range []string{"noiseMarginDb", `"presets"`, `"strong"`, `"fair"`} {
+	for _, bad := range []string{"noiseMarginDb", `"presets"`, `"strong"`, `"fair"`, `"tier"`, `"signal":{}`} {
 		if strings.Contains(string(raw), bad) {
 			t.Errorf("snapshot has %s", bad)
 		}
 	}
-	for _, want := range []string{`"signal":{}`, `"antenna":{"tuner":{"ready":true`, `"standards":["ATSC 1.0"],"atsc3":false`, `"history":null`} {
+	for _, want := range []string{`"channels":[]`, `"antenna":{"tuner":{"ready":true`, `"standards":["ATSC 1.0"],"atsc3":false`, `"history":null`} {
 		if !strings.Contains(string(raw), want) {
 			t.Errorf("snapshot lacks %s", want)
 		}

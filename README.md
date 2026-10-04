@@ -4,8 +4,11 @@ A desktop TV and program guide for free over-the-air broadcasts, built with Go a
 [Wails v2](https://wails.io). It answers three questions for a US ZIP code:
 
 1. **What is on the air here?** Every licensed transmitter within a radius, from the FCC.
-2. **What can I actually receive?** A terrain-aware signal estimate per transmitter for
-   indoor, attic and rooftop antennas, with a radar map, aiming advice and a path profile.
+2. **What do I actually receive?** The channels the tuner's scan found, and what it
+   measured on each RF channel (lock, strength, quality, errors), over time and on demand,
+   beside each transmitter's records and a radar map. Planning an antenna before there's
+   a tuner is `otascan`'s job: terrain-aware estimates for indoor, attic and rooftop
+   antennas.
 3. **What is on now?** A Gracenote-backed grid guide, live TV, and recordings.
 
 There is one setup: an HDHomeRun on the network as the tuner, a home server running
@@ -27,7 +30,8 @@ open build/bin/Airwaves.app
 wails dev                        # live-reload development
 ```
 
-There is also a terminal report that needs only Go:
+There is also a terminal report that needs only Go, for planning an antenna: the
+reception it estimates from the terrain (see How reception is estimated):
 
 ```sh
 go run ./cmd/otascan -zip 80302                 # rooftop antenna, receivable channels
@@ -136,16 +140,16 @@ had.
 | C | Closed captions on or off |
 | V | Next audio track (second language, described video) |
 | f | Favorite this channel |
-| I | Info banner; again for reception details, again to hide |
+| I | Info banner; again for the measured signal, again to hide |
 | M / Shift F | Mute / fullscreen |
 
 | Key | Elsewhere |
 | --- | --- |
 | G | Guide: arrows move, Up from the top row to the filters (Favorites, Sports...; also `[` `]`). Enter watches what's on, or shows a program to come's actions; hold Enter, or I, for any program's: watch, record, series, new episodes only, favorite, hide. Home jumps to now, R / Shift R / N record, f favorite, H hide (U undoes) |
 | D | Recordings: Left (or `[` `]`) for Library, Coming up, Series. Enter shows a recording's actions: resume, from the start, watched, delete (press twice); Shift Enter starts over, W marks watched, Delete twice removes; on a series K sets how many to keep, N new episodes only |
-| A | Reception: arrows pick a transmitter; Left for the antenna presets (or `1` `2` `3`) and to preview any ZIP code, then copy a shareable summary |
+| A | Reception: what the tuners measured, by RF channel (the ones the scan found first), with the transmitters licensed on each. Up and Down pick one, Enter watches its first channel; Left for the tuner and Measure now, which reads every RF channel on a free tuner and shows its progress |
 | W | Weather: current conditions, alerts, the next 24 hours, 7-day, radar loop and satellite; Up and Down move through them, Left to watch the weather channel |
-| `,` or S | Settings: server, antenna, guide hours, deleting watched recordings, hidden channels |
+| `,` or S | Settings: server, guide hours, deleting watched recordings, hidden channels, the tuner |
 | Esc | Back to TV; from a recording, back to live |
 
 With only a remote's arrows, OK and Back (an Android TV remote), every view is
@@ -172,7 +176,8 @@ is the supported source if this grows beyond that.
 
 ## How reception is estimated
 
-`internal/reception` computes free-space loss plus Deygout multiple knife-edge diffraction
+For `otascan` only: the app shows what the tuner measured instead (see The lineup is the
+tuner's). `internal/reception` computes free-space loss plus Deygout multiple knife-edge diffraction
 over a terrain profile on a 4/3 effective earth, then compares the received power against
 the ATSC 1.0 threshold (15.2 dB C/N over a 6 MHz noise floor, with extra man-made noise
 on VHF). Each antenna preset adds its height, gain by band and wall or cable loss.
@@ -596,7 +601,7 @@ internal/dvr              recording rules and reconciliation with Tvheadend
 internal/tvh              Tvheadend API: channels, DVR entries, network setup, input status; tvhtest fakes it
 internal/fcc              FCC TV Query client and parser
 internal/terrain          Terrarium elevation tiles and path profiles
-internal/reception        propagation model and antenna presets
+internal/reception        propagation model and antenna presets (otascan)
 internal/atsc3            RabbitEars ATSC 3.0 list parser
 internal/guide            Gracenote lineup and listings
 internal/lineup           merges all of the above into a Report, and describes the tuner's channels from it

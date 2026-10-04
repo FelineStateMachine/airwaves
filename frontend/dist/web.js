@@ -54,8 +54,10 @@
   let memory = null; // when localStorage can't be used
 
   function normalized(s) {
-    const out = { server: '', token: '', clientId: '', antenna: 'rooftop', showAll: false, lastChannel: '', captions: false, ...s };
-    if (!['indoor', 'attic', 'rooftop'].includes(out.antenna)) out.antenna = 'rooftop';
+    const out = { server: '', token: '', clientId: '', lastChannel: '', captions: false, ...s };
+    // Settings of reception estimates, from before the measured lineup.
+    delete out.antenna;
+    delete out.showAll;
     if (out.scale && (out.scale < 50 || out.scale > 300)) out.scale = 0;
     // Its own client ID, so the server keeps this screen's stream apart.
     if (!out.clientId) out.clientId = `${tvApp ? 'tv' : 'web'}-${hex(6)}`;
@@ -140,7 +142,7 @@
 
   async function boot() {
     const out = {
-      settings: load(), presets: [], info: { name: '', mode: '', version: '', tuner: {}, dvr: false, antenna: false }, config: {},
+      settings: load(), info: { name: '', mode: '', version: '', tuner: {}, dvr: false, antenna: false }, config: {},
       serverUrl: base,
       view: query.get('view') || '',
       // Lite on the Android TV app, a TV box like the Linux ones;
@@ -157,12 +159,11 @@
     };
     lastBoot = out;
     try {
-      const [info, config, presets] = await Promise.all([
+      const [info, config] = await Promise.all([
         call('GET', '/api/info', undefined, { ms: 10_000 }),
         call('GET', '/api/config', undefined, { ms: 10_000 }),
-        call('GET', '/api/presets', undefined, { ms: 10_000 }),
       ]);
-      Object.assign(out, { info, config, presets });
+      Object.assign(out, { info, config });
       out.version = out.version || info.version;
     } catch (e) {
       out.error = String(e);
@@ -208,8 +209,9 @@
       emit('progress', `Loading lineup and listings from ${serverName()}`);
       return call('GET', `/api/snapshot${refresh ? '?refresh=1' : ''}`);
     },
-    Profile: (facilityID, rf, zip) => call('GET', `/api/profile?facility=${facilityID}&rf=${rf}&zip=${enc(zip || '')}`),
-    Preview: (zip) => call('GET', `/api/preview?zip=${enc(zip || '')}`),
+    // What the tuners measured, and Measure now.
+    Signal: () => call('GET', '/api/signal', undefined, { ms: 15_000 }),
+    Measure: () => call('POST', '/api/signal/measure', {}, { ms: 15_000 }),
     Weather: () => call('GET', '/api/weather'),
 
     async CopyText(text) {

@@ -9,7 +9,6 @@ import (
 
 	"airwaves/internal/fcc"
 	"airwaves/internal/guide"
-	"airwaves/internal/reception"
 )
 
 // Scanned is a channel a tuner's scan found.
@@ -210,10 +209,9 @@ func nextGen(rep *Report, ch TunerChannel, t *Station) *NextGen {
 }
 
 // ForTuner is rep for an app whose lineup is the tuner's: the same
-// records, with no estimates (no presets, and each station's Signal
-// empty), each station's Carries the channels the tuner receives from it
-// and the ATSC 3.0 services it hosts, and no Channels (the caller has
-// them).
+// records, with no estimates (no presets, and no station's Signal), each
+// station's Carries the channels the tuner receives from it and the ATSC
+// 3.0 services it hosts, and no Channels (the caller has them).
 func ForTuner(rep *Report, chans []TunerChannel) *Report {
 	out := *rep
 	out.Presets = nil
@@ -233,7 +231,7 @@ func ForTuner(rep *Report, chans []TunerChannel) *Report {
 	}
 	out.Stations = make([]Station, len(rep.Stations))
 	for i, s := range rep.Stations {
-		s.Signal = map[string]reception.Estimate{}
+		s.Signal = nil
 		s.Carries = append(slices.Clone(carried[[2]int{s.FacilityID, s.RFChannel}]), hosted[s.FacilityID]...)
 		if s.Carries == nil {
 			s.Carries = []string{}

@@ -1,14 +1,11 @@
 package api
 
 import (
-	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"testing/fstest"
-
-	"airwaves/internal/reception"
 )
 
 // TestTV: the TV interface is at /tv/ without the API's token, pages and
@@ -87,34 +84,5 @@ func TestTV(t *testing.T) {
 	defer bare.Close()
 	if resp, err := http.Get(bare.URL + "/tv/"); err != nil || resp.StatusCode != http.StatusNotFound {
 		t.Errorf("no TV: %v %v", resp, err)
-	}
-}
-
-// TestPresets: the web app gets the antenna presets the desktop app has
-// built in.
-func TestPresets(t *testing.T) {
-	srv := httptest.NewServer((&Server{Backend: &fake{}, Token: "s3cret"}).Handler())
-	defer srv.Close()
-	req, _ := http.NewRequest("GET", srv.URL+"/api/presets", nil)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Errorf("without the token: %d", resp.StatusCode)
-	}
-	req.Header.Set("Authorization", "Bearer s3cret")
-	if resp, err = http.DefaultClient.Do(req); err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	var got []reception.Preset
-	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != len(reception.Presets) || got[0].Name != "indoor" || got[2].Name != "rooftop" || got[2].Label != reception.Presets[2].Label ||
-		got[1].HeightM != reception.Presets[1].HeightM || got[0].GainDBi["UHF"] != reception.Presets[0].GainDBi["UHF"] {
-		t.Errorf("presets = %+v", got)
 	}
 }

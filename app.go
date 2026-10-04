@@ -12,7 +12,6 @@ import (
 
 	"airwaves/internal/api"
 	"airwaves/internal/dvr"
-	"airwaves/internal/reception"
 	"airwaves/internal/service"
 	"airwaves/internal/store"
 	"airwaves/internal/stream"
@@ -79,11 +78,10 @@ func (a *App) server() (*api.Client, store.Settings, error) {
 
 // Boot is the frontend's first call.
 type Boot struct {
-	Settings store.Settings     `json:"settings"`
-	Presets  []reception.Preset `json:"presets"`
-	Info     service.Info       `json:"info"`
-	Config   service.Config     `json:"config"`
-	Error    string             `json:"error,omitempty"` // server unset or unreachable
+	Settings store.Settings `json:"settings"`
+	Info     service.Info   `json:"info"`
+	Config   service.Config `json:"config"`
+	Error    string         `json:"error,omitempty"` // server unset or unreachable
 	// ServerURL is the server's base URL, for images and the WX channel.
 	ServerURL string `json:"serverUrl,omitempty"`
 	View      string `json:"view"` // initial view override
@@ -103,7 +101,7 @@ type Boot struct {
 // specific view at launch (tv, info, guide, antenna, recordings, settings).
 func (a *App) Boot() Boot {
 	c, s, err := a.server()
-	out := Boot{Settings: s, Presets: reception.Presets, View: os.Getenv("AIRWAVES_VIEW"), Lite: os.Getenv("AIRWAVES_LITE"),
+	out := Boot{Settings: s, View: os.Getenv("AIRWAVES_VIEW"), Lite: os.Getenv("AIRWAVES_LITE"),
 		AutoScale: autoScale(), NativeZoom: nativeZoom, Version: version}
 	if err != nil {
 		out.Error = err.Error()
@@ -207,13 +205,6 @@ func (a *App) Measure() (*service.SweepStatus, error) {
 	}
 	return c.Measure(a.ctx)
 }
-
-// Profile and Preview answered with reception estimates, which the app
-// no longer shows; they stay until its interface stops calling them.
-func (a *App) Profile(int, int, string) (any, error) { return nil, api.ErrEstimates }
-
-// Preview: see Profile.
-func (a *App) Preview(string) (any, error) { return nil, api.ErrEstimates }
 
 // Weather returns the local weather report from the server.
 func (a *App) Weather() (*weather.Report, error) {

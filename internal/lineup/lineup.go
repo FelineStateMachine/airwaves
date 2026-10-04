@@ -31,8 +31,8 @@ type Station struct {
 	fcc.Facility
 	Band string `json:"band"`
 	// Signal is the estimate for each antenna preset, keyed by preset name;
-	// empty without terrain.
-	Signal map[string]reception.Estimate `json:"signal"`
+	// none without terrain.
+	Signal map[string]reception.Estimate `json:"signal,omitempty"`
 	ATSC3  bool                          `json:"atsc3"`
 	// Carries lists the virtual channels this transmitter is matched to.
 	Carries []string `json:"carries"`

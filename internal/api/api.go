@@ -19,7 +19,6 @@ import (
 
 	"airwaves/internal/dvr"
 	"airwaves/internal/phase"
-	"airwaves/internal/reception"
 	"airwaves/internal/service"
 	"airwaves/internal/stream"
 	"airwaves/internal/weather"
@@ -53,10 +52,6 @@ var (
 	_ Backend = (*service.Service)(nil)
 	_ Backend = (*Client)(nil)
 )
-
-// ErrEstimates answers the calls for reception estimates the app used to
-// make.
-var ErrEstimates = errors.New("reception estimates moved to the otascan planning tool: the app shows what the tuner measures")
 
 // Server serves a Backend.
 type Server struct {
@@ -120,11 +115,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/config", func(w http.ResponseWriter, r *http.Request) {
 		reply(w)(b.Config(r.Context()))
 	})
-	// The antenna presets of the reception estimates, which TV pages from
-	// before the measured lineup still ask for when they start.
-	mux.HandleFunc("GET /api/presets", func(w http.ResponseWriter, r *http.Request) {
-		reply(w)(reception.Presets, nil)
-	})
 	mux.HandleFunc("PUT /api/config", func(w http.ResponseWriter, r *http.Request) {
 		var c service.Config
 		if !decode(w, r, &c) {
@@ -141,16 +131,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/signal/measure", func(w http.ResponseWriter, r *http.Request) {
 		reply(w)(b.Measure(r.Context()))
 	})
-	// Reception estimates (terrain profiles, ZIP code previews) are for
-	// planning an antenna, in otascan; the app shows what was measured.
-	mux.HandleFunc("GET /api/profile", func(w http.ResponseWriter, r *http.Request) {
-		writeErr(w, http.StatusGone, ErrEstimates)
-	})
 	mux.HandleFunc("GET /api/weather", func(w http.ResponseWriter, r *http.Request) {
 		reply(w)(b.Weather(r.Context()))
-	})
-	mux.HandleFunc("GET /api/preview", func(w http.ResponseWriter, r *http.Request) {
-		writeErr(w, http.StatusGone, ErrEstimates)
 	})
 	mux.HandleFunc("POST /api/tune", func(w http.ResponseWriter, r *http.Request) {
 		var req clientReq

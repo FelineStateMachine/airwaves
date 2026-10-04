@@ -14,7 +14,6 @@ import (
 	"airwaves/internal/fcc"
 	"airwaves/internal/guide"
 	"airwaves/internal/lineup"
-	"airwaves/internal/reception"
 	"airwaves/internal/signal"
 	"airwaves/internal/tuner"
 	"airwaves/internal/tvh"
@@ -363,42 +362,6 @@ func hostsRF(s string, rf int) bool {
 	}
 	n, err := strconv.Atoi(f[len(f)-1])
 	return err == nil && n == rf
-}
-
-// compatChannels is the tuner's lineup in the report's older Channel
-// shape, for app versions from before the measured lineup, which list a
-// channel only when its "tier" reads as receivable, and key favorites by
-// the listings' call sign ("KWGNDT"), as that shape had it. Its tier is measured,
-// not estimated, and the same for every antenna: "good" when the latest
-// reading of its multiplex (or, before any, Tvheadend's scan) locked,
-// "weak" when it didn't.
-func compatChannels(a *Antenna) []lineup.Channel {
-	scans := map[int]*signal.Scan{}
-	for _, m := range a.Muxes {
-		scans[m.RF] = m.Scan
-	}
-	out := make([]lineup.Channel, 0, len(a.Channels))
-	for _, c := range a.Channels {
-		t := reception.Unknown
-		switch {
-		case c.Signal != nil && c.Signal.Lock:
-			t = reception.Good
-		case c.Signal != nil:
-			t = reception.Weak
-		case scans[c.RF] != nil && scans[c.RF].Lock, c.Demo:
-			t = reception.Good
-		}
-		lc := lineup.Channel{
-			Number: c.Number, Major: c.Major, Minor: c.Minor, GuideID: c.GuideID, CallSign: cmp.Or(c.GuideCallSign, c.CallSign), BaseCall: c.BaseCall,
-			Network: c.Network, Logo: c.Logo, FacilityID: c.FacilityID, Via: c.Via,
-			Tier: map[string]reception.Tier{"indoor": t, "attic": t, "rooftop": t},
-		}
-		if c.NextGen != nil {
-			lc.ATSC3 = &lineup.Carriage{HostCall: c.NextGen.HostCall, FacilityID: c.NextGen.FacilityID, RF: c.NextGen.RF, Display: c.NextGen.Display}
-		}
-		out = append(out, lc)
-	}
-	return out
 }
 
 // dvrChannels is the tuner's lineup for recording: number, call sign (the
