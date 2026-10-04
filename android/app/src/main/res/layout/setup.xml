@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Setup: the server address, laid out like the desktop app's boot screen. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/setup"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/setup_bg"
+    android:clickable="true"
+    android:visibility="gone">
+
+    <LinearLayout
+        android:layout_width="600dp"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center_horizontal"
+        android:layout_marginTop="72dp"
+        android:orientation="vertical">
+
+        <ImageView
+            android:layout_width="wrap_content"
+            android:layout_height="84dp"
+            android:adjustViewBounds="true"
+            android:contentDescription="@string/app_name"
+            android:importantForAccessibility="no"
+            android:src="@drawable/mark" />
+
+        <TextView
+            style="@style/Setup.Mono"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:letterSpacing="0.2"
+            android:text="@string/setup_sub"
+            android:textAllCaps="true"
+            android:textColor="@color/amber"
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/setup_log"
+            style="@style/Setup.Mono"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="22dp"
+            android:lineSpacingMultiplier="1.5"
+            android:minLines="4"
+            android:textColor="@color/muted"
+            android:textSize="13sp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
+            android:orientation="horizontal">
+
+            <EditText
+                android:id="@+id/setup_server"
+                style="@style/Setup.Mono"
+                android:layout_width="0dp"
+                android:layout_height="44dp"
+                android:layout_weight="1"
+                android:autofillHints="url"
+                android:background="@drawable/field"
+                android:defaultFocusHighlightEnabled="false"
+                android:hint="@string/setup_hint"
+                android:imeOptions="actionGo|flagNoExtractUi|flagNoFullscreen"
+                android:inputType="textUri"
+                android:paddingStart="14dp"
+                android:paddingEnd="14dp"
+                android:singleLine="true"
+                android:textColor="@color/paper"
+                android:textColorHint="@color/faint"
+                android:textCursorDrawable="@drawable/cursor"
+                android:textSize="15sp" />
+
+            <Button
+                android:id="@+id/setup_connect"
+                style="@style/Setup.Button"
+                android:text="@string/setup_connect" />
+
+            <Button
+                android:id="@+id/setup_back"
+                style="@style/Setup.Button"
+                android:text="@string/setup_back"
+                android:visibility="gone" />
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
+            android:lineSpacingMultiplier="1.3"
+            android:text="@string/setup_help"
+            android:textColor="@color/faint"
+            android:textSize="13sp" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/setup_version"
+        style="@style/Setup.Mono"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|start"
+        android:layout_margin="32dp"
+        android:textColor="@color/faint"
+        android:textSize="11sp" />
+</FrameLayout>

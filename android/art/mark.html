@@ -1,0 +1,27 @@
+<!doctype html>
+<!-- The wordmark for the setup screen, transparent, cropped to its ink with a little air. -->
+<meta charset="utf-8">
+<link rel="stylesheet" href="../../build/linux/steam-art/art.css">
+<style>
+  html, body { background: transparent; }
+  canvas { display: block; }
+</style>
+<canvas id="art"></canvas>
+<script type="module">
+  import { ready } from "../../build/linux/steam-art/art.js";
+  await ready();
+  const size = 220, pad = 4, text = "AIRWAVES";
+  const font = `800 ${size}px Shoulders`;
+  const c = document.getElementById("art"), ctx = c.getContext("2d");
+  ctx.font = font;
+  ctx.letterSpacing = `${size * 0.01}px`;
+  const m = ctx.measureText(text);
+  const w = Math.ceil(m.actualBoundingBoxLeft + m.actualBoundingBoxRight) + pad * 2;
+  const h = Math.ceil(m.actualBoundingBoxAscent + m.actualBoundingBoxDescent) + pad * 2;
+  c.width = w; c.height = h;
+  ctx.font = font; // resizing the canvas resets its state
+  ctx.letterSpacing = `${size * 0.01}px`;
+  ctx.fillStyle = "#ede6d6";
+  ctx.fillText(text, pad + m.actualBoundingBoxLeft, pad + m.actualBoundingBoxAscent);
+  document.body.dataset.ready = "1";
+</script>

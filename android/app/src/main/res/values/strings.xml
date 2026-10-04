@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Airwaves</string>
+    <string name="setup_sub">Over-the-air television</string>
+    <string name="setup_hint">Server address</string>
+    <string name="setup_connect">Connect</string>
+    <string name="setup_back">Back to TV</string>
+    <string name="setup_help">The machine running airwavesd, like nas:8089 or http://192.168.1.20:8089 (port 8089 when none is given). Later, hold Back or press Menu to come back here.</string>
+    <string name="setup_version">Airwaves %1$s for Android TV</string>
+    <string name="press_back_again">Press Back again to exit</string>
+</resources>

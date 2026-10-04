@@ -1,0 +1,34 @@
+<!doctype html>
+<!-- Android TV banner, 640x360 (320x180dp at xhdpi): the wordmark above the guide grid. -->
+<meta charset="utf-8">
+<link rel="stylesheet" href="../../build/linux/steam-art/art.css">
+<style>
+  #art { width: 640px; height: 360px; }
+  #art::before { /* a warm haze where the guide meets the wordmark */
+    content: ""; position: absolute; inset: 0;
+    background: radial-gradient(60% 45% at 60% 78%, rgba(255, 178, 36, .08), transparent 70%);
+  }
+  .copy { position: absolute; left: 44px; top: 54px; z-index: 2; }
+  .mark { font-size: 148px; }
+  .tag { font-size: 15px; margin-top: 24px; }
+  .guide {
+    left: 0; right: 0; top: 236px; bottom: 0;
+    -webkit-mask-image:
+      linear-gradient(to bottom, transparent, #000 30%, #000 60%, transparent),
+      linear-gradient(to right, transparent, #000 10%, #000 90%, transparent);
+    -webkit-mask-composite: source-in; mask-composite: intersect;
+  }
+</style>
+<div class="art grain" id="art">
+  <div class="guide" id="g"></div>
+  <div class="copy">
+    <div class="mark">Airwaves</div>
+    <div class="tag">Live TV and guide</div>
+  </div>
+</div>
+<script type="module">
+  import { guide, ready } from "../../build/linux/steam-art/art.js";
+  await ready();
+  guide(document.getElementById("g"), { u: 1, chw: 80, slot: 120, now: 1.5, first: 2, cur: 1, sel: false, seed: 11 });
+  document.body.dataset.ready = "1";
+</script>

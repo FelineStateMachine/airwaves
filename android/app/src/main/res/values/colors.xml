@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The app's tokens (frontend/dist/style.css). -->
+<resources>
+    <color name="ink">#07080a</color>
+    <color name="ink_3">#15181d</color>
+    <color name="glow">#12151b</color>
+    <color name="line_2">#29ede6d6</color>
+    <color name="paper">#ede6d6</color>
+    <color name="muted">#908a7c</color>
+    <color name="faint">#5d5850</color>
+    <color name="amber">#ffb224</color>
+    <color name="amber_2">#c98714</color>
+    <color name="amber_select">#66ffb224</color>
+    <color name="red">#ff5d4a</color>
+</resources>
