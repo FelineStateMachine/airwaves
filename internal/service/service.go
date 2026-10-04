@@ -1,10 +1,14 @@
-// Package service is the Airwaves engine: lineup and reception, guide,
-// live streams and recordings. The desktop app runs it in-process when no
-// server is configured; airwavesd runs it on a home server and exposes it
-// over HTTP (see package api).
+// Package service is the Airwaves engine: the tuner's lineup and what was
+// measured of its signal, the guide, live streams and recordings. airwavesd
+// runs it on a home server and exposes it over HTTP (see package api).
+//
+// What it serves the app is either measured (the tuner's channels and
+// signal) or on record (the FCC's transmitters, the listings, the ATSC 3.0
+// list). Reception estimates are for planning, in otascan, not here.
 package service
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -27,10 +31,9 @@ import (
 	"airwaves/internal/geo"
 	"airwaves/internal/guide"
 	"airwaves/internal/lineup"
-	"airwaves/internal/reception"
+	"airwaves/internal/signal"
 	"airwaves/internal/store"
 	"airwaves/internal/stream"
-	"airwaves/internal/terrain"
 	"airwaves/internal/tuner"
 	"airwaves/internal/tvh"
 	"airwaves/internal/vchan"
@@ -48,7 +51,7 @@ var ErrNoDVR = errors.New("recording needs an Airwaves server with Tvheadend")
 var ErrNotRecordable = errors.New("custom channels play from the server and can't be recorded")
 
 // ErrNoAntenna is returned for what needs an antenna (antenna channels,
-// reception reports, recording) by a server that has only custom channels.
+// signal, recording) by a server that has only custom channels.
 var ErrNoAntenna = errors.New("this Airwaves server has no antenna, only custom channels")
 
 // ErrNoLocation is returned for the weather by a server without an
@@ -96,15 +99,22 @@ type Info struct {
 	Antenna bool `json:"antenna"`
 }
 
-// Snapshot is a report together with its listings.
+// Snapshot is the lineup with its listings.
 type Snapshot struct {
+	// Report is what is on record at the location: the FCC's transmitters
+	// (with no estimates: their "signal" is empty), the ATSC 3.0 hosts and
+	// the data sources. Its Channels are the tuner's lineup, as Antenna
+	// has it, in the shape app versions before the measured lineup read.
 	Report *lineup.Report `json:"report"`
-	Guide  *guide.Guide   `json:"guide"`
+	// Guide is the listings of the tuner's channels.
+	Guide *guide.Guide `json:"guide"`
 	// Custom lists the custom channels that are on, by number, with their
 	// details and schedules: the weather channel and the folder channels.
 	// It's always a list in a Snapshot, if an empty one, so the app can tell
 	// a server that lists the weather channel here from one before that.
 	Custom []CustomChannel `json:"custom"`
+	// Antenna is the tuner, its channels and what was measured of them.
+	Antenna *Antenna `json:"antenna"`
 }
 
 // CustomChannel is a custom channel and its schedule, for the app's guide.
@@ -124,16 +134,6 @@ type CustomChannel struct {
 	Programs []guide.Program `json:"programs"`
 }
 
-// PathProfile is a terrain cross-section from the viewer to a transmitter.
-type PathProfile struct {
-	DistanceKm float64                       `json:"distanceKm"`
-	Elevations []float64                     `json:"elevations"` // downsampled, viewer first
-	RxGroundM  float64                       `json:"rxGroundM"`
-	TxHeightM  float64                       `json:"txHeightM"` // antenna height above sea level
-	Presets    []reception.Preset            `json:"presets"`
-	Signal     map[string]reception.Estimate `json:"signal"`
-}
-
 // Options configure a Service.
 type Options struct {
 	Name     string
@@ -148,7 +148,9 @@ type Options struct {
 	// Tvheadend enables server tuners and recording.
 	Tvheadend *tvh.Client
 	DVRPath   string
-	// Demo fills Tvheadend with generated channels while it has no tuner.
+	// Demo fills Tvheadend with generated channels, for development before
+	// there's a tuner. They're never made, and are removed, once a tuner's
+	// antenna network exists.
 	Demo bool
 	// DemoFFmpeg is the ffmpeg path inside the Tvheadend container.
 	DemoFFmpeg string
@@ -179,15 +181,22 @@ type Options struct {
 	// it streams, in LUFS (vchan.DefaultLoudness is antenna TV's); 0
 	// leaves it as it is.
 	Loudness float64
-	Progress func(string)
+	// SignalPath keeps the signal measurements; empty keeps them in
+	// memory.
+	SignalPath string
+	Progress   func(string)
 }
 
 // Service is the engine.
 type Service struct {
-	opt       Options
-	http      *http.Client
-	cache     *store.Cache
-	terrain   *terrain.Source
+	opt     Options
+	http    *http.Client
+	cache   *store.Cache
+	signals *signal.Store
+	timing  measureTiming
+	// ctx lasts until Close, for work that outlives a request (sweeps).
+	ctx       context.Context
+	cancel    context.CancelFunc
 	streams   *stream.Server
 	streamErr error
 	tvhTuner  *tuner.Tvheadend
@@ -203,20 +212,25 @@ type Service struct {
 
 	buildMu sync.Mutex // serializes report builds
 
-	mu       sync.Mutex
-	cfg      Config
-	tuner    tuner.Tuner
-	report   *lineup.Report
-	guide    *guide.Guide
-	built    time.Time
-	previews map[string]preview // by ZIP
-	tuners   int                // physical tuners Tvheadend reports
-	wxUp     bool               // the display at WeatherStarURL answered last time
-}
-
-type preview struct {
+	mu     sync.Mutex
+	cfg    Config
+	tuner  tuner.Tuner
 	report *lineup.Report
+	guide  *guide.Guide
 	built  time.Time
+	wxUp   bool // the display at WeatherStarURL answered last time
+	// fes are the ATSC tuners Tvheadend has, as of fesAt; fesKnown once
+	// looked up.
+	fes      []tvh.Frontend
+	fesAt    time.Time
+	fesKnown bool
+	// inputs are the tuned inputs as of inputsAt; lastStreams what each
+	// was tuned to at the last sample.
+	inputs      []tvh.InputStatus
+	inputsAt    time.Time
+	lastStreams map[string]string
+	sweep       SweepStatus
+	sweepMux    string // the multiplex the sweep is on
 }
 
 // New builds a Service. Streaming failures (no ffmpeg) are reported by
@@ -226,7 +240,8 @@ func New(opt Options) (*Service, error) {
 		opt.Tvheadend, opt.Demo = nil, false
 		opt.Tuner = noAntenna{}
 	}
-	s := &Service{opt: opt, http: web.NewClient(), tuner: opt.Tuner, previews: map[string]preview{}}
+	s := &Service{opt: opt, http: web.NewClient(), tuner: opt.Tuner, timing: defaultTiming}
+	s.ctx, s.cancel = context.WithCancel(context.Background())
 	s.cfg = s.withDefaults(opt.Config)
 	if opt.ConfigPath != "" {
 		if raw, err := os.ReadFile(opt.ConfigPath); err == nil {
@@ -243,18 +258,21 @@ func New(opt Options) (*Service, error) {
 	} else {
 		s.cache, err = store.NewCache("airwaves")
 	}
-	tiles := filepath.Join(os.TempDir(), "airwaves-terrain")
 	if err != nil {
 		log.Printf("cache: %v; data will be refetched", err)
-	} else {
-		tiles = filepath.Join(s.cache.Dir(), "terrain")
 	}
-	s.terrain = terrain.NewSource(s.http, tiles)
+	if s.signals, err = signal.Open(opt.SignalPath); err != nil {
+		if s.signals == nil {
+			return nil, err
+		}
+		log.Print(err)
+	}
 	s.weather = weather.NewSource(s.http)
 	s.streams, s.streamErr = stream.NewServer(opt.Loopback)
 
 	if opt.Tvheadend != nil {
 		s.tvhTuner = tuner.NewTvheadend(opt.Tvheadend)
+		s.tvhTuner.Networks = s.offeredNetworks
 		s.tuner = s.tvhTuner
 		s.dvr, err = dvr.Open(opt.DVRPath, opt.Tvheadend, s.tvhTuner)
 		if err != nil {
@@ -262,7 +280,7 @@ func New(opt Options) (*Service, error) {
 		}
 	}
 	if s.tuner == nil {
-		s.tuner = tuner.Demo{}
+		s.tuner = noTuner{}
 	}
 	if opt.WeatherStarPort > 0 {
 		s.wxLocal = strings.TrimRight(opt.WeatherStarURL, "/")
@@ -326,6 +344,18 @@ func (noAntenna) Device() tuner.Device {
 
 func (noAntenna) Input(_ context.Context, number string) (tuner.Input, error) {
 	return tuner.Input{}, fmt.Errorf("no channel %s: %w", number, ErrNoAntenna)
+}
+
+// noTuner is the tuner of a server with an antenna but no Tvheadend: it
+// has no channels.
+type noTuner struct{}
+
+func (noTuner) Device() tuner.Device {
+	return tuner.Device{ID: "none", Name: "No tuner", Kind: "none", Detail: "the server has no Tvheadend"}
+}
+
+func (noTuner) Input(_ context.Context, number string) (tuner.Input, error) {
+	return tuner.Input{}, fmt.Errorf("no channel %s: %w", number, ErrNoTuner)
 }
 
 // wxOn reports whether the weather channel can be shown: there's a
@@ -396,10 +426,14 @@ func (s *Service) customChannel(number string) vchan.Channel {
 	return nil
 }
 
-// Close stops all streams.
+// Close stops all streams and measuring, and saves the measurements.
 func (s *Service) Close() {
+	s.cancel()
 	if s.streams != nil {
 		s.streams.Close()
+	}
+	if err := s.signals.Save(); err != nil {
+		log.Printf("signal measurements: %v", err)
 	}
 }
 
@@ -421,6 +455,20 @@ func (s *Service) Info(context.Context) (Info, error) {
 	s.mu.Unlock()
 	i := Info{Name: s.opt.Name, Mode: s.opt.Mode, Version: Version, Tuner: t.Device(), DVR: s.dvr != nil, WeatherStar: s.wxOn(),
 		Antenna: !s.opt.NoAntenna}
+	if s.opt.Tvheadend != nil {
+		ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
+		defer cancel()
+		if fes, err := s.frontends(ctx, false); err == nil {
+			i.Tuner.Tuners = len(fes)
+			for _, fe := range fes {
+				i.Tuner.Model = cmp.Or(i.Tuner.Model, fe.Model)
+			}
+			if len(fes) > 0 {
+				// Tvheadend's ATSC tuners receive ATSC 1.0 only.
+				i.Tuner.Standards = []string{"ATSC 1.0"}
+			}
+		}
+	}
 	if s.streamErr != nil {
 		i.Playback = s.streamErr.Error()
 	}
@@ -465,16 +513,33 @@ func (s *Service) SetConfig(_ context.Context, c Config) (Config, error) {
 	return c, nil
 }
 
-// Snapshot returns the current report and guide, rebuilding when stale,
-// with the custom channels' details and schedules. With refresh it also
+// Snapshot returns the tuner's lineup described from the records (the
+// report, rebuilt when stale) with its listings, what was measured, and
+// the custom channels' details and schedules. With refresh it also
 // bypasses cached source data.
 func (s *Service) Snapshot(ctx context.Context, refresh bool) (*Snapshot, error) {
 	snap, err := s.snapshot(ctx, refresh)
 	if err != nil {
 		return nil, err
 	}
-	snap.Custom = s.custom()
-	return snap, nil
+	out := &Snapshot{Report: snap.Report, Guide: snap.Guide, Custom: s.custom()}
+	if s.opt.NoAntenna {
+		out.Antenna = s.antenna(ctx, nil, nil)
+		return out, nil
+	}
+	a := s.antenna(ctx, snap.Report, snap.Guide)
+	chans := make([]lineup.TunerChannel, len(a.Channels))
+	for i, c := range a.Channels {
+		chans[i] = c.TunerChannel
+	}
+	out.Report = lineup.ForTuner(snap.Report, chans)
+	out.Report.Channels = compatChannels(a)
+	if len(a.Channels) == 0 && a.Tuner.Reason != "" {
+		out.Report.Warnings = append(slices.Clone(out.Report.Warnings), "No antenna channels: "+a.Tuner.Reason)
+	}
+	out.Guide = listedOnly(snap.Guide, a.Channels)
+	out.Antenna = a
+	return out, nil
 }
 
 // custom lists the custom channels for the app: the weather channel (which
@@ -565,34 +630,20 @@ func (s *Service) LogoHandler() http.Handler {
 	return mux
 }
 
-// AntennaChannels lists the antenna channels by number, with their names:
-// those in Tvheadend's lineup when there's a Tvheadend, else those the
-// lineup report has as receivable. Custom channels take the place of
-// antenna channels with the same number in the HDHomeRun lineup.
+// AntennaChannels lists the tuner's channels by number, with their call
+// signs; none without a tuner. Custom channels take the place of antenna
+// channels with the same number in the HDHomeRun lineup.
 func (s *Service) AntennaChannels(ctx context.Context) map[string]string {
 	out := map[string]string{}
-	if s.tvhTuner != nil {
-		chans, err := s.tvhTuner.Channels(ctx)
-		if err == nil {
-			b := hdhrBackend{s}
-			for _, c := range chans {
-				if !c.Enabled || c.Number == "0" || len(c.Services) == 0 {
-					continue
-				}
-				out[c.Number] = c.Name
-				if rc := b.reportChannel(c.Number); rc != nil && rc.CallSign != "" {
-					out[c.Number] = rc.CallSign
-				}
-			}
-			return out
-		}
+	s.mu.Lock()
+	rep, g := s.report, s.guide
+	s.mu.Unlock()
+	chans, _, err := s.matched(ctx, rep, g)
+	if err != nil {
 		log.Printf("antenna channels: %v", err)
 	}
-	_, chans := s.guideAndChannels()
 	for _, c := range chans {
-		if _, ok := out[c.Number]; !ok && c.Tier["rooftop"].Receivable() {
-			out[c.Number] = c.CallSign
-		}
+		out[c.Number] = cmp.Or(c.CallSign, c.Name)
 	}
 	return out
 }
@@ -623,7 +674,8 @@ func (s *Service) snapshot(ctx context.Context, refresh bool) (*Snapshot, error)
 		return &Snapshot{Report: rep}, nil
 	}
 
-	b := &lineup.Builder{HTTP: s.http, Cache: s.cache, Terrain: s.terrain, Progress: s.opt.Progress}
+	// The records only: no terrain, so no estimates.
+	b := &lineup.Builder{HTTP: s.http, Cache: s.cache, Progress: s.opt.Progress}
 	opt := lineup.Options{ZIP: cfg.ZIP, RadiusKm: cfg.RadiusKm, GuideHours: cfg.GuideHours, Refresh: refresh}
 	if cfg.Lat != 0 && cfg.Lon != 0 {
 		opt.Point = &geo.Point{Lat: cfg.Lat, Lon: cfg.Lon}
@@ -644,7 +696,7 @@ func (s *Service) snapshot(ctx context.Context, refresh bool) (*Snapshot, error)
 // reports false when the ZIP code couldn't be looked up.
 func (s *Service) locate(ctx context.Context, cfg Config) (*lineup.Report, bool) {
 	rep := &lineup.Report{
-		Generated: time.Now(), Presets: []reception.Preset{}, Stations: []lineup.Station{},
+		Generated: time.Now(), Stations: []lineup.Station{},
 		Channels: []lineup.Channel{}, Sources: []lineup.Source{}, Warnings: []string{},
 	}
 	ok := true
@@ -771,81 +823,6 @@ func (s *Service) weatherStarBase(r *http.Request) string {
 	return "http://" + net.JoinHostPort(host, strconv.Itoa(s.opt.WeatherStarPort))
 }
 
-// Preview builds a reception report for another ZIP code, to share what
-// someone there would receive. It leaves the server's own location alone.
-func (s *Service) Preview(ctx context.Context, zip string) (*Snapshot, error) {
-	if s.opt.NoAntenna {
-		return nil, ErrNoAntenna
-	}
-	if len(zip) != 5 || strings.Trim(zip, "0123456789") != "" {
-		return nil, fmt.Errorf("%q is not a ZIP code", zip)
-	}
-	s.mu.Lock()
-	if p, ok := s.previews[zip]; ok && time.Since(p.built) < reportTTL {
-		s.mu.Unlock()
-		return &Snapshot{Report: p.report}, nil
-	}
-	s.mu.Unlock()
-	b := &lineup.Builder{HTTP: s.http, Cache: s.cache, Terrain: s.terrain}
-	// A short guide window is enough to name the channels.
-	rep, _, err := b.Build(context.WithoutCancel(ctx), lineup.Options{ZIP: zip, RadiusKm: 160, GuideHours: 6})
-	if err != nil {
-		return nil, err
-	}
-	s.mu.Lock()
-	if len(s.previews) >= 8 {
-		clear(s.previews)
-	}
-	s.previews[zip] = preview{report: rep, built: time.Now()}
-	s.mu.Unlock()
-	return &Snapshot{Report: rep}, nil
-}
-
-// Profile returns the terrain between the viewer and a transmitter: at the
-// server's location, or at a previewed ZIP code.
-func (s *Service) Profile(ctx context.Context, facilityID, rf int, zip string) (*PathProfile, error) {
-	if s.opt.NoAntenna {
-		return nil, ErrNoAntenna
-	}
-	var rep *lineup.Report
-	if zip != "" {
-		snap, err := s.Preview(ctx, zip)
-		if err != nil {
-			return nil, err
-		}
-		rep = snap.Report
-	} else {
-		snap, err := s.snapshot(ctx, false)
-		if err != nil {
-			return nil, err
-		}
-		rep = snap.Report
-	}
-	i := slices.IndexFunc(rep.Stations, func(st lineup.Station) bool { return st.FacilityID == facilityID && st.RFChannel == rf })
-	if i < 0 {
-		return nil, fmt.Errorf("facility %d RF %d not found", facilityID, rf)
-	}
-	st := rep.Stations[i]
-	prof, err := s.terrain.Profile(ctx, rep.Point, st.Point)
-	if err != nil {
-		return nil, err
-	}
-	const points = 240
-	el := prof.Elevations
-	out := make([]float64, 0, points)
-	for i := range points {
-		out = append(out, el[i*(len(el)-1)/(points-1)])
-	}
-	tx := st.RCAMSLm
-	if tx <= 0 {
-		tx = el[len(el)-1] + max(st.RCAGLm, st.HAATm, 30)
-	}
-	return &PathProfile{
-		DistanceKm: prof.DistanceKm, Elevations: out, RxGroundM: el[0], TxHeightM: tx,
-		Presets: reception.Presets, Signal: st.Signal,
-	}, nil
-}
-
 // Tune starts live playback of a channel for client.
 func (s *Service) Tune(ctx context.Context, client, number string) (*stream.Playback, error) {
 	if s.streamErr != nil {
@@ -864,6 +841,15 @@ func (s *Service) Tune(ctx context.Context, client, number string) (*stream.Play
 			Source: func(ctx context.Context, w io.Writer) error { return v.Stream(vchan.ForApp(ctx, script), w) },
 		}
 		return s.streams.Start(ctx, client, in)
+	}
+	if s.tvhTuner != nil {
+		var pb *stream.Playback
+		err := s.tuneAntenna(ctx, client, number, func(ctx context.Context, in tuner.Input) error {
+			var err error
+			pb, err = s.streams.Start(ctx, client, in)
+			return err
+		})
+		return pb, err
 	}
 	s.mu.Lock()
 	t := s.tuner
@@ -888,7 +874,7 @@ func (s *Service) DVR(ctx context.Context) (*dvr.State, error) {
 	if s.dvr == nil {
 		return &dvr.State{Reason: s.noDVR().Error()}, nil
 	}
-	g, chans := s.guideAndChannels()
+	g, chans, _ := s.recordingChannels(ctx)
 	return s.dvr.State(ctx, g, chans)
 }
 
@@ -914,7 +900,10 @@ func (s *Service) Record(ctx context.Context, req dvr.Request) (*dvr.Rule, error
 	if _, err := s.snapshot(ctx, false); err != nil {
 		return nil, err
 	}
-	g, chans := s.guideAndChannels()
+	g, chans, err := s.recordingChannels(ctx)
+	if err != nil {
+		return nil, err
+	}
 	return s.dvr.Add(ctx, req, g, chans)
 }
 
@@ -1013,19 +1002,22 @@ func (s *Service) SetDVRPrefs(_ context.Context, p dvr.Prefs) (dvr.Prefs, error)
 	return s.dvr.SetPrefs(p)
 }
 
-func (s *Service) guideAndChannels() (*guide.Guide, []lineup.Channel) {
+// recordingChannels is the listings and the tuner's channels, for
+// recording.
+func (s *Service) recordingChannels(ctx context.Context) (*guide.Guide, []lineup.Channel, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.report == nil {
-		return s.guide, nil
-	}
-	return s.guide, s.report.Channels
+	rep, g := s.report, s.guide
+	s.mu.Unlock()
+	chans, _, err := s.matched(ctx, rep, g)
+	return g, dvrChannels(chans), err
 }
 
 // Run keeps a server healthy until ctx ends: refreshes listings, keeps
-// Tvheadend's channels matching the hardware (demo channels until a tuner
-// appears, then the antenna network), and reconciles recordings.
+// Tvheadend's channels matching the hardware (the antenna network once a
+// tuner appears; demo channels before, in demo mode), measures the signal
+// while tuners are in use, and reconciles recordings.
 func (s *Service) Run(ctx context.Context) {
+	go s.sample(ctx)
 	tick := time.NewTicker(time.Minute)
 	defer tick.Stop()
 	for n := 0; ; n++ {
@@ -1043,9 +1035,9 @@ func (s *Service) Run(ctx context.Context) {
 // mapped now are scheduled on the next pass.
 func (s *Service) maintain(ctx context.Context, prune bool) {
 	s.checkWeatherStar(ctx)
-	if _, err := s.snapshot(ctx, false); err != nil {
-		log.Printf("snapshot: %v", err)
-		return
+	_, snapErr := s.snapshot(ctx, false)
+	if snapErr != nil {
+		log.Printf("snapshot: %v", snapErr)
 	}
 	if s.opt.Tvheadend == nil {
 		return
@@ -1065,7 +1057,17 @@ func (s *Service) maintain(ctx context.Context, prune bool) {
 		log.Printf("mapped %d new channels", n)
 		s.tvhTuner.Invalidate()
 	}
-	g, chans := s.guideAndChannels()
+	s.syncScans(ctx)
+	if snapErr != nil {
+		return
+	}
+	// Without the tuner's lineup, recordings stay as they are rather than
+	// being unscheduled for channels that seem gone.
+	g, chans, err := s.recordingChannels(ctx)
+	if err != nil {
+		log.Printf("reconcile recordings: %v", err)
+		return
+	}
 	if err := s.dvr.Reconcile(ctx, g, chans); err != nil {
 		log.Printf("reconcile recordings: %v", err)
 	}
@@ -1079,17 +1081,16 @@ func (s *Service) maintain(ctx context.Context, prune bool) {
 	}
 }
 
-// setupTuners attaches real tuners to the antenna network when present and
-// otherwise keeps the demo channels in place.
+// setupTuners attaches real tuners to the antenna network when present.
+// Once that network exists (a tuner has been found), demo channels are
+// removed and never made again, even while the tuner is away; before, in
+// demo mode, they stand in for the antenna.
 func (s *Service) setupTuners(ctx context.Context) error {
 	c := s.opt.Tvheadend
-	fes, err := c.Frontends(ctx)
+	fes, err := s.frontends(ctx, true)
 	if err != nil {
 		return err
 	}
-	s.mu.Lock()
-	s.tuners = len(fes)
-	s.mu.Unlock()
 	if len(fes) > 0 {
 		changed, err := c.EnsureATSC(ctx, fes)
 		if err != nil {
@@ -1097,47 +1098,68 @@ func (s *Service) setupTuners(ctx context.Context) error {
 		}
 		if changed {
 			log.Printf("antenna network created for %d tuners; Tvheadend is scanning", len(fes))
+			s.tvhTuner.Invalidate()
 		}
-		// Retire demo channels once real ones exist.
-		nets, err := c.Networks(ctx)
-		if err != nil {
-			return err
-		}
-		for _, n := range nets {
-			if n.Name == tvh.ATSCNetwork && n.NumChn > 0 {
-				return c.RemoveNetwork(ctx, tvh.DemoNetwork)
-			}
-		}
-		return nil
 	}
-	if !s.opt.Demo {
-		return nil
+	nets, err := c.Networks(ctx)
+	if err != nil {
+		return err
 	}
-	return c.EnsureDemo(ctx, s.demoChannels())
+	var real, demo bool
+	for _, n := range nets {
+		real = real || n.Name == tvh.ATSCNetwork
+		demo = demo || n.Name == tvh.DemoNetwork
+	}
+	switch {
+	case real && demo:
+		if err := c.RemoveNetwork(ctx, tvh.DemoNetwork); err != nil {
+			return fmt.Errorf("remove the demo channels: %w", err)
+		}
+		log.Print("removed the demo channels: a tuner's antenna network exists")
+		s.tvhTuner.Invalidate()
+	case real, !s.opt.Demo:
+	default:
+		return c.EnsureDemo(ctx, s.demoChannels())
+	}
+	return nil
 }
 
-// demoChannels mirrors the receivable lineup as generated channels.
+// demoChannels are the main channels of the stations in the listings (or,
+// without listings, in the FCC's records) as generated test patterns.
 func (s *Service) demoChannels() []tvh.DemoChannel {
-	_, chans := s.guideAndChannels()
-	ffmpeg := s.opt.DemoFFmpeg
-	if ffmpeg == "" {
-		ffmpeg = "/usr/bin/ffmpeg"
-	}
-	seen := make(map[string]bool)
+	s.mu.Lock()
+	rep, g := s.report, s.guide
+	s.mu.Unlock()
+	ffmpeg := cmp.Or(s.opt.DemoFFmpeg, "/usr/bin/ffmpeg")
+	seen := make(map[int]bool)
 	var out []tvh.DemoChannel
-	for _, c := range chans {
-		if seen[c.Number] || c.GuideID == "" || !c.Tier["rooftop"].Receivable() {
-			continue
+	add := func(major int, name string) {
+		if major <= 0 || seen[major] {
+			return
 		}
-		seen[c.Number] = true
-		name := c.BaseCall
-		if name == "" {
-			name = "CH" + strconv.Itoa(c.Major)
+		seen[major] = true
+		// Tvheadend splits the command on spaces, so one word.
+		if f := strings.Fields(name); len(f) > 0 {
+			name = f[0]
+		} else {
+			name = "CH" + strconv.Itoa(major)
 		}
 		out = append(out, tvh.DemoChannel{
-			Major: c.Major, Minor: c.Minor, Name: name,
-			Command: tuner.DemoCommand(ffmpeg, c.Number, name),
+			Major: major, Minor: 1, Name: name,
+			Command: tuner.DemoCommand(ffmpeg, fmt.Sprintf("%d.1", major), name),
 		})
+	}
+	if g != nil {
+		for _, c := range g.Channels {
+			if major, minor := guide.SplitNumber(c.Number); minor == 1 {
+				add(major, guide.BaseCall(c.CallSign))
+			}
+		}
+	}
+	if len(out) == 0 && rep != nil {
+		for _, st := range rep.Stations {
+			add(st.VirtualChannel, st.BaseCall)
+		}
 	}
 	return out
 }

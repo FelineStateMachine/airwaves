@@ -1,6 +1,7 @@
 package tvh
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/url"
@@ -44,22 +45,60 @@ func (c *Client) network(ctx context.Context, name string) (*Network, error) {
 	return nil, nil
 }
 
-type mux struct {
-	UUID        string `json:"uuid"`
-	Name        string `json:"name"`
-	NetworkUUID string `json:"network_uuid"`
-	URL         string `json:"iptv_url"`
+// Mux is a multiplex: what one RF channel (or one IPTV source) carries.
+type Mux struct {
+	UUID        string   `json:"uuid"`
+	Name        string   `json:"name"` // "605MHz"
+	Network     string   `json:"network"`
+	NetworkUUID string   `json:"network_uuid"`
+	Enabled     flexBool `json:"enabled"`
+	// FrequencyHz is an antenna multiplex's center frequency; 0 for IPTV.
+	FrequencyHz int64 `json:"frequency"`
+	// ScanState is 0 when idle, 1 while queued and 2 while Tvheadend scans
+	// the multiplex.
+	ScanState  int        `json:"scan_state"`
+	ScanResult ScanResult `json:"scan_result"`
+	// ScanLast is when a scan last found the multiplex (unix seconds); 0
+	// when none has.
+	ScanLast int64  `json:"scan_last"`
+	NumSvc   int    `json:"num_svc"`
+	NumChn   int    `json:"num_chn"`
+	URL      string `json:"iptv_url"`
 }
 
-func (c *Client) muxes(ctx context.Context, networkUUID string) ([]mux, error) {
+// ScanResult is how Tvheadend's last scan of a multiplex went.
+type ScanResult int
+
+// Scan results, as Tvheadend numbers them.
+const (
+	ScanNone    ScanResult = 0 // not scanned yet
+	ScanOK      ScanResult = 1 // locked, and found the services
+	ScanFail    ScanResult = 2 // no lock, or nothing found
+	ScanPartial ScanResult = 3 // locked, with some tables missing
+	ScanIgnore  ScanResult = 4
+)
+
+// Scanning reports whether Tvheadend is scanning the multiplex, or about to.
+func (m Mux) Scanning() bool { return m.ScanState != 0 }
+
+// Muxes lists every multiplex.
+func (c *Client) Muxes(ctx context.Context) ([]Mux, error) {
 	var body struct {
-		Entries []mux `json:"entries"`
+		Entries []Mux `json:"entries"`
 	}
 	if err := c.get(ctx, "/api/mpegts/mux/grid", url.Values{"limit": {"5000"}}, &body); err != nil {
 		return nil, err
 	}
-	var out []mux
-	for _, m := range body.Entries {
+	return body.Entries, nil
+}
+
+func (c *Client) muxes(ctx context.Context, networkUUID string) ([]Mux, error) {
+	all, err := c.Muxes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []Mux
+	for _, m := range all {
 		if m.NetworkUUID == networkUUID {
 			out = append(out, m)
 		}
@@ -151,22 +190,30 @@ func (c *Client) RemoveNetwork(ctx context.Context, name string) error {
 		return err
 	}
 	for _, s := range svcs {
-		for _, ch := range s.channels() {
+		for _, ch := range s.Channels() {
 			_ = c.post(ctx, "/api/idnode/delete", url.Values{"uuid": {ch}}, nil)
 		}
 	}
 	return c.post(ctx, "/api/idnode/delete", url.Values{"uuid": {net.UUID}}, nil)
 }
 
-type service struct {
+// Service is a program in a multiplex, which Tvheadend maps to a channel.
+type Service struct {
 	UUID          string `json:"uuid"`
-	Name          string `json:"svcname"`
+	Name          string `json:"svcname"` // as broadcast, "KTVD-HD"
+	Network       string `json:"network"`
+	Multiplex     string `json:"multiplex"` // the multiplex's name
 	MultiplexUUID string `json:"multiplex_uuid"`
-	Channel       any    `json:"channel"` // list of channel UUIDs, or a string
+	Enabled       bool   `json:"enabled"`
 	Encrypted     bool   `json:"encrypted"`
+	// Major and Minor are the virtual channel the broadcast gives (PSIP).
+	Major   int `json:"lcn"`
+	Minor   int `json:"lcn_minor"`
+	Channel any `json:"channel"` // list of channel UUIDs, or a string
 }
 
-func (s service) channels() []string {
+// Channels lists the UUIDs of the channels mapped from the service.
+func (s Service) Channels() []string {
 	switch v := s.Channel.(type) {
 	case string:
 		if v != "" {
@@ -184,7 +231,18 @@ func (s service) channels() []string {
 	return nil
 }
 
-func (c *Client) services(ctx context.Context, networkUUID string) ([]service, error) {
+// Services lists every service.
+func (c *Client) Services(ctx context.Context) ([]Service, error) {
+	var body struct {
+		Entries []Service `json:"entries"`
+	}
+	if err := c.get(ctx, "/api/mpegts/service/grid", url.Values{"limit": {"5000"}}, &body); err != nil {
+		return nil, err
+	}
+	return body.Entries, nil
+}
+
+func (c *Client) services(ctx context.Context, networkUUID string) ([]Service, error) {
 	muxes, err := c.muxes(ctx, networkUUID)
 	if err != nil {
 		return nil, err
@@ -193,14 +251,12 @@ func (c *Client) services(ctx context.Context, networkUUID string) ([]service, e
 	for _, m := range muxes {
 		inNet[m.UUID] = true
 	}
-	var body struct {
-		Entries []service `json:"entries"`
-	}
-	if err := c.get(ctx, "/api/mpegts/service/grid", url.Values{"limit": {"5000"}}, &body); err != nil {
+	all, err := c.Services(ctx)
+	if err != nil {
 		return nil, err
 	}
-	var out []service
-	for _, s := range body.Entries {
+	var out []Service
+	for _, s := range all {
 		if inNet[s.MultiplexUUID] {
 			out = append(out, s)
 		}
@@ -225,7 +281,7 @@ func (c *Client) MapServices(ctx context.Context) (int, error) {
 			return 0, err
 		}
 		for _, s := range svcs {
-			if !s.Encrypted && len(s.channels()) == 0 {
+			if !s.Encrypted && len(s.Channels()) == 0 {
 				todo = append(todo, s.UUID)
 			}
 		}
@@ -243,8 +299,37 @@ func (c *Client) MapServices(ctx context.Context) (int, error) {
 // Frontend is a tuner input on the server.
 type Frontend struct {
 	UUID  string
-	Class string
-	Name  string
+	Class string // "tvhdhomerun_frontend_atsc_t", "linuxdvb_frontend_atsc_t"
+	// Name is how Tvheadend names the input, also in its input status:
+	// "HDHomeRun ATSC-T Tuner #0 (169.254.1.2)".
+	Name string
+	// Model is the device's model as Tvheadend reports it
+	// ("hdhomerun_dvr_atsc"), when it does.
+	Model string
+}
+
+// treeNode is one entry of Tvheadend's hardware tree. Newer versions send
+// each node's class and parameters along; older ones only the text.
+type treeNode struct {
+	UUID   string   `json:"uuid"`
+	Text   string   `json:"text"`
+	Class  string   `json:"class"`
+	Leaf   flexBool `json:"leaf"`
+	Params []struct {
+		ID    string `json:"id"`
+		Value any    `json:"value"`
+	} `json:"params"`
+}
+
+func (n treeNode) param(id string) string {
+	for _, p := range n.Params {
+		if p.ID == id {
+			if s, ok := p.Value.(string); ok {
+				return s
+			}
+		}
+	}
+	return ""
 }
 
 // Frontends finds ATSC tuner frontends: USB or PCIe tuners
@@ -252,33 +337,33 @@ type Frontend struct {
 // and network HDHomeRuns (tvhdhomerun_frontend_atsc_t).
 func (c *Client) Frontends(ctx context.Context) ([]Frontend, error) {
 	var out []Frontend
-	var walk func(uuid string, depth int) error
-	walk = func(uuid string, depth int) error {
-		var nodes []struct {
-			UUID string   `json:"uuid"`
-			Text string   `json:"text"`
-			Leaf flexBool `json:"leaf"`
-		}
+	var walk func(uuid, model string, depth int) error
+	walk = func(uuid, model string, depth int) error {
+		var nodes []treeNode
 		if err := c.get(ctx, "/api/hardware/tree", url.Values{"uuid": {uuid}}, &nodes); err != nil {
 			return err
 		}
 		for _, n := range nodes {
-			class, err := c.class(ctx, n.UUID)
-			if err != nil {
-				return err
+			class := n.Class
+			if class == "" {
+				var err error
+				if class, err = c.class(ctx, n.UUID); err != nil {
+					return err
+				}
 			}
+			m := cmp.Or(n.param("deviceModel"), model)
 			if strings.Contains(class, "_frontend_atsc") {
-				out = append(out, Frontend{UUID: n.UUID, Class: class, Name: n.Text})
+				out = append(out, Frontend{UUID: n.UUID, Class: class, Name: cmp.Or(n.param("displayname"), n.Text), Model: m})
 			}
 			if !bool(n.Leaf) && depth < 3 {
-				if err := walk(n.UUID, depth+1); err != nil {
+				if err := walk(n.UUID, m, depth+1); err != nil {
 					return err
 				}
 			}
 		}
 		return nil
 	}
-	return out, walk("root", 0)
+	return out, walk("root", "", 0)
 }
 
 // flexBool is a JSON boolean that Tvheadend sometimes writes as 0 or 1

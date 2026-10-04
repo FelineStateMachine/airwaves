@@ -1,5 +1,5 @@
-// Package tuner provides video sources for live channels: Tvheadend (which
-// drives the HDHomeRun), and a demo signal generator for development.
+// Package tuner provides video sources for live channels: Tvheadend, which
+// drives the HDHomeRun, and the test patterns its demo channels play.
 package tuner
 
 import (
@@ -16,11 +16,16 @@ import (
 type Device struct {
 	ID      string `json:"id"`
 	Name    string `json:"name"`
-	Kind    string `json:"kind"` // "tvheadend" or "demo"
+	Kind    string `json:"kind"` // "tvheadend" or "none"
 	Model   string `json:"model,omitempty"`
 	BaseURL string `json:"baseUrl,omitempty"`
 	Tuners  int    `json:"tuners,omitempty"`
 	Detail  string `json:"detail,omitempty"`
+	// Standards lists the broadcast standards the tuners receive ("ATSC
+	// 1.0"); none without a tuner. ATSC3 is whether that includes ATSC 3.0
+	// (NextGen TV), which no tuner Tvheadend drives does.
+	Standards []string `json:"standards,omitempty"`
+	ATSC3     bool     `json:"atsc3"`
 }
 
 // AudioTrack is one audio stream of an input.
@@ -66,15 +71,6 @@ type Tuner interface {
 	Input(ctx context.Context, number string) (Input, error)
 }
 
-// Demo generates a distinct test pattern per channel, with an English and a
-// Spanish tone, so the whole TV experience works without hardware.
-type Demo struct{}
-
-// Device implements Tuner.
-func (Demo) Device() Device {
-	return Device{ID: "demo", Name: "Demo signal", Kind: "demo", Detail: "ffmpeg test patterns, no hardware needed"}
-}
-
 var patterns = []string{
 	"smptehdbars=s=1280x720:r=30",
 	"testsrc2=s=1280x720:r=30",
@@ -86,8 +82,10 @@ var patterns = []string{
 	"cellauto=s=640x360:r=30:rule=110:scroll=1,scale=1280:720:flags=neighbor",
 }
 
-// Input implements Tuner.
-func (Demo) Input(_ context.Context, number string) (Input, error) {
+// TestPattern is a channel's demo test pattern read straight from ffmpeg's
+// generators, with an English and a Spanish tone: for testing streaming
+// without Tvheadend. Nothing tunes it in place of a channel.
+func TestPattern(number string) Input {
 	video, eng, spa := demoSources(number)
 	return Input{
 		Args: []string{
@@ -97,7 +95,7 @@ func (Demo) Input(_ context.Context, number string) (Input, error) {
 		},
 		Video: "0:v:0",
 		Audio: []AudioTrack{{Map: "1:a:0", Lang: "eng"}, {Map: "2:a:0", Lang: "spa"}},
-	}, nil
+	}
 }
 
 // demoSources picks a stable pattern and two tones (main and second

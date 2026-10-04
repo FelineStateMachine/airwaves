@@ -1,6 +1,7 @@
 package service
 
 import (
+	"cmp"
 	"context"
 	"encoding/xml"
 	"fmt"
@@ -19,8 +20,8 @@ import (
 	"airwaves/internal/vchan"
 )
 
-// HDHR adapts the service to the emulated HDHomeRun: Tvheadend's channels
-// passed straight through, plus the custom channels.
+// HDHR adapts the service to the emulated HDHomeRun: the tuner's channels,
+// as the app has them, plus the custom channels.
 func (s *Service) HDHR() hdhr.Backend { return hdhrBackend{s} }
 
 // TunerCount is what the emulated HDHomeRun reports: the server's real
@@ -28,27 +29,26 @@ func (s *Service) HDHR() hdhr.Backend { return hdhrBackend{s} }
 func (s *Service) TunerCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return max(s.tuners, 2)
+	return max(len(s.fes), 2)
 }
 
 type hdhrBackend struct{ s *Service }
 
-// reportChannel finds the guide channel for a virtual number, preferring
-// one with listings.
-func (b hdhrBackend) reportChannel(number string) *lineup.Channel {
-	_, chans := b.s.guideAndChannels()
-	var found *lineup.Channel
-	for i := range chans {
-		if chans[i].Number == number {
-			if chans[i].GuideID != "" {
-				return &chans[i]
-			}
-			if found == nil {
-				found = &chans[i]
-			}
-		}
+// antenna is the tuner's channels described from the records, by number,
+// and the listings.
+func (b hdhrBackend) antenna(ctx context.Context) (map[string]lineup.TunerChannel, *guide.Guide, error) {
+	b.s.mu.Lock()
+	rep, g := b.s.report, b.s.guide
+	b.s.mu.Unlock()
+	chans, _, err := b.s.matched(ctx, rep, g)
+	if err != nil {
+		return nil, nil, err
 	}
-	return found
+	out := make(map[string]lineup.TunerChannel, len(chans))
+	for _, c := range chans {
+		out[c.Number] = c
+	}
+	return out, g, nil
 }
 
 // Lineup implements hdhr.Backend. Custom channels keep the group
@@ -62,21 +62,15 @@ func (b hdhrBackend) Lineup(ctx context.Context) ([]hdhr.Entry, error) {
 		custom[vchan.NumberKey(d.Number)] = true
 		out = append(out, hdhr.Entry{Number: d.Number, Name: d.Name, HD: true, Group: "Airwaves", Logo: logoPath(d)})
 	}
-	if b.s.tvhTuner != nil {
-		chans, err := b.s.tvhTuner.Channels(ctx)
-		if err != nil {
-			return nil, err
+	chans, _, err := b.antenna(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range chans {
+		if custom[vchan.NumberKey(c.Number)] {
+			continue
 		}
-		for _, c := range chans {
-			if !c.Enabled || c.Number == "0" || len(c.Services) == 0 || custom[vchan.NumberKey(c.Number)] {
-				continue
-			}
-			e := hdhr.Entry{Number: c.Number, Name: c.Name, HD: true, Group: "Antenna"}
-			if rc := b.reportChannel(c.Number); rc != nil {
-				e.Name, e.Logo = rc.CallSign, rc.Logo
-			}
-			out = append(out, e)
-		}
+		out = append(out, hdhr.Entry{Number: c.Number, Name: cmp.Or(c.CallSign, c.Name), HD: true, Group: "Antenna", Logo: c.Logo})
 	}
 	slices.SortStableFunc(out, func(a, b hdhr.Entry) int { return guide.CompareNumbers(a.Number, b.Number) })
 	return out, nil
@@ -159,7 +153,10 @@ func (b hdhrBackend) XMLTV(ctx context.Context, w io.Writer, abs func(path strin
 	if err != nil {
 		return err
 	}
-	g, _ := b.s.guideAndChannels()
+	antenna, g, err := b.antenna(ctx)
+	if err != nil {
+		return err
+	}
 	custom := map[string]vchan.Channel{}
 	for _, v := range b.s.customChannels() {
 		custom[v.Number()] = v
@@ -218,11 +215,11 @@ func (b hdhrBackend) XMLTV(ctx context.Context, w io.Writer, abs func(path strin
 			}
 			continue
 		}
-		rc := b.reportChannel(e.Number)
-		if rc == nil || g == nil {
+		ac, ok := antenna[e.Number]
+		if !ok || ac.GuideID == "" || g == nil {
 			continue
 		}
-		for _, p := range g.Programs[rc.GuideID] {
+		for _, p := range g.Programs[ac.GuideID] {
 			if p.End.Before(from) || p.Start.After(to) {
 				continue
 			}

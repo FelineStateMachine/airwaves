@@ -1,6 +1,7 @@
-// Package lineup combines transmitter data, terrain-based reception
-// estimates, ATSC 3.0 hosting and guide listings into one view of what is
-// on the air at a location.
+// Package lineup combines transmitter data, ATSC 3.0 hosting and guide
+// listings into one view of what is on the air at a location: with
+// terrain-based reception estimates for planning (otascan), or matched to
+// what a tuner actually receives (Match) for the app.
 package lineup
 
 import (
@@ -24,11 +25,13 @@ import (
 	"airwaves/internal/terrain"
 )
 
-// Station is a transmitter with its predicted reception.
+// Station is a transmitter, with its predicted reception when the report
+// was built with terrain.
 type Station struct {
 	fcc.Facility
 	Band string `json:"band"`
-	// Signal is the estimate for each antenna preset, keyed by preset name.
+	// Signal is the estimate for each antenna preset, keyed by preset name;
+	// empty without terrain.
 	Signal map[string]reception.Estimate `json:"signal"`
 	ATSC3  bool                          `json:"atsc3"`
 	// Carries lists the virtual channels this transmitter is matched to.
@@ -80,7 +83,7 @@ type Report struct {
 	Place     geo.Place          `json:"place"`
 	Point     geo.Point          `json:"point"`
 	RadiusKm  float64            `json:"radiusKm"`
-	Presets   []reception.Preset `json:"presets"`
+	Presets   []reception.Preset `json:"presets,omitempty"` // with estimates only
 	Stations  []Station          `json:"stations"`
 	Channels  []Channel          `json:"channels"`
 	ATSC3     []atsc3.Host       `json:"atsc3"`
@@ -99,8 +102,11 @@ type Options struct {
 
 // Builder fetches and merges the data sources.
 type Builder struct {
-	HTTP     *http.Client
-	Cache    *store.Cache
+	HTTP  *http.Client
+	Cache *store.Cache
+	// Terrain, when set, has every transmitter's reception estimated from
+	// the terrain between it and the location. Without it the report is
+	// the records alone, and its stations are ordered by distance.
 	Terrain  *terrain.Source
 	Progress func(string)
 }
@@ -114,7 +120,15 @@ func (b *Builder) progress(format string, args ...any) {
 // Build produces a report and the guide it was built from. Failures of
 // optional sources (terrain, ATSC 3.0 list, listings) become warnings.
 func (b *Builder) Build(ctx context.Context, opt Options) (*Report, *guide.Guide, error) {
-	rep := &Report{Generated: time.Now(), RadiusKm: opt.RadiusKm, Presets: reception.Presets, Sources: sources}
+	rep := &Report{Generated: time.Now(), RadiusKm: opt.RadiusKm}
+	for _, src := range sources {
+		if b.Terrain != nil || src.Name != terrainSource {
+			rep.Sources = append(rep.Sources, src)
+		}
+	}
+	if b.Terrain != nil {
+		rep.Presets = reception.Presets
+	}
 
 	b.progress("Locating ZIP %s", opt.ZIP)
 	place, err := store.Load(ctx, b.Cache, "zip-"+opt.ZIP, 365*24*time.Hour, false, func(ctx context.Context) (geo.Place, error) {
@@ -163,9 +177,11 @@ func (b *Builder) Build(ctx context.Context, opt Options) (*Report, *guide.Guide
 	return rep, g, nil
 }
 
+const terrainSource = "AWS Terrain Tiles"
+
 var sources = []Source{
 	{"FCC TV Query", "https://www.fcc.gov/media/television/tv-query", "Licensed transmitters, power, height, location"},
-	{"AWS Terrain Tiles", "https://registry.opendata.aws/terrain-tiles/", "Terrain profiles for reception estimates"},
+	{terrainSource, "https://registry.opendata.aws/terrain-tiles/", "Terrain profiles for reception estimates"},
 	{"RabbitEars.Info", "https://www.rabbitears.info/market.php?request=atsc3", "ATSC 3.0 (NextGen TV) hosting"},
 	{"Gracenote TV Listings", "https://tvlistings.gracenote.com/", "Over-the-air lineup and program guide"},
 	{"Zippopotam.us", "https://zippopotam.us/", "Location lookup"},
@@ -176,8 +192,17 @@ func coordKey(p geo.Point) string {
 }
 
 // predict fetches a terrain profile per tower site and evaluates every
-// facility against each antenna preset.
+// facility against each antenna preset. Without terrain it lists the
+// facilities, nearest first.
 func (b *Builder) predict(ctx context.Context, rep *Report, facilities []fcc.Facility) []Station {
+	if b.Terrain == nil {
+		stations := make([]Station, 0, len(facilities))
+		for _, f := range facilities {
+			stations = append(stations, Station{Facility: f, Band: fcc.Band(f.RFChannel), Signal: map[string]reception.Estimate{}})
+		}
+		slices.SortStableFunc(stations, func(a, b Station) int { return cmp.Compare(a.DistanceKm, b.DistanceKm) })
+		return stations
+	}
 	b.progress("Sampling terrain to %d transmitters", len(facilities))
 	var mu sync.Mutex
 	profiles := make(map[geo.Point]terrain.Profile)

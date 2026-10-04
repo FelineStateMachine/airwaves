@@ -14,7 +14,6 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"airwaves/internal/dvr"
@@ -30,8 +29,10 @@ type Backend interface {
 	Config(ctx context.Context) (service.Config, error)
 	SetConfig(ctx context.Context, c service.Config) (service.Config, error)
 	Snapshot(ctx context.Context, refresh bool) (*service.Snapshot, error)
-	Profile(ctx context.Context, facilityID, rf int, zip string) (*service.PathProfile, error)
-	Preview(ctx context.Context, zip string) (*service.Snapshot, error)
+	// Signal is what the tuners measured, by RF channel and by channel.
+	Signal(ctx context.Context) (*service.SignalReport, error)
+	// Measure starts measuring every RF channel on an idle tuner.
+	Measure(ctx context.Context) (*service.SweepStatus, error)
 	Weather(ctx context.Context) (*weather.Report, error)
 	Tune(ctx context.Context, client, number string) (*stream.Playback, error)
 	Stop(ctx context.Context, client string) error
@@ -50,6 +51,10 @@ var (
 	_ Backend = (*service.Service)(nil)
 	_ Backend = (*Client)(nil)
 )
+
+// ErrEstimates answers the calls for reception estimates the app used to
+// make.
+var ErrEstimates = errors.New("reception estimates moved to the otascan planning tool: the app shows what the tuner measures")
 
 // Server serves a Backend.
 type Server struct {
@@ -104,8 +109,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/config", func(w http.ResponseWriter, r *http.Request) {
 		reply(w)(b.Config(r.Context()))
 	})
-	// The antenna presets reception is estimated for, which the desktop
-	// app has built in, for the web app.
+	// The antenna presets of the reception estimates, which TV pages from
+	// before the measured lineup still ask for when they start.
 	mux.HandleFunc("GET /api/presets", func(w http.ResponseWriter, r *http.Request) {
 		reply(w)(reception.Presets, nil)
 	})
@@ -119,16 +124,22 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/snapshot", func(w http.ResponseWriter, r *http.Request) {
 		reply(w)(b.Snapshot(r.Context(), r.URL.Query().Get("refresh") == "1"))
 	})
+	mux.HandleFunc("GET /api/signal", func(w http.ResponseWriter, r *http.Request) {
+		reply(w)(b.Signal(r.Context()))
+	})
+	mux.HandleFunc("POST /api/signal/measure", func(w http.ResponseWriter, r *http.Request) {
+		reply(w)(b.Measure(r.Context()))
+	})
+	// Reception estimates (terrain profiles, ZIP code previews) are for
+	// planning an antenna, in otascan; the app shows what was measured.
 	mux.HandleFunc("GET /api/profile", func(w http.ResponseWriter, r *http.Request) {
-		fac, _ := strconv.Atoi(r.URL.Query().Get("facility"))
-		rf, _ := strconv.Atoi(r.URL.Query().Get("rf"))
-		reply(w)(b.Profile(r.Context(), fac, rf, r.URL.Query().Get("zip")))
+		writeErr(w, http.StatusGone, ErrEstimates)
 	})
 	mux.HandleFunc("GET /api/weather", func(w http.ResponseWriter, r *http.Request) {
 		reply(w)(b.Weather(r.Context()))
 	})
 	mux.HandleFunc("GET /api/preview", func(w http.ResponseWriter, r *http.Request) {
-		reply(w)(b.Preview(r.Context(), r.URL.Query().Get("zip")))
+		writeErr(w, http.StatusGone, ErrEstimates)
 	})
 	mux.HandleFunc("POST /api/tune", func(w http.ResponseWriter, r *http.Request) {
 		var req clientReq
@@ -285,11 +296,15 @@ func reply(w http.ResponseWriter) func(any, error) {
 }
 
 // errStatus is the HTTP status for a backend error: 501 for what this
-// server doesn't have (an antenna, recording, a location for the weather),
-// else 500.
+// server doesn't have (an antenna, a tuner, recording, a location for the
+// weather), 503 for a channel with no signal right now, else 500.
 func errStatus(err error) int {
-	if errors.Is(err, service.ErrNoAntenna) || errors.Is(err, service.ErrNoDVR) || errors.Is(err, service.ErrNoLocation) {
+	var noSignal *service.NoSignalError
+	switch {
+	case errors.Is(err, service.ErrNoAntenna), errors.Is(err, service.ErrNoTuner), errors.Is(err, service.ErrNoDVR), errors.Is(err, service.ErrNoLocation):
 		return http.StatusNotImplemented
+	case errors.As(err, &noSignal):
+		return http.StatusServiceUnavailable
 	}
 	return http.StatusInternalServerError
 }

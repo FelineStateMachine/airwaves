@@ -16,8 +16,6 @@ import (
 
 	"airwaves/internal/hdhr"
 	"airwaves/internal/jellyfin/jellyfintest"
-	"airwaves/internal/lineup"
-	"airwaves/internal/reception"
 	"airwaves/internal/vchan"
 )
 
@@ -97,20 +95,6 @@ func TestSnapshotCustomChannels(t *testing.T) {
 	raw, _ = json.Marshal(&Snapshot{Custom: s.custom()})
 	if !strings.Contains(string(raw), `"custom":[]`) {
 		t.Errorf("none on: %s", raw)
-	}
-}
-
-func TestAntennaChannels(t *testing.T) {
-	s, _ := newCustomService(t)
-	s.report = &lineup.Report{Channels: []lineup.Channel{
-		{Number: "7.1", CallSign: "KMGH", Tier: map[string]reception.Tier{"rooftop": reception.Strong}},
-		{Number: "7.1", CallSign: "KMGH-LD", Tier: map[string]reception.Tier{"rooftop": reception.Strong}},
-		{Number: "1.4", CallSign: "KTOON", Tier: map[string]reception.Tier{"rooftop": reception.Good}},
-		{Number: "50.1", CallSign: "KFAR", Tier: map[string]reception.Tier{"rooftop": reception.Unlikely}},
-	}}
-	got := s.AntennaChannels(t.Context())
-	if len(got) != 2 || got["7.1"] != "KMGH" || got["1.4"] != "KTOON" {
-		t.Errorf("antenna = %v", got)
 	}
 }
 

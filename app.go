@@ -189,24 +189,31 @@ func (a *App) Scan(refresh bool) (*service.Snapshot, error) {
 	return c.Snapshot(a.ctx, refresh)
 }
 
-// Profile returns the terrain between the viewer (or a previewed ZIP) and
-// a facility.
-func (a *App) Profile(facilityID, rf int, zip string) (*service.PathProfile, error) {
+// Signal returns what the server's tuners measured, by RF channel and by
+// channel, and how Measure now is going.
+func (a *App) Signal() (*service.SignalReport, error) {
 	c, _, err := a.server()
 	if err != nil {
 		return nil, err
 	}
-	return c.Profile(a.ctx, facilityID, rf, zip)
+	return c.Signal(a.ctx)
 }
 
-// Preview returns a reception report for another ZIP code.
-func (a *App) Preview(zip string) (*service.Snapshot, error) {
+// Measure starts measuring every RF channel on an idle tuner.
+func (a *App) Measure() (*service.SweepStatus, error) {
 	c, _, err := a.server()
 	if err != nil {
 		return nil, err
 	}
-	return c.Preview(a.ctx, zip)
+	return c.Measure(a.ctx)
 }
+
+// Profile and Preview answered with reception estimates, which the app
+// no longer shows; they stay until its interface stops calling them.
+func (a *App) Profile(int, int, string) (any, error) { return nil, api.ErrEstimates }
+
+// Preview: see Profile.
+func (a *App) Preview(string) (any, error) { return nil, api.ErrEstimates }
 
 // Weather returns the local weather report from the server.
 func (a *App) Weather() (*weather.Report, error) {

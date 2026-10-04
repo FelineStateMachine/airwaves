@@ -11,10 +11,10 @@ import (
 	"testing"
 
 	"airwaves/internal/dvr"
-	"airwaves/internal/geo"
 	"airwaves/internal/guide"
 	"airwaves/internal/lineup"
 	"airwaves/internal/service"
+	"airwaves/internal/signal"
 	"airwaves/internal/stream"
 	"airwaves/internal/weather"
 )
@@ -23,6 +23,7 @@ import (
 type fake struct {
 	tuned, stopped, deleted, progress string
 	cfg                               service.Config
+	measured                          int
 }
 
 func (f *fake) Info(context.Context) (service.Info, error) {
@@ -41,16 +42,24 @@ func (f *fake) Snapshot(context.Context, bool) (*service.Snapshot, error) {
 	}}, nil
 }
 
-func (f *fake) Profile(context.Context, int, int, string) (*service.PathProfile, error) {
-	return nil, errors.New("facility 1 not found")
+func (f *fake) Signal(context.Context) (*service.SignalReport, error) {
+	strength := 85.0
+	return &service.SignalReport{
+		Tuner:    service.TunerInfo{Ready: true, Tuners: 2, Standards: []string{"ATSC 1.0"}},
+		Channels: []service.ChannelSignal{{Number: "20.1", RF: 31, Signal: &signal.Reading{Lock: true, StrengthPct: &strength}}},
+	}, nil
+}
+
+func (f *fake) Measure(context.Context) (*service.SweepStatus, error) {
+	f.measured++
+	if f.measured > 1 {
+		return nil, errors.New("tuner unplugged")
+	}
+	return &service.SweepStatus{Running: true, Total: 12}, nil
 }
 
 func (f *fake) Weather(context.Context) (*weather.Report, error) {
 	return &weather.Report{Alerts: []weather.Alert{{Event: "Winter Storm Warning"}}}, nil
-}
-
-func (f *fake) Preview(_ context.Context, zip string) (*service.Snapshot, error) {
-	return &service.Snapshot{Report: &lineup.Report{Place: geo.Place{ZIP: zip}}}, nil
 }
 
 func (f *fake) Tune(_ context.Context, client, number string) (*stream.Playback, error) {
@@ -138,11 +147,58 @@ func TestClientServerRoundTrip(t *testing.T) {
 	if wx, err := c.Weather(ctx); err != nil || len(wx.Alerts) != 1 {
 		t.Errorf("weather: %+v, %v", wx, err)
 	}
-	if snap, err := c.Preview(ctx, "80302"); err != nil || snap.Report.Place.ZIP != "80302" {
-		t.Errorf("preview: %+v, %v", snap, err)
+	if sig, err := c.Signal(ctx); err != nil || !sig.Tuner.Ready || len(sig.Channels) != 1 || sig.Channels[0].RF != 31 ||
+		!sig.Channels[0].Signal.Lock || *sig.Channels[0].Signal.StrengthPct != 85 || sig.Channels[0].Signal.QualityPct != nil {
+		t.Errorf("signal: %+v, %v", sig, err)
 	}
-	if _, err := c.Profile(ctx, 1, 2, ""); err == nil || err.Error() != "facility 1 not found" {
+	if st, err := c.Measure(ctx); err != nil || !st.Running || st.Total != 12 {
+		t.Errorf("measure: %+v, %v", st, err)
+	}
+	if _, err := c.Measure(ctx); err == nil || err.Error() != "tuner unplugged" {
 		t.Errorf("backend error not passed through: %v", err)
+	}
+}
+
+// TestNoEstimates: the reception estimates the app used to ask for are
+// gone, with a reason old app versions show; the presets they still load
+// at start remain.
+func TestNoEstimates(t *testing.T) {
+	srv := httptest.NewServer((&Server{Backend: &fake{}}).Handler())
+	defer srv.Close()
+	for _, path := range []string{"/api/preview?zip=80302", "/api/profile?facility=1&rf=2"} {
+		resp, err := http.Get(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusGone || !strings.Contains(string(body), "otascan") {
+			t.Errorf("%s: %d %s", path, resp.StatusCode, body)
+		}
+	}
+	resp, err := http.Get(srv.URL + "/api/presets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("presets: %d", resp.StatusCode)
+	}
+}
+
+// TestErrorStatus: what a server lacks is 501, a channel with no signal
+// now 503.
+func TestErrorStatus(t *testing.T) {
+	for err, want := range map[error]int{
+		service.ErrNoAntenna:                          http.StatusNotImplemented,
+		fmt.Errorf("x: %w", service.ErrNoTuner):       http.StatusNotImplemented,
+		&service.NoSignalError{Channel: "20.1"}:       http.StatusServiceUnavailable,
+		fmt.Errorf("x: %w", &service.NoSignalError{}): http.StatusServiceUnavailable,
+		errors.New("ffmpeg exited"):                   http.StatusInternalServerError,
+	} {
+		if got := errStatus(err); got != want {
+			t.Errorf("%v: %d, want %d", err, got, want)
+		}
 	}
 }
 

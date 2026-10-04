@@ -22,7 +22,7 @@ func TestDemoStream(t *testing.T) {
 	}
 	defer s.Close()
 
-	in, _ := tuner.Demo{}.Input(context.Background(), "9.1")
+	in := tuner.TestPattern("9.1")
 	pb, err := s.Start(context.Background(), "test", in)
 	if err != nil {
 		t.Fatal(err)

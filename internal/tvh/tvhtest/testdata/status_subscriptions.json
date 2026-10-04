@@ -1,0 +1,63 @@
+{
+ "entries": [
+  {
+   "id": 557,
+   "start": 1791131529,
+   "errors": 0,
+   "state": "Running",
+   "title": "epggrab",
+   "service": "HDHomeRun ATSC-T Tuner #1 (169.254.1.2)/Airwaves antenna/587MHz/Raw PID Subscription",
+   "pids": [
+    0,
+    1,
+    7424,
+    7425,
+    7426,
+    7427,
+    7428,
+    7429,
+    7430,
+    7431,
+    7680,
+    7681,
+    7682,
+    7683,
+    7684,
+    7685,
+    7686,
+    7687,
+    8187
+   ],
+   "in": 117689,
+   "out": 69749,
+   "total_in": 3713646,
+   "total_out": 2119594
+  },
+  {
+   "id": 555,
+   "start": 1791131265,
+   "errors": 0,
+   "state": "Running",
+   "title": "epggrab",
+   "service": "HDHomeRun ATSC-T Tuner #0 (169.254.1.2)/Airwaves antenna/605MHz/Raw PID Subscription",
+   "pids": [
+    0,
+    1,
+    7424,
+    7425,
+    7426,
+    7427,
+    7680,
+    7681,
+    7682,
+    7683,
+    8187
+   ],
+   "in": 15430,
+   "out": 6594,
+   "total_in": 4486148,
+   "total_out": 1909044
+  }
+ ],
+ "totalCount": 2
+}

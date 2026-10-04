@@ -50,7 +50,7 @@ func TestNoAntenna(t *testing.T) {
 		t.Errorf("report point %+v, guide %v", snap.Report.Point, snap.Guide)
 	}
 	raw, _ := json.Marshal(snap)
-	for _, want := range []string{`"stations":[]`, `"channels":[]`, `"sources":[]`, `"warnings":[]`, `"kind":"weather"`} {
+	for _, want := range []string{`"stations":[]`, `"channels":[]`, `"sources":[]`, `"warnings":[]`, `"kind":"weather"`, `"antenna":{"tuner":{"ready":false`} {
 		if !strings.Contains(string(raw), want) {
 			t.Errorf("snapshot JSON lacks %s: %s", want, raw)
 		}
@@ -61,11 +61,14 @@ func TestNoAntenna(t *testing.T) {
 			t.Errorf("tune an antenna channel: %v", err)
 		}
 	}
-	if _, err := s.Preview(ctx, "80302"); !errors.Is(err, ErrNoAntenna) {
-		t.Errorf("preview: %v", err)
+	if _, err := s.Signal(ctx); !errors.Is(err, ErrNoAntenna) {
+		t.Errorf("signal: %v", err)
 	}
-	if _, err := s.Profile(ctx, 1, 2, ""); !errors.Is(err, ErrNoAntenna) {
-		t.Errorf("profile: %v", err)
+	if _, err := s.Measure(ctx); !errors.Is(err, ErrNoAntenna) {
+		t.Errorf("measure: %v", err)
+	}
+	if snap.Antenna == nil || len(snap.Antenna.Channels) != 0 || snap.Antenna.Tuner.Ready || snap.Antenna.Tuner.Reason != ErrNoAntenna.Error() {
+		t.Errorf("antenna = %+v", snap.Antenna)
 	}
 	if st, err := s.DVR(ctx); err != nil || st.Available || st.Reason != ErrNoAntenna.Error() {
 		t.Errorf("dvr = %+v, %v", st, err)

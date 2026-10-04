@@ -94,7 +94,7 @@ func TestHealthNeedsNoToken(t *testing.T) {
 // noAntenna is a server with custom channels only.
 type noAntenna struct{ fake }
 
-func (noAntenna) Preview(context.Context, string) (*service.Snapshot, error) {
+func (noAntenna) Signal(context.Context) (*service.SignalReport, error) {
 	return nil, service.ErrNoAntenna
 }
 
@@ -103,7 +103,7 @@ func (noAntenna) Preview(context.Context, string) (*service.Snapshot, error) {
 func TestNotAvailable(t *testing.T) {
 	srv := httptest.NewServer((&Server{Backend: &noAntenna{}}).Handler())
 	defer srv.Close()
-	resp, err := http.Get(srv.URL + "/api/preview?zip=80302")
+	resp, err := http.Get(srv.URL + "/api/signal")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func TestNotAvailable(t *testing.T) {
 	if resp.StatusCode != http.StatusNotImplemented {
 		t.Errorf("status %d", resp.StatusCode)
 	}
-	if _, err := NewClient(srv.URL, "").Preview(t.Context(), "80302"); err == nil || err.Error() != service.ErrNoAntenna.Error() {
+	if _, err := NewClient(srv.URL, "").Signal(t.Context()); err == nil || err.Error() != service.ErrNoAntenna.Error() {
 		t.Errorf("client error: %v", err)
 	}
 	if errStatus(errors.New("boom")) != http.StatusInternalServerError {

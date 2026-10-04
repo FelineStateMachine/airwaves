@@ -72,23 +72,22 @@ func (c *Client) Snapshot(ctx context.Context, refresh bool) (*service.Snapshot,
 	return &s, c.call(ctx, http.MethodGet, p, nil, &s)
 }
 
-// Profile implements Backend.
-func (c *Client) Profile(ctx context.Context, facilityID, rf int, zip string) (*service.PathProfile, error) {
-	var p service.PathProfile
-	path := fmt.Sprintf("/api/profile?facility=%d&rf=%d&zip=%s", facilityID, rf, url.QueryEscape(zip))
-	return &p, c.call(ctx, http.MethodGet, path, nil, &p)
+// Signal implements Backend.
+func (c *Client) Signal(ctx context.Context) (*service.SignalReport, error) {
+	var r service.SignalReport
+	return &r, c.call(ctx, http.MethodGet, "/api/signal", nil, &r)
+}
+
+// Measure implements Backend.
+func (c *Client) Measure(ctx context.Context) (*service.SweepStatus, error) {
+	var st service.SweepStatus
+	return &st, c.call(ctx, http.MethodPost, "/api/signal/measure", nil, &st)
 }
 
 // Weather implements Backend.
 func (c *Client) Weather(ctx context.Context) (*weather.Report, error) {
 	var r weather.Report
 	return &r, c.call(ctx, http.MethodGet, "/api/weather", nil, &r)
-}
-
-// Preview implements Backend.
-func (c *Client) Preview(ctx context.Context, zip string) (*service.Snapshot, error) {
-	var s service.Snapshot
-	return &s, c.call(ctx, http.MethodGet, "/api/preview?zip="+url.QueryEscape(zip), nil, &s)
 }
 
 // Tune implements Backend.

@@ -58,7 +58,7 @@ func run() error {
 	lon := flag.Float64("lon", envFloat("AIRWAVES_LON"), "antenna longitude")
 	name := flag.String("name", env("AIRWAVES_NAME", host), "server name shown in the app")
 	token := flag.String("token", env("AIRWAVES_TOKEN", ""), "optional bearer token for the API")
-	demo := flag.Bool("demo", env("AIRWAVES_DEMO", "true") == "true", "give Tvheadend generated channels until a tuner is attached")
+	demo := flag.Bool("demo", env("AIRWAVES_DEMO", "false") == "true", "for development: give Tvheadend generated test-pattern channels until a tuner is attached (never once one has been)")
 	demoFFmpeg := flag.String("demo-ffmpeg", env("AIRWAVES_DEMO_FFMPEG", "/usr/bin/ffmpeg"), "ffmpeg path inside the Tvheadend container")
 	weatherStar := flag.Int("weatherstar-port", int(envFloat("AIRWAVES_WEATHERSTAR_PORT")), "host port of a WeatherStar 4000+ container; 0 disables the WX channel")
 	weatherStarURL := flag.String("weatherstar-url", os.Getenv("AIRWAVES_WEATHERSTAR_URL"), "where airwavesd reaches the WeatherStar display, when not at 127.0.0.1 on -weatherstar-port (http://weatherstar:8080 for a container of its own)")
@@ -115,6 +115,7 @@ func run() error {
 		ConfigPath:      filepath.Join(*data, "config.json"),
 		Config:          service.Config{ZIP: *zip, GuideHours: 48},
 		DVRPath:         filepath.Join(*data, "dvr.json"),
+		SignalPath:      filepath.Join(*data, "signal.json"),
 		Demo:            *demo,
 		DemoFFmpeg:      *demoFFmpeg,
 		NoAntenna:       !feat.antenna,
@@ -165,7 +166,10 @@ func run() error {
 	}()
 	log.Printf("airwavesd %s listening on %s", service.Version, *listen)
 	if feat.antenna {
-		log.Printf("antenna: on, Tvheadend %q", *tvhURL)
+		log.Printf("antenna: on, Tvheadend %q; signal measurements in %s", *tvhURL, opt.SignalPath)
+		if *demo {
+			log.Print("demo channels: on until a tuner is found (AIRWAVES_DEMO=true)")
+		}
 	} else {
 		log.Print("antenna: off, custom channels only")
 	}

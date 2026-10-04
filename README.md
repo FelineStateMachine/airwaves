@@ -71,14 +71,30 @@ each browser.
 **The tuner** is an HDHomeRun (for example a FLEX DUO) with the antenna on its coax
 input. Both containers use host networking so Tvheadend can find it by broadcast, on
 the LAN or on a spare Ethernet port with link-local addressing that the firewall trusts.
-Until a tuner is found, `airwavesd` gives Tvheadend generated test-pattern channels so
-live TV and recording can be exercised.
+For development without one, `AIRWAVES_DEMO=true` gives Tvheadend generated
+test-pattern channels until a tuner is found.
 
 When the HDHomeRun appears, `airwavesd` creates an "Airwaves antenna" network from the
 US ATSC channel list, attaches its tuners, and lets Tvheadend scan. Channels are mapped as
-they are found and the demo channels are removed once real ones exist. The scan takes a
-few minutes. This path has not run against real hardware yet: if channels show up under
-the wrong numbers, check them in Tvheadend's Configuration > Channel / EPG.
+they are found, and any demo channels are removed for good. The scan takes a few minutes;
+if channels show up under the wrong numbers, check them in Tvheadend's Configuration >
+Channel / EPG.
+
+**The lineup is the tuner's.** The app's antenna channels are exactly the channels
+Tvheadend's scan found; the FCC's records, the Gracenote listings and the ATSC 3.0 list
+only describe them (call sign, network, transmitter, listings), never add one. Without a
+tuner there are no antenna channels. A channel that won't lock right now stays listed,
+and tuning it says so: "No signal on RF 31 (KTVD 20.x) right now".
+
+**Signal is measured, never estimated.** `airwavesd` records, per RF channel, Tvheadend's
+scan result and readings of the tuner (strength and quality as the HDHomeRun reports them,
+in percent; SNR in dB, BER and uncorrected blocks from tuners that report them): every
+10 seconds while a tuner is in use, and on request (`POST /api/signal/measure`, Measure
+now), which briefly tunes each RF channel worth measuring on an idle tuner, at the lowest
+weight a viewer's can have, so any viewer or recording takes the tuner over and the
+sweep stops. Readings are kept in `<data>/signal.json` and served at `GET /api/signal`
+and in the snapshot's `antenna` section. Terrain-based estimates are for planning an
+antenna, in `otascan`, and aren't served to the app.
 
 Recording rules are Airwaves': one airing, or a series by Gracenote series ID on one
 channel, optionally new episodes only. Series rules skip episodes already recorded or
@@ -571,14 +587,15 @@ cmd/otascan               terminal report
 internal/service          the engine airwavesd runs
 internal/api              HTTP API, and a client with the same interface
 internal/dvr              recording rules and reconciliation with Tvheadend
-internal/tvh              Tvheadend API: channels, DVR entries, network setup
+internal/tvh              Tvheadend API: channels, DVR entries, network setup, input status; tvhtest fakes it
 internal/fcc              FCC TV Query client and parser
 internal/terrain          Terrarium elevation tiles and path profiles
 internal/reception        propagation model and antenna presets
 internal/atsc3            RabbitEars ATSC 3.0 list parser
 internal/guide            Gracenote lineup and listings
-internal/lineup           merges all of the above into a Report
-internal/tuner            Tvheadend input, demo source
+internal/lineup           merges all of the above into a Report, and describes the tuner's channels from it
+internal/signal           what the tuners measured per RF channel, kept across restarts
+internal/tuner            Tvheadend input, demo test patterns
 internal/stream           ffmpeg to HLS, one session per client
 internal/hdhr             emulated HDHomeRun: discovery, lineup, streams, XMLTV
 internal/vchan            custom channels: Airwaves Weather, folder, Jellyfin and YouTube channels
@@ -588,8 +605,9 @@ deploy/standalone         Docker Compose for custom channels only, built from so
 frontend/dist             the UI: plain HTML, CSS and JS, no build step; also served at /tv/
 ```
 
-`go test ./...` covers the parsers, the propagation model, recording rules against a
-fake Tvheadend, the API client and server, the emulated HDHomeRun's discovery and HTTP
+`go test ./...` covers the parsers, the propagation model, recording rules, the tuner
+lineup, signal measuring and demo cleanup against a fake Tvheadend (answering with a real
+one's JSON), the API client and server, the emulated HDHomeRun's discovery and HTTP
 API, and an end-to-end ffmpeg HLS stream.
 
 ## License
