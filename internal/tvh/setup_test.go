@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -36,5 +37,30 @@ func TestFrontendsHDHomeRun(t *testing.T) {
 	}
 	if len(fes) != 2 || fes[0].UUID != "tuner0" || fes[1].Class != "tvhdhomerun_frontend_atsc_t" {
 		t.Fatalf("frontends: %+v", fes)
+	}
+}
+
+// TestChannelsNumbers reads the channel grid as Tvheadend writes it: a
+// packed integer for a channel numbered by hand, a string for a scanned
+// ATSC channel, and names padded with spaces.
+func TestChannelsNumbers(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"entries":[
+			{"uuid":"a","name":"Demo 7.1","number":7000001,"enabled":true},
+			{"uuid":"b","name":"Dabl   ","number":"4.3","enabled":true,"services":["s"]},
+			{"uuid":"c","name":"KTVD","number":"20","enabled":false},
+			{"uuid":"d","name":"Unnumbered","enabled":true}]}`))
+	}))
+	defer srv.Close()
+	chans, err := New(srv.URL, srv.Client()).Channels(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, c := range chans {
+		got = append(got, c.Number+" "+c.Name)
+	}
+	if want := []string{"7.1 Demo 7.1", "4.3 Dabl", "20 KTVD", "0 Unnumbered"}; strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("channels: %q, want %q", got, want)
 	}
 }

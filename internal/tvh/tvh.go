@@ -7,6 +7,7 @@ package tvh
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -57,11 +58,11 @@ type Channel struct {
 func (c *Client) Channels(ctx context.Context) ([]Channel, error) {
 	var body struct {
 		Entries []struct {
-			UUID     string   `json:"uuid"`
-			Name     string   `json:"name"`
-			Number   int64    `json:"number"`
-			Enabled  bool     `json:"enabled"`
-			Services []string `json:"services"`
+			UUID     string     `json:"uuid"`
+			Name     string     `json:"name"`
+			Number   gridNumber `json:"number"`
+			Enabled  bool       `json:"enabled"`
+			Services []string   `json:"services"`
 		} `json:"entries"`
 	}
 	if err := c.get(ctx, "/api/channel/grid", url.Values{"limit": {"5000"}}, &body); err != nil {
@@ -69,7 +70,7 @@ func (c *Client) Channels(ctx context.Context) ([]Channel, error) {
 	}
 	out := make([]Channel, 0, len(body.Entries))
 	for _, e := range body.Entries {
-		out = append(out, Channel{UUID: e.UUID, Name: e.Name, Number: FormatNumber(e.Number), Enabled: e.Enabled, Services: e.Services})
+		out = append(out, Channel{UUID: e.UUID, Name: strings.TrimSpace(e.Name), Number: cmp.Or(string(e.Number), "0"), Enabled: e.Enabled, Services: e.Services})
 	}
 	return out, nil
 }
@@ -98,6 +99,24 @@ func (c *Client) ServiceStreams(ctx context.Context, serviceUUID string) ([]Stre
 		}
 	}
 	return out, nil
+}
+
+// gridNumber is a channel number as the channel grid writes it: a packed
+// integer (7000001), or for a real ATSC channel a string ("7.1").
+type gridNumber string
+
+func (n *gridNumber) UnmarshalJSON(raw []byte) error {
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		*n = gridNumber(strings.TrimSpace(s))
+		return nil
+	}
+	var packed int64
+	if err := json.Unmarshal(raw, &packed); err != nil {
+		return fmt.Errorf("channel number %s: %w", raw, err)
+	}
+	*n = gridNumber(FormatNumber(packed))
+	return nil
 }
 
 // FormatNumber renders a packed channel number: 7000001 → "7.1", 27 → "27".
