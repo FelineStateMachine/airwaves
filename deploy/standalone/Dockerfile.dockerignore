@@ -1,6 +1,9 @@
-# The image build needs only the Go module and the server's packages.
+# The image build needs only the Go module, the server's packages and the
+# TV interface it serves.
 *
 !go.mod
 !go.sum
 !cmd
 !internal
+!frontend/embed.go
+!frontend/dist

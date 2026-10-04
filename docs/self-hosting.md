@@ -115,7 +115,8 @@ two; nothing runs while no one watches.
    this computer's address, such as `192.168.1.20` or `nas.local` (port 8089 is assumed;
    add `:<port>` if you changed `PORT`). With `AIRWAVES_TOKEN` set, enter it as the
    token. The guide then shows your channels. Without an antenna the app has no
-   Reception or Recordings view.
+   Reception or Recordings view. A browser works too, with nothing to install: open
+   `http://<this computer>:8089/tv/`, such as `http://192.168.1.20:8089/tv/`.
 
 ## Jellyfin, Emby, Channels DVR and VLC
 

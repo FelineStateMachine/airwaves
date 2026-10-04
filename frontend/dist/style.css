@@ -442,6 +442,8 @@ body:not(.booting) #boot { opacity: 0; visibility: hidden; }
   font: 400 15px var(--f-mono); color: var(--paper); outline: none; -webkit-user-select: text; user-select: text;
 }
 .boot-connect input:focus { border-color: var(--amber); }
+/* In a browser the address is the page's own (web.js). */
+.boot-connect input[readonly] { background: transparent; border-style: dashed; color: var(--muted); }
 
 #toast {
   position: fixed; z-index: 80; top: 48px; left: 50%; transform: translate(-50%, -10px); opacity: 0; pointer-events: none;

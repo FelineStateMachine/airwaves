@@ -23,6 +23,7 @@ import (
 	"syscall"
 	"time"
 
+	"airwaves/frontend"
 	"airwaves/internal/admin"
 	"airwaves/internal/api"
 	"airwaves/internal/hdhr"
@@ -147,7 +148,7 @@ func run() error {
 
 	apiServer := &api.Server{
 		Backend: svc, Streams: svc.StreamHandler(), Extra: svc.WeatherHandler(), Logos: svc.LogoHandler(),
-		Token: *token, AdminPassword: adminPassword,
+		Token: *token, AdminPassword: adminPassword, TV: frontend.Dist(),
 		// Where the folders are on the host, as the compose file mounts them.
 		Admin: adminPage(ctx, svc, filepath.Join(*data, "backups"), env("AIRWAVES_HOST_CHANNELS", *channels), env("AIRWAVES_HOST_MUSIC", *music)),
 	}
@@ -198,6 +199,7 @@ func run() error {
 		log.Print("admin page: /admin/, with no password: keep this server on a trusted network or set AIRWAVES_ADMIN_PASSWORD")
 	}
 	log.Printf("app API token: %s", onOrOff(*token != ""))
+	log.Print("TV app: /tv/, for browsers and the Android TV app")
 	if yt.Update {
 		log.Printf("yt-dlp: %s, kept up to date", yt.Path)
 	}

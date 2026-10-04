@@ -53,6 +53,13 @@ function setLite(on) {
 }
 setLite(/Linux/.test(navigator.userAgent) && !/Android/.test(navigator.userAgent));
 
+// The Android TV app is a WebView whose user agent ends in
+// AirwavesTV/<version>, showing this page from the server (web.js): a TV
+// with a remote, which has arrows, OK, Back and media keys but no letters
+// or pointer.
+const androidTV = /\bAirwavesTV\//.test(navigator.userAgent);
+document.body.classList.toggle('android-tv', androidTV);
+
 // ---------- state ----------
 const state = {
   boot: null,
@@ -333,7 +340,10 @@ function showConnect(err) {
   form.elements.server.value = state.settings.server || '';
   form.elements.token.value = state.settings.token || '';
   form.hidden = false;
-  form.elements.server.focus();
+  // In a browser the server is the page's own (web.js): only a token to give.
+  const fixed = !!(state.boot && state.boot.fixedServer);
+  form.elements.server.readOnly = fixed;
+  form.elements[fixed ? 'token' : 'server'].focus();
   form.onsubmit = async (e) => {
     e.preventDefault();
     const server = form.elements.server.value.trim();
@@ -480,6 +490,9 @@ async function tune(ch, { quiet = false } = {}) {
     setTimeout(() => stage.classList.remove('tuning'), 400);
     return renderBanner();
   }
+  // The server ends this screen's stream as it starts the next: the
+  // picture plays out what it has, without asking for more of it.
+  if (state.hls) state.hls.stopLoad();
   try {
     const pb = await api().Tune(ch.number);
     if (token !== state.tuneToken) return;
@@ -557,7 +570,11 @@ function attempt(how, src) {
       if (err && err.name === 'NotAllowedError') {
         video.muted = true;
         video.play().catch(() => {});
-        toast(`Started muted. Press ${keyHint('m', 'M')} for sound.`, 3500, true);
+        const m = keyHint('m', 'M');
+        if (m) return toast(`Started muted. Press ${m} for sound.`, 3500, true);
+        // A remote has no M: its next key, which lets sound play, turns it on.
+        document.addEventListener('keydown', () => { if (!state.userMuted) video.muted = false; }, { once: true, capture: true });
+        toast('Started muted. Press any key for sound.', 3500);
       }
     });
   });
@@ -732,13 +749,16 @@ function cancelEntry() {
 // Text fields keep their keys (but Esc).
 const TEXT_INPUT = 'input:not([type=checkbox]):not([type=radio]), textarea, select';
 
-// The media keys of a TV remote (over HDMI-CEC) or a keyboard, as the keys
-// the views handle: [key, shift].
+// The media keys of a TV remote (over HDMI-CEC, or an Android TV remote)
+// or a keyboard, as the keys the views handle: [key, shift]. Page Down is
+// channel up.
 const KEY_ALIASES = {
   MediaPlayPause: [' '], MediaPlay: [' '], MediaPause: [' '],
   MediaFastForward: ['ArrowRight'], MediaRewind: ['ArrowLeft'],
   MediaTrackNext: ['PageDown'], MediaTrackPrevious: ['PageUp'],
+  ChannelUp: ['PageDown'], ChannelDown: ['PageUp'],
   MediaRecord: ['r'], BrowserBack: ['Escape'], GoBack: ['Escape'],
+  Guide: ['g'], Info: ['i'], ClosedCaptionToggle: ['c'], MediaLast: ['l'], MediaAudioTrack: ['v'],
 };
 
 // pressKey does what a key does, for a controller button or a media key:
@@ -828,6 +848,39 @@ function wireKeys() {
     }
   });
 }
+
+// airwavesBack is the Android TV app's Back key: it does what Esc does and
+// tells whether that went back from anything. False (live TV with nothing
+// open, or still starting) lets the app close.
+window.airwavesBack = () => {
+  if (!state.settings || document.body.classList.contains('booting')) return false;
+  const el = document.activeElement;
+  const typing = !!(el && el.matches && el.matches(TEXT_INPUT));
+  const open = state.dock >= 0 || typing || !!state.entry || state.view !== 'tv'
+    || !!(state.recording && state.current) || $('#banner').classList.contains('show');
+  if (!open) return false;
+  pressKey('Escape');
+  return true;
+};
+
+// In the background (the Home key) the Android TV app's live TV stops, so
+// the server's tuner is free, and tunes again on return; a recording
+// pauses where it is.
+document.addEventListener('visibilitychange', () => {
+  if (!androidTV || !state.settings || document.body.classList.contains('booting')) return;
+  if (document.hidden && state.recording) {
+    video.pause();
+  } else if (document.hidden && state.current) {
+    state.away = true;
+    state.tuneToken++;
+    resetPlayer();
+    wxMusic.pause();
+    api().StopTV();
+  } else if (!document.hidden && state.away) {
+    state.away = false;
+    if (!state.recording) tune(state.current, { quiet: true });
+  }
+});
 
 // ---------- dock ----------
 // Without letter keys (a TV remote, a controller) the dock leads to every
@@ -1059,9 +1112,17 @@ function glyph(key, label) {
   return `<img class="glyph" src="vendor/kenney-prompts/${file}${/press|dpad_none/.test(file) ? '' : '_outline'}.svg" alt="${esc(label)}">`;
 }
 
+// The keys of the Android TV app's remote, as hints name them.
+const REMOTE_KEYS = { Enter: 'OK', Escape: 'Back', ' ': 'Play/Pause', Arrows: 'Arrows', UpDown: 'Up, Down', LeftRight: 'Left, Right' };
+
 // keyHint shows how to press key: its button after a controller was used,
-// else its label; null when the controller has no such button.
-const keyHint = (key, label) => (prompts.pad ? glyph(key, label) || null : esc(label));
+// else its label (on the Android TV app, the remote's); null when the
+// controller or the remote has no such button.
+const keyHint = (key, label) => {
+  if (prompts.pad) return glyph(key, label) || null;
+  if (androidTV) return REMOTE_KEYS[key] ? esc(REMOTE_KEYS[key]) : null;
+  return esc(label);
+};
 
 // hints joins [key, label, what] into a line of hints, leaving out what the
 // controller can't do.
@@ -1424,7 +1485,7 @@ function renderGuideDetail(ch, p) {
   f(g, 'desc').textContent = p ? p.description || '' : ch.description || '';
   const live = !p || (p._s <= now && now < p._e);
   const when = live ? `${keyHint('Enter', 'Enter')} to watch` : `Starts in ${humanMinutes(Math.round((p._s - now) / MIN))}`;
-  f(g, 'hint').innerHTML = state.info.dvr && p && p._e > now && !ch.weather && !ch.custom && !prompts.pad ? `${when}  |  R record, Shift R series, N new only` : when;
+  f(g, 'hint').innerHTML = state.info.dvr && p && p._e > now && !ch.weather && !ch.custom && !prompts.pad && !androidTV ? `${when}  |  R record, Shift R series, N new only` : when;
   renderGuideActions(ch, p);
   const art = f(g, 'art');
   if (p && p.image) { art.style.backgroundImage = `url('${p.image}')`; art.classList.add('has'); } else { art.style.backgroundImage = ''; art.classList.remove('has'); }
@@ -1889,8 +1950,11 @@ function settingsRows() {
   add('Channels', { id: 'hidden', kind: 'open', label: 'Hidden channels', sub: 'In the guide, H hides a channel', value: hidden ? `${hidden} hidden` : 'None', open: 'hidden' });
   add('Channels', { id: 'hideshop', kind: 'action', verb: 'hides them', label: 'Hide shopping channels', sub: 'QVC, HSN, Jewelry TV and the like', value: 'Hide', run: hideShopping });
 
-  add('Server', { id: 'server', kind: 'text', label: 'Address', sub: 'Type it with a keyboard', name: 'server', text: s.server || '', placeholder: 'nas.local' });
-  add('Server', { id: 'token', kind: 'text', label: 'Token', sub: 'If the server needs one. Type it with a keyboard', name: 'token', text: s.token || '', password: true });
+  // In a browser the server is the one the page came from (web.js).
+  const typeIt = androidTV ? 'OK brings up the keyboard' : 'Type it with a keyboard';
+  if (state.boot && state.boot.fixedServer) add('Server', { id: 'server', kind: 'info', label: 'Address', sub: 'Where this page comes from', value: s.server || '' });
+  else add('Server', { id: 'server', kind: 'text', label: 'Address', sub: typeIt, name: 'server', text: s.server || '', placeholder: 'nas.local' });
+  add('Server', { id: 'token', kind: 'text', label: 'Token', sub: `If the server needs one. ${typeIt}`, name: 'token', text: s.token || '', password: true });
   add('Server', {
     id: 'test', kind: 'action', verb: 'tests it', label: 'Test connection',
     value: settingsUI.tested || (info.name ? `Connected to ${info.name}` : 'Test'), run: testServer,
@@ -1956,7 +2020,9 @@ function renderSettings() {
     html += settingsRowHTML(r, i);
   });
   if (section) html += '</div>';
-  if (settingsUI.sub === 'controls') {
+  if (settingsUI.sub === 'controls' && androidTV) {
+    html += '<p class="s-note">On the remote: OK opens the guide, Back goes back, and digits tune a channel. Channel up and down change channel, Play/Pause pauses, Fast forward and Rewind skip.</p>';
+  } else if (settingsUI.sub === 'controls') {
     html += '<p class="s-note">Digits tune a channel. The remote\'s Fast forward and Rewind skip, Record records. Keyboard only: L last channel, C captions, V audio track, F favorite, R record, D recordings, A reception, Shift F full screen. In Steam, give Airwaves the Gamepad controller layout, not a keyboard one.</p>';
   }
   const keep = list.scrollTop;
@@ -2003,7 +2069,7 @@ function renderSettingsHint() {
   if (r && r.kind === 'switch') items.push(['Enter', 'Enter', 'switches']);
   if (r && r.kind === 'open') items.push(['Enter', 'Enter', 'opens']);
   if (r && r.kind === 'action') items.push(['Enter', 'Enter', r.verb || 'runs']);
-  if (r && r.kind === 'text') items.push(['Enter', 'Enter', 'types in it, with a keyboard']);
+  if (r && r.kind === 'text') items.push(['Enter', 'Enter', androidTV ? 'types in it' : 'types in it, with a keyboard']);
   items.push(['Escape', 'Esc', settingsUI.sub ? 'back' : 'leaves Settings']);
   f($('#settings'), 'hint').innerHTML = hints(items);
 }
@@ -2233,12 +2299,15 @@ async function saveServer(name, value) {
 // sets it at launch, SetZoom after); elsewhere CSS zoom on the root scales
 // everything together, and style.css undoes it for viewport units. Auto
 // is 125% under gamescope, where the window is 1080p on a TV, else 100%.
+// On the Android TV app sizes are a 1080p screen's, whatever the WebView's
+// (fit, from web.js).
 const SCALES = [0, 100, 115, 130, 150]; // 0 is Auto
 const autoScale = () => (state.boot && state.boot.autoScale) || 100;
 let pageZoom = 0;
 
 function applyScale() {
-  const z = ((state.settings && state.settings.scale) || autoScale()) / 100;
+  const fit = (state.boot && state.boot.fit) || 1;
+  const z = (((state.settings && state.settings.scale) || autoScale()) / 100) * fit;
   const root = document.documentElement;
   const native = !!(state.boot && state.boot.nativeZoom);
   if (native && z !== pageZoom) {
@@ -2494,6 +2563,7 @@ async function playRecording(it, from = 0) {
   stage.classList.add('tuning');
   $('#nosignal').hidden = true;
   showBanner();
+  if (state.hls) state.hls.stopLoad();
   try {
     const pb = await api().PlayRecording(it.id, from);
     if (token !== state.tuneToken) return;

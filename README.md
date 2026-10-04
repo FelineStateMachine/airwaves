@@ -61,6 +61,13 @@ configuration only; the app never shows or edits it.
 In the app, open Settings and set **Airwaves server** to the server's name, `nas`
 in these examples.
 
+**The TV in a browser**: `airwavesd` also serves the app itself at `/tv/`, for example
+`http://nas:8089/tv/`, to any browser on the tailnet and to the Android TV app, which
+shows that page. It is the same interface over the same API (`frontend/dist/web.js`
+stands in for the desktop app's Go side), so `AIRWAVES_TOKEN` still applies: the page
+asks for the token. Favorites, hidden channels and the other app settings are kept in
+each browser.
+
 **The tuner** is an HDHomeRun (for example a FLEX DUO) with the antenna on its coax
 input. Both containers use host networking so Tvheadend can find it by broadcast, on
 the LAN or on a spare Ethernet port with link-local addressing that the firewall trusts.
@@ -578,7 +585,7 @@ internal/vchan            custom channels: Airwaves Weather, folder, Jellyfin an
 internal/jellyfin         Jellyfin client: sign-in, Quick Connect, browsing, stream URLs
 deploy/, scripts/         Docker files for the server and the deploy script
 deploy/standalone         Docker Compose for custom channels only, built from source (docs/self-hosting.md)
-frontend/dist             the UI: plain HTML, CSS and JS, no build step
+frontend/dist             the UI: plain HTML, CSS and JS, no build step; also served at /tv/
 ```
 
 `go test ./...` covers the parsers, the propagation model, recording rules against a

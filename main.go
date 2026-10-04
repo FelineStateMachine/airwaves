@@ -3,7 +3,6 @@
 package main
 
 import (
-	"embed"
 	"log"
 	"os"
 	"strconv"
@@ -14,12 +13,11 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/linux"
 	"github.com/wailsapp/wails/v2/pkg/options/mac"
+
+	"airwaves/frontend"
 )
 
 const version = "0.1.0"
-
-//go:embed all:frontend/dist
-var assets embed.FS
 
 func main() {
 	app := NewApp()
@@ -34,7 +32,7 @@ func main() {
 		// Filling the screen, or 16:9 under gamescope (see window).
 		WindowStartState: state,
 		BackgroundColour: &options.RGBA{R: 7, G: 8, B: 10, A: 255},
-		AssetServer:      &assetserver.Options{Assets: assets},
+		AssetServer:      &assetserver.Options{Assets: frontend.Dist()},
 		OnStartup:        app.startup,
 		OnShutdown:       app.shutdown,
 		Bind:             []any{app},

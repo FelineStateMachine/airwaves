@@ -11,12 +11,14 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"airwaves/internal/dvr"
+	"airwaves/internal/reception"
 	"airwaves/internal/service"
 	"airwaves/internal/stream"
 	"airwaves/internal/weather"
@@ -72,6 +74,10 @@ type Server struct {
 	// and the MCP endpoint at /admin/mcp): as HTTP Basic auth with any user
 	// name, or as "Authorization: Bearer <password>" from MCP clients.
 	AdminPassword string
+	// TV is the TV interface (frontend/dist), served at /tv/ for browsers
+	// and the Android TV app. The page needs no token; the API it calls
+	// does.
+	TV fs.FS
 }
 
 type clientReq struct {
@@ -97,6 +103,11 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("GET /api/config", func(w http.ResponseWriter, r *http.Request) {
 		reply(w)(b.Config(r.Context()))
+	})
+	// The antenna presets reception is estimated for, which the desktop
+	// app has built in, for the web app.
+	mux.HandleFunc("GET /api/presets", func(w http.ResponseWriter, r *http.Request) {
+		reply(w)(reception.Presets, nil)
 	})
 	mux.HandleFunc("PUT /api/config", func(w http.ResponseWriter, r *http.Request) {
 		var c service.Config
@@ -200,6 +211,10 @@ func (s *Server) Handler() http.Handler {
 		}
 		mux.Handle("/admin/", admin)
 		mux.Handle("GET /admin", http.RedirectHandler("/admin/", http.StatusFound))
+	}
+	if s.TV != nil {
+		mux.Handle("GET /tv/", http.StripPrefix("/tv", tvFiles(s.TV)))
+		mux.Handle("GET /tv", http.RedirectHandler("/tv/", http.StatusFound))
 	}
 	// For container health checks: up, without the token.
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
