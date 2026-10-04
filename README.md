@@ -125,11 +125,12 @@ had.
 
 | Key | TV |
 | --- | --- |
+| Enter (a remote's OK) | On-screen controls: the banner, a timeline, and buttons for the guide (first, so Enter twice opens it), pause, skip, live, captions, audio, record, favorite and last channel, with the views above. Arrows move, Enter presses, Esc puts them away; they stay up while paused |
 | Up / Down, PgUp / PgDn | Channel up / down |
 | Digits then Enter | Tune a channel, e.g. `7` `.` `2` |
 | L or Backspace | Previous channel |
 | Space | Pause and resume (live TV keeps a 30 minute rewind window) |
-| Left / Right | Back 10 s / forward 30 s (Shift: 60 s) |
+| Left / Right | Back 10 s / forward 30 s (Shift: 60 s), with the controls up on the timeline |
 | End | Jump back to live |
 | R / Shift R / N | Record this show / every episode / new episodes |
 | C | Closed captions on or off |
@@ -140,12 +141,17 @@ had.
 
 | Key | Elsewhere |
 | --- | --- |
-| G | Guide: arrows move, Enter watches, `[` `]` filters (Favorites, Sports...), Home jumps to now, R / Shift R / N record, f favorite, H hide (U undoes) |
-| D | Recordings: `[` `]` Library, Coming up, Series. Enter resumes, Shift Enter starts over, W marks watched, Delete twice removes; on a series K sets how many to keep, N new episodes only |
-| A | Reception: arrows pick a transmitter, `1` `2` `3` antenna. Preview any ZIP code in the left rail and copy a shareable summary |
-| W | Weather: current conditions, alerts, the next 24 hours, 7-day, radar loop and satellite |
+| G | Guide: arrows move, Up from the top row to the filters (Favorites, Sports...; also `[` `]`). Enter watches what's on, or shows a program to come's actions; hold Enter, or I, for any program's: watch, record, series, new episodes only, favorite, hide. Home jumps to now, R / Shift R / N record, f favorite, H hide (U undoes) |
+| D | Recordings: Left (or `[` `]`) for Library, Coming up, Series. Enter shows a recording's actions: resume, from the start, watched, delete (press twice); Shift Enter starts over, W marks watched, Delete twice removes; on a series K sets how many to keep, N new episodes only |
+| A | Reception: arrows pick a transmitter; Left for the antenna presets (or `1` `2` `3`) and to preview any ZIP code, then copy a shareable summary |
+| W | Weather: current conditions, alerts, the next 24 hours, 7-day, radar loop and satellite; Up and Down move through them, Left to watch the weather channel |
 | `,` or S | Settings: server, antenna, guide hours, deleting watched recordings, hidden channels |
 | Esc | Back to TV; from a recording, back to live |
+
+With only a remote's arrows, OK and Back (an Android TV remote), every view is
+reached from the views above it: Up from a view's top, or Left from its left
+edge, and on TV, Up through the on-screen controls. Whatever the arrows are on has
+an amber ring.
 
 ## Data sources
 

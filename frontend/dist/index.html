@@ -28,6 +28,8 @@
 
   <div id="entry" aria-live="assertive"></div>
 
+  <!-- The channel banner, and with OK the on-screen controls: a timeline
+       and a row of buttons below it (app.js, on-screen controls). -->
   <div id="banner" aria-live="polite">
     <div class="bn-chan">
       <div class="bn-num" data-f="num"></div>
@@ -50,6 +52,12 @@
       <div class="bn-tx" data-f="tx"></div>
       <div class="bn-atsc3" data-f="atsc3"></div>
     </div>
+    <div class="tl fx" data-f="timeline" tabindex="-1" role="slider" aria-label="Timeline" hidden>
+      <span class="tl-t" data-f="tl-lo"></span>
+      <div class="tl-bar"><i class="tl-past"></i><i class="tl-buf"></i><i class="tl-edge"></i><i class="tl-head"><b data-f="tl-at"></b></i></div>
+      <span class="tl-t" data-f="tl-hi"></span>
+    </div>
+    <div class="osd-bar" data-f="osd" role="toolbar" aria-label="Controls"></div>
   </div>
 
   <!-- Guide -->
@@ -86,13 +94,14 @@
     <nav class="rail">
       <div class="rail-previewing" data-f="previewing" hidden>
         <dl class="rail-stats" data-f="pvplace"></dl>
-        <button type="button" class="btn" data-act="copy">Copy summary</button>
-        <button type="button" class="btn ghost" data-act="back">Back to my setup</button>
+        <button type="button" class="btn fx" data-act="copy">Copy summary</button>
+        <button type="button" class="btn ghost fx" data-act="back">Back to my setup</button>
       </div>
       <div class="rail-menu" data-f="presets" role="radiogroup" aria-label="Antenna"></div>
       <dl class="rail-stats" data-f="stats"></dl>
       <form class="rail-preview" data-f="preview" autocomplete="off">
-        <label>Preview a ZIP code <input name="zip" inputmode="numeric" maxlength="5" placeholder="80302"></label>
+        <!-- OK on the label puts the cursor in the field (app.js). -->
+        <label class="fx" tabindex="-1">Preview a ZIP code <input name="zip" inputmode="numeric" maxlength="5" placeholder="80302"></label>
       </form>
     </nav>
     <div class="main a-body">
@@ -121,16 +130,20 @@
 
   <!-- Weather -->
   <section id="weather" class="view railed" aria-label="Weather">
-    <nav class="rail"><div class="wx-now" data-f="now"></div></nav>
+    <nav class="rail">
+      <div class="wx-now" data-f="now"></div>
+      <button type="button" class="btn ghost fx wx-watch" data-act="watch" hidden>Watch the weather channel</button>
+    </nav>
+    <!-- Each part takes the focus in turn, Up and Down (app.js, weather). -->
     <div class="main wx-main">
-      <div class="wx-alerts" data-f="alerts"></div>
-      <div class="wx-block">
+      <div class="wx-alerts fx" data-f="alerts" tabindex="-1"></div>
+      <div class="wx-block fx" tabindex="-1">
         <div class="wx-label">Next 24 hours</div>
         <svg class="wx-chart" data-f="chart" viewBox="0 0 960 200" preserveAspectRatio="none"></svg>
         <div class="wx-hours" data-f="hours"></div>
       </div>
-      <div class="wx-days" data-f="days"></div>
-      <div class="wx-maps">
+      <div class="wx-days fx" data-f="days" tabindex="-1"></div>
+      <div class="wx-maps fx" tabindex="-1">
         <figure><img data-f="radar" alt=""><figcaption>Radar, last hour</figcaption></figure>
         <figure><img data-f="satellite" alt=""><figcaption>Satellite</figcaption></figure>
       </div>
@@ -173,11 +186,14 @@
       <div class="boot-mark">Airwaves</div>
       <div class="boot-sub" data-f="sub">Over-the-air television</div>
       <ol class="boot-log"></ol>
+      <!-- The arrows move between the fields and Connect; OK on a field
+           puts the cursor in it (app.js, bootKey). -->
       <form class="boot-connect" hidden autocomplete="off">
-        <input name="server" placeholder="Server address" autocapitalize="off" spellcheck="false">
-        <input name="token" type="password" placeholder="Token, if set">
-        <button class="btn">Connect</button>
+        <label class="boot-field fx" tabindex="-1"><input name="server" placeholder="Server address" autocapitalize="off" spellcheck="false"></label>
+        <label class="boot-field fx" tabindex="-1"><input name="token" type="password" placeholder="Token, if set"></label>
+        <button class="btn fx">Connect</button>
       </form>
+      <div class="boot-hint" data-f="hint"></div>
     </div>
   </div>
 

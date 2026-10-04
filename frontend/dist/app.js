@@ -277,12 +277,14 @@ function bootLog(msg, err) {
 
 async function init() {
   wireKeys();
+  wireOSD();
   wireDock();
   wireMouse();
   wireGuide();
   wireAntenna();
   wireSettings();
   wireRecordings();
+  wireWeather();
   wirePads();
   wireMediaSession();
   renderHints();
@@ -343,7 +345,9 @@ function showConnect(err) {
   // In a browser the server is the page's own (web.js): only a token to give.
   const fixed = !!(state.boot && state.boot.fixedServer);
   form.elements.server.readOnly = fixed;
-  form.elements[fixed ? 'token' : 'server'].focus();
+  form.elements.server.parentElement.classList.toggle('fx', !fixed);
+  bootField(form.elements[fixed ? 'token' : 'server'].parentElement);
+  f($('#boot'), 'hint').innerHTML = hints([['Arrows', 'Arrows', 'move'], ['Enter', 'Enter', androidTV ? 'types, or connects' : 'connects']]);
   form.onsubmit = async (e) => {
     e.preventDefault();
     const server = form.elements.server.value.trim();
@@ -403,17 +407,23 @@ function tick() {
 
 // ---------- views ----------
 function setView(v) {
-  if (state.dock >= 0) closeDock();
-  if (v === state.view) return;
+  if (state.dock >= 0) closeDock(false);
+  if (v === state.view) return restoreFocus();
   const prev = state.view;
+  // The banner and the controls go with TV (their timers with them).
+  if (prev === 'tv') hideBanner();
+  // The focus starts over in the new view.
+  blurIn(document.body);
   state.view = v;
   document.body.classList.remove(`mode-${prev}`);
   document.body.classList.add(`mode-${v}`);
   $$('#dock button').forEach((b) => b.classList.toggle('on', b.dataset.view === v));
   if (v === 'guide') { openGuide(); loadDVR(); }
-  if (v === 'recordings') { renderRecordings(); loadDVR(); }
+  if (v === 'recordings') { openRecordings(); loadDVR(); }
   if (v === 'weather') {
     renderWeather();
+    wxUI.at = 0;
+    wxFocus();
     loadWeather();
     if (state.info.weatherStar && !(state.current && state.current.weather)) {
       state.wxPreview = true;
@@ -426,8 +436,9 @@ function setView(v) {
     video.muted = !!state.userMuted;
     if (!(state.current && state.current.weather)) showWX(false);
   }
-  if (v === 'antenna') renderAntenna();
+  if (v === 'antenna') openAntenna();
   if (v === 'settings') openSettings();
+  return undefined;
 }
 
 function wireDock() {
@@ -445,7 +456,9 @@ function wireMouse() {
   // WebKitGTK focuses a button when it is clicked, and Enter or Space then
   // pressed it again besides doing what the key does here. Clicks leave
   // the focus where it was, as on a Mac.
-  document.addEventListener('mousedown', (e) => { if (e.target.closest('button')) e.preventDefault(); });
+  document.addEventListener('mousedown', (e) => {
+    if (!e.target.closest(TEXT_INPUT) && e.target.closest('button, .fx')) e.preventDefault();
+  });
   // Only a pointer that really moved counts. WebKit also sends moves (and
   // mouseenter) when content appears under a pointer left still, as on a
   // TV where it rests wherever it was; the banner then never hid.
@@ -454,13 +467,8 @@ function wireMouse() {
     document.body.classList.add('mouse-active');
     clearTimeout(mouseTimer);
     mouseTimer = setTimeout(() => document.body.classList.remove('mouse-active'), 2500);
-    if (state.view === 'tv' && e.clientY > window.innerHeight - 140) showBanner();
-  });
-  $('#banner').addEventListener('mouseenter', () => {
-    if (document.body.classList.contains('mouse-active')) clearTimeout(state.bannerTimer);
-  });
-  $('#banner').addEventListener('mouseleave', () => {
-    if (document.body.classList.contains('mouse-active')) hideBannerSoon();
+    // The controls, for a pointer near the bottom; no focus mark.
+    if (state.view === 'tv' && e.clientY > window.innerHeight * 0.55) openOSD(null);
   });
 }
 
@@ -478,7 +486,6 @@ async function tune(ch, { quiet = false } = {}) {
   state.current = ch;
   state.note = '';
   state.recording = null;
-  video.controls = false;
   const token = ++state.tuneToken;
   if (!quiet) showBanner(); else renderBanner();
   stage.classList.add('tuning');
@@ -615,6 +622,7 @@ function episodeLine(p) {
 function renderBanner() {
   updateMediaSession();
   showTimeshift();
+  renderOSD();
   const ch = state.current;
   const b = $('#banner');
   if (state.recording) return renderRecordingBanner(b, state.recording);
@@ -689,32 +697,351 @@ function showChannelLogo(b, ch) {
 }
 
 // The banner shows briefly on a channel change and on request. Pressing I
-// cycles: banner, banner with reception details, hidden.
+// cycles: banner, banner with reception details, hidden. With the
+// on-screen controls up it stays as long as they do.
 function showBanner(detail = false) {
   renderBanner();
   const b = $('#banner');
   b.classList.toggle('detail', detail);
   b.classList.add('show');
-  hideBannerSoon(detail ? 12000 : 4000);
+  if (osd.open) return osdTouch();
+  return hideBannerSoon(detail ? 12000 : 4000);
 }
 
+// hideBanner puts the banner away, and the controls with it.
 function hideBanner() {
   clearTimeout(state.bannerTimer);
+  closeOSD();
   $('#banner').classList.remove('show', 'detail');
 }
 
 function hideBannerSoon(ms = 4000) {
   clearTimeout(state.bannerTimer);
+  if (osd.open) return osdTouch();
   state.bannerTimer = setTimeout(hideBanner, ms);
+  return undefined;
 }
 
 // cycleBanner is the info key. It also flashes where the picture is, in
-// the playback badge.
+// the playback badge. With the controls up it shows or hides reception.
 function cycleBanner() {
   const b = $('#banner');
+  if (osd.open) {
+    if (!state.recording) b.classList.toggle('detail');
+    return flashPlace();
+  }
   if (b.classList.contains('show') && (b.classList.contains('detail') || state.recording)) return hideBanner();
   flashPlace();
   return showBanner(b.classList.contains('show'));
+}
+
+// ---------- on-screen controls ----------
+// OK on live TV brings up the controls over the picture, as video players
+// on a TV do (Media3's PlayerControlView, Leanback, Kodi's OSD, the Live
+// TV app's menu): the channel banner, a timeline of the program and of what
+// can be rewound, a row of labeled buttons, and the dock above as the way
+// to every view. The focus starts on Guide, so OK twice opens the guide;
+// Left and Right on live TV skip and bring them up with the timeline
+// picked. Up and Down move between the rows, Left and Right along one, OK
+// presses. They go after OSD_MS without a key, but stay while paused (as
+// Media3's and Leanback's do); Back puts them away.
+const OSD_MS = 6000;
+const osd = { open: false, timer: 0, tick: 0, last: 'guide', lastButton: 'guide', hover: false };
+
+// The buttons, in order: [action, label]. Labels change with the state.
+const OSD_BUTTONS = [
+  ['guide', 'Guide'], ['play', 'Pause'], ['back', '-10 s'], ['ahead', '+30 s'], ['live', 'Live'],
+  ['captions', 'Captions'], ['audio', 'Audio'], ['record', 'Record'], ['favorite', 'Favorite'], ['last', 'Last channel'],
+];
+const OSD_KEYS = { guide: 'G', play: 'Space', back: 'Left', ahead: 'Right', live: 'End', captions: 'C', audio: 'V', record: 'R', favorite: 'F', last: 'L' };
+const ICON_TEXT = 'text-anchor="middle" font-family="Plex Mono, Menlo, monospace" font-weight="700"';
+const OSD_ICONS = {
+  guide: '<path d="M3 4h18v3.5H3zm0 6.25h7.5v3.5H3zm9.5 0H21v3.5h-8.5zM3 16.5h11V20H3zm13 0h5V20h-5z"/>',
+  play: '<path d="M7 4.5v15L19.5 12z"/>',
+  pause: '<path d="M6 4.5h4.2v15H6zm7.8 0H18v15h-4.2z"/>',
+  back: `<path d="M12 5.5a7.5 7.5 0 1 1-7.5 7.5" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M12 1.5v8l-5-4z"/><text x="12.4" y="16.2" font-size="7.2" ${ICON_TEXT}>10</text>`,
+  ahead: `<path d="M12 5.5a7.5 7.5 0 1 0 7.5 7.5" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M12 1.5v8l5-4z"/><text x="11.6" y="16.2" font-size="7.2" ${ICON_TEXT}>30</text>`,
+  live: '<circle cx="12" cy="12" r="4.2"/><path d="M6.6 6.6a7.6 7.6 0 0 0 0 10.8M17.4 6.6a7.6 7.6 0 0 1 0 10.8" fill="none" stroke="currentColor" stroke-width="2"/>',
+  tv: '<rect x="3" y="6.5" width="18" height="12.5" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 2.5l4 3.6 4-3.6" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12.75" r="2.4"/>',
+  captions: `<rect x="2.5" y="5" width="19" height="14" rx="2.5" fill="none" stroke="currentColor" stroke-width="2"/><text x="12" y="15.1" font-size="7.6" ${ICON_TEXT}>CC</text>`,
+  audio: '<path d="M3 9h4l5-4.5v15L7 15H3z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.2 5.8a8.8 8.8 0 0 1 0 12.4" fill="none" stroke="currentColor" stroke-width="2"/>',
+  record: '<circle cx="12" cy="12" r="7"/>',
+  favorite: '<path d="M12 3.6l2.5 5.4 5.9.6-4.4 4 1.3 5.8L12 16.4l-5.3 3 1.3-5.8-4.4-4 5.9-.6z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>',
+  favorited: '<path d="M12 3.6l2.5 5.4 5.9.6-4.4 4 1.3 5.8L12 16.4l-5.3 3 1.3-5.8-4.4-4 5.9-.6z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>',
+  last: '<path d="M8 3.5 3 8l5 4.5V9.3h9V6.7H8zM16 11.5v3.2H7v2.6h9v3.2l5-4.5z"/>',
+};
+
+const timelineEl = () => f($('#banner'), 'timeline');
+const osdButtons = () => $$('#banner .osd-bar .ob').filter((b) => !b.hidden);
+
+function wireOSD() {
+  const b = $('#banner');
+  f(b, 'osd').innerHTML = OSD_BUTTONS.map(([act, label]) => `<button type="button" class="ob fx" data-act="${act}" title="${esc(label)} (${OSD_KEYS[act]})"><svg viewBox="0 0 24 24" aria-hidden="true"></svg><span>${esc(label)}</span></button>`).join('');
+  f(b, 'osd').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-act]');
+    if (!btn) return;
+    osdTouch();
+    osdAct(btn.dataset.act);
+  });
+  b.addEventListener('focusin', (e) => {
+    const btn = e.target.closest('.ob');
+    if (btn) osd.last = osd.lastButton = btn.dataset.act;
+    else if (e.target === timelineEl()) osd.last = 'timeline';
+  });
+  // The pointer on the controls keeps them up.
+  b.addEventListener('mouseenter', () => { osd.hover = document.body.classList.contains('mouse-active'); osdTouch(); });
+  b.addEventListener('mouseleave', () => { osd.hover = false; osdTouch(); });
+  // A click on the timeline goes there.
+  timelineEl().addEventListener('click', (e) => {
+    const bar = $('.tl-bar', timelineEl()).getBoundingClientRect();
+    if (bar.width > 0) seekTimeline((e.clientX - bar.left) / bar.width);
+  });
+}
+
+// openOSD brings up the controls, with the focus on focus ("guide", another
+// button's action, or "timeline"), or on none for a pointer.
+function openOSD(focus = 'guide') {
+  if (state.view !== 'tv' || (!state.current && !state.recording)) return;
+  if (!osd.open) {
+    osd.open = true;
+    document.body.classList.add('osd-open');
+    clearTimeout(state.bannerTimer);
+    osd.tick = setInterval(renderTimeline, 1000);
+  }
+  renderBanner();
+  $('#banner').classList.add('show', 'osd');
+  if (focus) osdFocus(focus);
+  osdTouch();
+}
+
+function closeOSD() {
+  if (!osd.open) return;
+  osd.open = false;
+  clearTimeout(osd.timer);
+  clearInterval(osd.tick);
+  osd.tick = 0;
+  osd.hover = false;
+  document.body.classList.remove('osd-open');
+  const b = $('#banner');
+  b.classList.remove('osd', 'tl-on');
+  if (state.dock >= 0 && state.view === 'tv') closeDock(false);
+  blurIn(b);
+}
+
+// osdTouch starts the controls' time over: a key was pressed.
+function osdTouch() {
+  clearTimeout(osd.timer);
+  if (!osd.open || osd.hover || pausedStream()) return;
+  osd.timer = setTimeout(hideBanner, OSD_MS);
+}
+
+const hasPicture = () => !!(video.src || state.hls) && !video.hidden && $('#nosignal').hidden;
+const pausedStream = () => hasPicture() && video.paused;
+
+// osdFocus focuses a button by its action, or the timeline: the nearest
+// there is when that one isn't showing.
+function osdFocus(target) {
+  const tl = timelineEl();
+  if (target === 'timeline' && !tl.hidden) return focusEl(tl);
+  const buttons = osdButtons();
+  const want = target === 'timeline' ? osd.lastButton : target;
+  return focusEl(buttons.find((b) => b.dataset.act === want) || buttons.find((b) => b.dataset.act === 'play') || buttons[0]);
+}
+
+// osdKey handles a key while the controls are up; it reports whether it
+// did. Keys it leaves (letters, Space, channel up and down) do what they
+// do on TV.
+function osdKey(e) {
+  const k = e.key;
+  const el = document.activeElement;
+  const onTl = el === timelineEl();
+  const btn = el && el.closest ? el.closest('#banner .ob') : null;
+  if ((k === 'ArrowLeft' || k === 'ArrowRight') && e.shiftKey) {
+    e.preventDefault();
+    skip(k === 'ArrowLeft' ? -60 : 60);
+    renderTimeline();
+    return true;
+  }
+  if (k === 'Escape') {
+    // A channel number being typed goes first.
+    e.preventDefault();
+    if (state.entry) cancelEntry(); else hideBanner();
+    return true;
+  }
+  if (!onTl && !btn) {
+    // Up by a pointer, or the focus went: the first key finds it.
+    if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter'].includes(k)) return false;
+    e.preventDefault();
+    osdFocus(osd.last);
+    return true;
+  }
+  switch (k) {
+    case 'ArrowLeft': case 'ArrowRight':
+      if (onTl) {
+        skip(k === 'ArrowLeft' ? -10 : 30);
+        renderTimeline();
+      } else {
+        focusEl(neighbor(osdButtons(), btn, k === 'ArrowLeft' ? -1 : 1));
+      }
+      break;
+    case 'ArrowUp':
+      if (btn && !timelineEl().hidden) focusEl(timelineEl());
+      else openDock();
+      break;
+    case 'ArrowDown':
+      if (onTl) osdFocus(osd.lastButton);
+      break;
+    case 'Enter':
+      if (onTl) togglePause(); else btn.click();
+      break;
+    default: return false;
+  }
+  e.preventDefault();
+  return true;
+}
+
+function osdAct(act) {
+  const after = (x) => Promise.resolve(x).then(renderOSD);
+  switch (act) {
+    case 'guide': return setView('guide');
+    case 'play': return togglePause();
+    case 'back': skip(-10); return renderTimeline();
+    case 'ahead': skip(30); return renderTimeline();
+    case 'live': return state.recording ? state.current && tune(state.current) : goLive();
+    case 'captions': return after(toggleCaptions());
+    case 'audio': return after(cycleAudio());
+    case 'record': return after(recordNow('once'));
+    case 'favorite': return after(toggleFavorite(state.current));
+    case 'last': return state.previous && tune(state.previous);
+    default: return null;
+  }
+}
+
+// renderOSD shows the buttons that apply now, labeled for the state, and
+// the timeline. The focus moves on from a button that went.
+function renderOSD() {
+  if (!osd.open) return;
+  const b = $('#banner');
+  const ch = state.current;
+  const rec = state.recording;
+  const now = Date.now();
+  // Video controls for a stream, not the weather channel's display or a
+  // channel that failed to tune.
+  const stream = $('#nosignal').hidden && !!(rec || (ch && !ch.weather));
+  const p = !rec && ch && !ch.own ? airingAt(ch, now) : null;
+  const it = p && state.dvrKeys.get(airingKey(ch, p));
+  const fav = !rec && isFav(ch);
+  const was = document.activeElement;
+  const before = osdButtons();
+  const at = before.indexOf(was);
+  const set = (act, on, label, icon = act, lit = false) => {
+    const btn = $(`.ob[data-act="${act}"]`, b);
+    btn.hidden = !on;
+    if (!on) return;
+    const span = btn.lastElementChild;
+    if (span.textContent !== label) span.textContent = label;
+    if (btn.dataset.icon !== icon) {
+      btn.dataset.icon = icon;
+      btn.firstElementChild.innerHTML = OSD_ICONS[icon];
+    }
+    btn.classList.toggle('on', lit);
+    if (act !== 'guide' && act !== 'last') btn.setAttribute('aria-pressed', String(lit));
+  };
+  set('guide', true, 'Guide');
+  set('play', stream, video.paused && hasPicture() ? 'Play' : 'Pause', video.paused && hasPicture() ? 'play' : 'pause');
+  set('back', stream, '-10 s');
+  set('ahead', stream, '+30 s');
+  set('live', !!rec || stream, rec ? 'Live TV' : 'Live', rec ? 'tv' : 'live');
+  set('captions', stream, 'Captions', 'captions', stream && captionsWanted());
+  set('audio', stream && audioTracks().length > 1, 'Audio');
+  // Recording is for the antenna's channels, on a server with a DVR.
+  set('record', !!(state.info.dvr && p && p._e > now), it ? (it.status === 'recording' ? 'Recording' : 'Will record') : 'Record', 'record', !!it);
+  set('favorite', !rec && !!ch, 'Favorite', fav ? 'favorited' : 'favorite', fav);
+  set('last', !rec && !!state.previous, 'Last channel');
+  const last = $('.ob[data-act="last"]', b);
+  last.title = state.previous ? `Back to ${state.previous.number} ${displayCall(state.previous)} (L)` : '';
+  renderTimeline();
+  if (was && b.contains(was) && (was.hidden || document.activeElement !== was)) {
+    const after = osdButtons();
+    if (was === timelineEl() || at < 0) osdFocus(osd.lastButton);
+    else focusEl(after[Math.min(at, after.length - 1)]);
+  }
+}
+
+// timelineModel is what the timeline shows, in one scale: for live TV, ms
+// since the epoch, from the program's start (or whatever can be rewound
+// before it) to its end; for a recording, seconds into it.
+function timelineModel() {
+  if (!hasPicture()) return null;
+  const r = video.seekable;
+  const has = r && r.length > 0;
+  if (state.recording) {
+    const off = state.recOffset || 0;
+    const pos = off + (video.currentTime || 0);
+    const dur = Math.max(state.recording.duration || 0, pos);
+    if (!dur) return null;
+    return {
+      lo: 0, hi: dur, past: 0, edge: null, head: pos, bufLo: has ? off + r.start(0) : pos, bufHi: has ? off + r.end(r.length - 1) : pos,
+      left: mmss(pos), right: mmss(dur), at: mmss(pos), live: false,
+    };
+  }
+  const now = Date.now();
+  const behind = behindLive();
+  const head = now - behind * 1000;
+  const bufLo = has ? now - Math.max(0, livePoint() - r.start(0)) * 1000 : head;
+  const p = airingAt(state.current, now);
+  const lo = Math.min(p ? p._s : now - 15 * MIN, bufLo, head);
+  const hi = p ? p._e : now;
+  const live = behind <= 4;
+  return { lo, hi, past: now, edge: now, head, bufLo, bufHi: now, left: clock(lo), right: p ? clock(hi) : 'Now', at: live ? 'Live' : `-${mmss(behind)}`, live };
+}
+
+function renderTimeline() {
+  if (!osd.open) return;
+  const b = $('#banner');
+  const tl = timelineEl();
+  const m = timelineModel();
+  const show = !!m;
+  if (tl.hidden === show) {
+    // The timeline goes (a failed tune, the weather channel): its focus
+    // moves down to the buttons.
+    const had = document.activeElement === tl;
+    tl.hidden = !show;
+    if (had && !show) osdFocus(osd.lastButton);
+  }
+  b.classList.toggle('tl-on', show);
+  const liveBtn = $('.ob[data-act="live"]', b);
+  if (liveBtn) liveBtn.classList.toggle('at', !!(m && m.live));
+  if (!m) return;
+  const span = m.hi - m.lo || 1;
+  const pct = (t) => `${Math.max(0, Math.min(100, ((t - m.lo) / span) * 100)).toFixed(2)}%`;
+  const bar = $('.tl-bar', tl);
+  const [past, buf, edge, head] = bar.children;
+  past.style.width = pct(m.past);
+  buf.style.left = pct(m.bufLo);
+  buf.style.width = `calc(${pct(m.bufHi)} - ${pct(m.bufLo)})`;
+  edge.hidden = m.edge == null;
+  if (m.edge != null) edge.style.left = pct(m.edge);
+  head.style.left = pct(m.head);
+  f(tl, 'tl-lo').textContent = m.left;
+  f(tl, 'tl-hi').textContent = m.right;
+  f(tl, 'tl-at').textContent = m.at;
+  tl.setAttribute('aria-valuetext', m.at);
+}
+
+// seekTimeline goes to a fraction of the timeline (a click on it).
+function seekTimeline(frac) {
+  const m = timelineModel();
+  const r = video.seekable;
+  if (!m || !r || !r.length) return;
+  const t = m.lo + Math.max(0, Math.min(1, frac)) * (m.hi - m.lo);
+  // Both scales count forward with the picture: ms for live, s for a recording.
+  const delta = state.recording ? t - m.head : (t - m.head) / 1000;
+  const from = video.currentTime;
+  video.currentTime = Math.min(Math.max(from + delta, r.start(0)), state.recording ? r.end(r.length - 1) : livePoint());
+  showTimeshift();
+  renderTimeline();
+  osdTouch();
 }
 
 const presetLabel = (name) => (state.presets.find((p) => p.name === name) || { label: name }).label;
@@ -768,29 +1095,49 @@ function pressKey(key, { shiftKey = false, repeat = false } = {}) {
   (document.activeElement || document.body).dispatchEvent(new KeyboardEvent('keydown', { key, shiftKey, repeat, bubbles: true, cancelable: true }));
 }
 
+// Keys held down: the Android TV app's WebView sends a held key again
+// without marking it a repeat, so another keydown before its keyup is one.
+const held = new Map(); // key: when its last keydown came
+const HELD_MS = 700;
+
 function wireKeys() {
   document.addEventListener('keydown', (e) => {
-    if (e.isTrusted) setPrompts(false);
+    let again = e.repeat;
+    if (e.isTrusted) {
+      setPrompts(false);
+      const at = held.get(e.key);
+      again = again || (at !== undefined && e.timeStamp - at < HELD_MS);
+      held.set(e.key, e.timeStamp);
+    }
     const alias = KEY_ALIASES[e.key];
     if (alias) {
       e.preventDefault();
-      return pressKey(alias[0], { shiftKey: !!alias[1] });
+      return pressKey(alias[0], { shiftKey: !!alias[1], repeat: again });
     }
     const typing = e.target.matches && e.target.matches(TEXT_INPUT);
+    if (document.body.classList.contains('booting')) return bootKey(e, typing);
     if (typing && e.key !== 'Escape') return;
-    if (typing && document.body.classList.contains('booting')) return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const k = e.key;
-
-    if (document.body.classList.contains('booting')) {
-      if (!typing && (k === 'r' || k === 'R')) location.reload();
+    // A held OK, or Space, acts once; held, OK is a long press.
+    if ((k === 'Enter' || k === ' ') && again) {
+      e.preventDefault();
+      if (k === 'Enter') holdLong();
       return;
     }
+    if (osd.open) osdTouch();
     if (state.dock >= 0 && dockKey(e)) return;
-    if (state.view === 'settings' && !typing && settingsKey(e)) return;
+    if (typing) {
+      // Esc puts a field away, back to its row.
+      e.preventDefault();
+      e.target.blur();
+      return restoreFocus();
+    }
+    if (state.view === 'settings' && settingsKey(e)) return;
+    if (state.view === 'tv' && osd.open && osdKey(e)) return;
     if (k === 'Escape') {
       if (state.entry) return cancelEntry();
-      if (typing) e.target.blur();
+      if (viewBack()) return;
       if (state.view !== 'tv') return setView('tv');
       if (state.recording && state.current) return tune(state.current);
       return hideBanner();
@@ -818,24 +1165,20 @@ function wireKeys() {
     if (state.view === 'guide') return guideKey(e);
     if (state.view === 'antenna') return antennaKey(e);
     if (state.view === 'recordings') return recordingsKey(e);
-    if (state.view !== 'tv') {
-      // Weather: Up and Down scroll, Up at the top and Left move to the
-      // dock. (Settings has its own keys, settingsKey.)
-      const main = $(`#${state.view} .main`);
-      if (k === 'ArrowLeft' || (k === 'ArrowUp' && (!main || main.scrollTop <= 0))) { e.preventDefault(); return openDock(); }
-      if (main && (k === 'ArrowUp' || k === 'ArrowDown')) { e.preventDefault(); main.scrollTop += k === 'ArrowDown' ? 240 : -240; }
-      return;
-    }
+    if (state.view === 'weather') return weatherKey(e);
+    if (state.view !== 'tv') return;
 
     if (/^[0-9]$/.test(k) || (k === '.' && state.entry)) { e.preventDefault(); return entryKey(k); }
     switch (k) {
       case 'ArrowUp': case 'PageUp': e.preventDefault(); return step(-1);
       case 'ArrowDown': case 'PageDown': e.preventDefault(); return step(1);
-      case 'ArrowLeft': e.preventDefault(); return skip(e.shiftKey ? -60 : -10);
-      case 'ArrowRight': e.preventDefault(); return skip(e.shiftKey ? 60 : 30);
+      // Left and Right skip, and bring up the controls with the timeline
+      // picked, for more of the same.
+      case 'ArrowLeft': e.preventDefault(); skip(e.shiftKey ? -60 : -10); return openOSD('timeline');
+      case 'ArrowRight': e.preventDefault(); skip(e.shiftKey ? 60 : 30); return openOSD('timeline');
       case ' ': e.preventDefault(); return togglePause();
       case 'End': e.preventDefault(); return goLive();
-      case 'Enter': return state.entry ? commitEntry() : setView('guide');
+      case 'Enter': e.preventDefault(); return state.entry ? commitEntry() : openOSD();
       case 'i': case 'I': return cycleBanner();
       case 'l': case 'L': case 'Backspace': return state.previous && tune(state.previous);
       case 'r': return recordNow('once');
@@ -847,6 +1190,103 @@ function wireKeys() {
       default:
     }
   });
+  document.addEventListener('keyup', (e) => {
+    held.delete(e.key);
+    holdEnd(e);
+  });
+  window.addEventListener('blur', () => held.clear());
+}
+
+// ---------- holding OK ----------
+// Holding OK (or Enter) for more, as on Android TV and in Kodi, where a long
+// press brings up a context menu: in the guide, a program's actions. A
+// press acts on its keyup; a hold once the key comes again (Android sends
+// a held key again at its long-press timeout, a keyboard repeats) or it's
+// been down HOLD_MS. A controller's button (pressKey) has no keyup, and
+// acts at once.
+const HOLD_MS = 500;
+const hold = { timer: 0, short: null, long: null };
+
+function holdStart(short, long) {
+  clearTimeout(hold.timer);
+  hold.short = short;
+  hold.long = long;
+  hold.timer = setTimeout(holdLong, HOLD_MS);
+}
+
+function holdLong() {
+  if (!hold.timer) return;
+  clearTimeout(hold.timer);
+  hold.timer = 0;
+  const long = hold.long;
+  hold.short = null;
+  hold.long = null;
+  if (long) long();
+}
+
+function holdEnd(e) {
+  if (e.key !== 'Enter' || !hold.timer) return;
+  clearTimeout(hold.timer);
+  hold.timer = 0;
+  const short = hold.short;
+  hold.short = null;
+  hold.long = null;
+  if (short) short();
+}
+
+// bootKey is a key while starting: on the connect prompt the arrows move
+// between its fields and Connect (Up and Down only, while typing), and OK
+// on a field puts the cursor in it.
+function bootKey(e, typing) {
+  const form = $('.boot-connect');
+  if (form.hidden) {
+    if (!typing && (e.key === 'r' || e.key === 'R')) location.reload();
+    return;
+  }
+  const items = $$('.fx', form);
+  const el = document.activeElement;
+  const i = items.indexOf(el && el.closest ? el.closest('.fx') : null);
+  if (e.key === 'Enter' && el && el.matches('.boot-field')) {
+    e.preventDefault();
+    const input = $('input', el);
+    input.focus();
+    input.select();
+    return;
+  }
+  const dir = { ArrowUp: -1, ArrowLeft: -1, ArrowDown: 1, ArrowRight: 1 }[e.key];
+  if (!dir || (typing && (e.key === 'ArrowLeft' || e.key === 'ArrowRight'))) return;
+  e.preventDefault();
+  bootField(items[i < 0 ? 0 : Math.max(0, Math.min(items.length - 1, i + dir))]);
+}
+
+// bootField moves to a field of the connect prompt: on a TV to its row, as
+// a field with the cursor in it would bring up the keyboard at the next
+// key; elsewhere into it, to type.
+function bootField(el) {
+  if (!el) return;
+  const input = el.matches('.boot-field') && !androidTV ? $('input', el) : null;
+  if (input) { input.focus(); input.select(); } else focusEl(el);
+}
+
+// On the Android TV app the keyboard comes up over the page (the visual
+// viewport shrinks); put away with Back, it leaves its field with the
+// cursor, where the next arrow would bring it up again. So the field lets
+// go then, back to its row, as Esc does: a setting's text goes back to
+// what it was (Enter, the keyboard's own key, keeps it).
+const ime = { open: false };
+if (androidTV && window.visualViewport) {
+  visualViewport.addEventListener('resize', () => {
+    const el = document.activeElement;
+    const typing = !!(el && el.matches && el.matches(TEXT_INPUT));
+    if (visualViewport.height < innerHeight * 0.9) { ime.open = typing; return; }
+    if (!ime.open) return;
+    ime.open = false;
+    if (!typing) return;
+    if (el.dataset.was !== undefined) el.value = el.dataset.was;
+    const row = el.closest('.fx');
+    el.blur();
+    if (row) focusEl(row); else restoreFocus();
+  });
 }
 
 // airwavesBack is the Android TV app's Back key: it does what Esc does and
@@ -856,7 +1296,7 @@ window.airwavesBack = () => {
   if (!state.settings || document.body.classList.contains('booting')) return false;
   const el = document.activeElement;
   const typing = !!(el && el.matches && el.matches(TEXT_INPUT));
-  const open = state.dock >= 0 || typing || !!state.entry || state.view !== 'tv'
+  const open = state.dock >= 0 || typing || !!state.entry || state.view !== 'tv' || osd.open
     || !!(state.recording && state.current) || $('#banner').classList.contains('show');
   if (!open) return false;
   pressKey('Escape');
@@ -884,19 +1324,22 @@ document.addEventListener('visibilitychange', () => {
 
 // ---------- dock ----------
 // Without letter keys (a TV remote, a controller) the dock leads to every
-// view: Left from its left edge, or Up from the top of a view whose rows
-// don't wrap (the guide's do), moves to it;
-// Left and Right pick, Enter opens, Esc or Down goes back.
+// view: Left from its left edge, or Up from the top of a view, moves to
+// it, and on TV it's the row above the on-screen controls. Left and Right
+// pick, Enter opens, Esc or Down goes back to where the focus was.
 const dockButtons = () => $$('#dock button').filter((b) => b.offsetParent);
 
 function openDock() {
+  const el = document.activeElement;
+  if (el && el !== document.body && !el.matches(TEXT_INPUT)) el.blur();
   state.dock = Math.max(0, dockButtons().findIndex((b) => b.dataset.view === state.view));
   renderDock();
 }
 
-function closeDock() {
+function closeDock(restore = true) {
   state.dock = -1;
   renderDock();
+  if (restore) restoreFocus();
 }
 
 function renderDock() {
@@ -913,7 +1356,7 @@ function dockKey(e) {
     case 'ArrowUp': break;
     case 'Enter': case ' ': {
       const b = buttons[state.dock];
-      closeDock();
+      closeDock(false);
       if (b) setView(b.dataset.view);
       e.preventDefault();
       return true;
@@ -924,6 +1367,55 @@ function dockKey(e) {
   e.preventDefault();
   renderDock();
   return true;
+}
+
+// ---------- focus ----------
+// Where the remote, a controller or the arrow keys are is always marked,
+// the same way in every view (style.css, Focus). Buttons, fields and the
+// weather's parts take the page's focus (.fx); the guide's grid and the
+// lists of Recordings, Reception and Settings mark their pick with a class,
+// while that part of the view has the focus (its data-zone). Only keys
+// focus: a click leaves the focus where it was (wireMouse).
+const isShown = (el) => !!el && !el.hidden && el.getClientRects().length > 0;
+
+function focusEl(el, scroll = true) {
+  if (!el) return false;
+  if (document.activeElement !== el) el.focus({ preventScroll: true });
+  if (scroll && el.closest('.wx-main, .r-grid, .r-list, .s-list, .a-tablewrap')) el.scrollIntoView({ block: 'nearest' });
+  return document.activeElement === el;
+}
+
+// blurIn takes the focus off whatever has it inside root.
+function blurIn(root) {
+  const el = document.activeElement;
+  if (el && el !== document.body && root.contains(el)) el.blur();
+}
+
+// neighbor is the item dir (-1 or 1) from el in items, or null past either
+// end: rows of buttons stop at their ends.
+function neighbor(items, el, dir) {
+  const i = items.indexOf(el);
+  return i < 0 ? items[0] || null : items[i + dir] || null;
+}
+
+// restoreFocus puts the focus back where it was in the view, after the dock
+// or a field let it go.
+function restoreFocus() {
+  if (state.dock >= 0) return;
+  if (state.view === 'tv' && osd.open) osdFocus(osd.last);
+  else if (state.view === 'guide') guideZone(guideUI.zone);
+  else if (state.view === 'recordings') recZone(recUI.zone);
+  else if (state.view === 'antenna') antZone(antUI.zone);
+  else if (state.view === 'weather') wxFocus();
+}
+
+// viewBack is Back in an inner part of a view (a program's or a
+// recording's actions, the guide's filters): it goes to the view's main
+// part, and reports whether it did.
+function viewBack() {
+  if (state.view === 'guide' && guideUI.zone !== 'grid') { guideZone('grid'); return true; }
+  if (state.view === 'recordings' && recUI.zone === 'actions') { recZone('list'); return true; }
+  return false;
 }
 
 // ---------- game controllers ----------
@@ -1044,8 +1536,8 @@ function padButtons(pads) {
 function padPress(i, repeat) {
   setPrompts(true);
   // On the TV, A plays and pauses: the guide has its own button, and the
-  // remote's OK (Enter) still opens it.
-  if (i === 0 && state.view === 'tv' && !state.entry) return pressKey(' ', { repeat });
+  // remote's OK (Enter) brings up the controls. With them up, A presses.
+  if (i === 0 && state.view === 'tv' && !state.entry && !osd.open && state.dock < 0) return pressKey(' ', { repeat });
   const [key, shiftKey] = PAD_KEYS[i];
   pressKey(key, { shiftKey: !!shiftKey, repeat });
 }
@@ -1188,24 +1680,76 @@ function openGuide() {
   const now = Date.now();
   state.gStart = floor30(now);
   state.gTime = now;
+  guideZone('grid');
   const list = guideChannels();
   state.gRow = Math.max(0, list.findIndex((c) => state.current && c.key === state.current.key));
   renderGuide();
   scrollRowIntoView(true);
 }
 
+// The guide's parts take the focus in turn (data-zone): the grid; the
+// filters above it, Up from its first row; and the selected program's
+// actions in the detail (Watch, Record, Series, New only, Favorite, Hide),
+// which OK on a program to come brings up, as holding OK or I does on any
+// (Kodi's and Android TV's long press for more). OK on what's on now
+// watches it, as in the Live TV app's guide.
+const guideUI = { zone: 'grid', act: '' };
+
+function guideZone(zone, act = '') {
+  guideUI.zone = zone;
+  $('#guide').dataset.zone = zone;
+  if (act) guideUI.act = act;
+  if (state.dock >= 0 || state.view !== 'guide') return;
+  if (zone === 'grid') return blurIn($('#guide'));
+  if (zone === 'filters') {
+    const btns = $$('.g-filters button');
+    focusEl(btns.find((b) => b.dataset.filter === state.guideFilter) || btns[0]);
+    return;
+  }
+  const acts = guideActs();
+  if (!acts.length) return guideZone('grid');
+  focusEl(acts.find((b) => b.dataset.act === guideUI.act) || acts[0]);
+}
+
+const guideActs = () => $$('#guide .gd-actions .act').filter(isShown);
+
+// guideRefocus puts the focus back on the filters or actions after they
+// were drawn again.
+function guideRefocus() {
+  if (state.view !== 'guide' || state.dock >= 0 || guideUI.zone === 'grid') return;
+  if (!$('#guide').contains(document.activeElement)) guideZone(guideUI.zone);
+}
+
+function guideOpenActions() {
+  if (state.view === 'guide' && guideChannels()[state.gRow]) guideZone('actions', '-');
+}
+
 function wireGuide() {
-  f($('#guide'), 'actions').addEventListener('click', (e) => {
+  const actions = f($('#guide'), 'actions');
+  actions.addEventListener('click', (e) => {
     const b = e.target.closest('[data-act]');
     if (!b) return;
-    if (b.dataset.act === 'once') recordSelected('once');
-    if (b.dataset.act === 'series') recordSelected('series', false);
-    if (b.dataset.act === 'new') recordSelected('series', true);
+    const list = guideChannels();
+    const ch = list[state.gRow];
+    switch (b.dataset.act) {
+      case 'watch': return watchChannel(ch);
+      case 'once': return recordSelected('once');
+      case 'series': return recordSelected('series', false);
+      case 'new': return recordSelected('series', true);
+      case 'fav': return toggleFavorite(ch);
+      case 'hide': guideZone('grid'); return hideChannel(ch);
+      default: return null;
+    }
+  });
+  actions.addEventListener('focusin', (e) => {
+    const b = e.target.closest('[data-act]');
+    if (b) guideUI.act = b.dataset.act;
   });
   const rows = $('.g-rows');
   rows.addEventListener('click', (e) => {
     const cell = e.target.closest('[data-row]');
     if (!cell) return;
+    guideZone('grid');
     state.gRow = Number(cell.dataset.row);
     if (cell.dataset.t) state.gTime = Number(cell.dataset.t);
     renderGuide();
@@ -1217,13 +1761,18 @@ function wireGuide() {
 }
 
 function guideKey(e) {
+  if (guideUI.zone === 'filters' && guideFiltersKey(e)) return;
+  if (guideUI.zone === 'actions' && guideActionsKey(e)) return;
   const list = guideChannels();
   const sel = selectedProgram(list);
   switch (e.key) {
-    // Rows wrap around, so channels kept at the end of the lineup are one
-    // press away from the top. The dock is Left from the earliest program.
-    case 'ArrowUp': state.gRow = (state.gRow - 1 + list.length) % list.length; break;
-    case 'ArrowDown': state.gRow = (state.gRow + 1) % list.length; break;
+    // Down from the last row wraps to the first; Up from the first goes to
+    // the filters. The dock is Left from the earliest program.
+    case 'ArrowUp':
+      if (state.gRow <= 0) { e.preventDefault(); return guideZone('filters'); }
+      state.gRow -= 1;
+      break;
+    case 'ArrowDown': state.gRow = list.length ? (state.gRow + 1) % list.length : 0; break;
     case 'PageUp': state.gRow = state.gRow === 0 ? list.length - 1 : Math.max(0, state.gRow - 8); break;
     case 'PageDown': state.gRow = state.gRow === list.length - 1 ? 0 : Math.min(list.length - 1, state.gRow + 8); break;
     case 'ArrowRight':
@@ -1239,16 +1788,22 @@ function guideKey(e) {
       break;
     }
     case 'Home': state.gStart = floor30(Date.now()); state.gTime = Date.now(); break;
-    case 'Enter': guideActivate(); return;
+    case 'Enter':
+      e.preventDefault();
+      // A key's press acts on its keyup, a hold brings up the actions; a
+      // controller's A, at once.
+      if (e.isTrusted) return holdStart(() => { if (state.view === 'guide' && guideUI.zone === 'grid') guideActivate(); }, guideOpenActions);
+      return guideActivate();
+    case 'i': case 'I': e.preventDefault(); return guideOpenActions();
     case 'r': e.preventDefault(); recordSelected('once'); return;
     case 'f': e.preventDefault(); toggleFavorite(list[state.gRow]); return;
     case 'h': case 'H': e.preventDefault(); hideChannel(list[state.gRow]); return;
     case 'R': e.preventDefault(); recordSelected('series', false); return;
     case 'n': case 'N': e.preventDefault(); recordSelected('series', true); return;
     default: {
-      const filters = guideFilters();
-      const i = filters.findIndex(([k]) => k === state.guideFilter);
       if (e.key === ']' || e.key === '[') {
+        const filters = guideFilters();
+        const i = filters.findIndex(([k]) => k === state.guideFilter);
         state.guideFilter = filters[(i + (e.key === ']' ? 1 : filters.length - 1)) % filters.length][0];
         state.gRow = 0;
         break;
@@ -1261,22 +1816,69 @@ function guideKey(e) {
   scrollRowIntoView();
 }
 
+// guideFiltersKey: Left and Right pick a filter (as a tab does), Down or OK
+// goes to the grid, Up (or Left from the first) to the dock.
+function guideFiltersKey(e) {
+  const btns = $$('.g-filters button');
+  const i = Math.max(0, btns.findIndex((b) => b.dataset.filter === state.guideFilter));
+  switch (e.key) {
+    case 'ArrowLeft': case 'ArrowRight': {
+      const j = i + (e.key === 'ArrowLeft' ? -1 : 1);
+      if (j < 0) { openDock(); break; }
+      if (j >= btns.length) break;
+      state.guideFilter = btns[j].dataset.filter;
+      state.gRow = 0;
+      renderGuide();
+      $('.g-rows').scrollTop = 0;
+      break;
+    }
+    case 'ArrowUp': openDock(); break;
+    case 'ArrowDown': case 'Enter': guideZone('grid'); break;
+    default: return false;
+  }
+  e.preventDefault();
+  return true;
+}
+
+// guideActionsKey: Left and Right along the actions, OK presses, Down (or
+// Back) goes back to the grid, Up to the dock.
+function guideActionsKey(e) {
+  const acts = guideActs();
+  const el = document.activeElement;
+  switch (e.key) {
+    case 'ArrowLeft': case 'ArrowRight': focusEl(neighbor(acts, el, e.key === 'ArrowLeft' ? -1 : 1) || (acts.includes(el) ? null : acts[0])); break;
+    case 'ArrowUp': openDock(); break;
+    case 'ArrowDown': guideZone('grid'); break;
+    case 'Enter':
+      if (acts.includes(el)) el.click(); else guideZone('actions');
+      break;
+    default: return false;
+  }
+  e.preventDefault();
+  return true;
+}
+
+// guideActivate is OK on a program: what's on now (or was, a little
+// before) is watched on its channel, and a program to come shows what can
+// be done with it.
 function guideActivate() {
   const list = guideChannels();
   const ch = list[state.gRow];
   if (!ch) return;
   const p = selectedProgram(list);
-  const now = Date.now();
-  if (!p || (p._s <= now && now < p._e)) {
-    // Choosing what's already playing goes back to it without tuning
-    // again (and losing the rewind buffer); a failed channel retries.
-    const playing = state.current && state.current.key === ch.key && !state.recording && $('#nosignal').hidden;
-    if (!playing) tune(ch);
-    setView('tv');
-    if (playing) showBanner();
-  } else {
-    toast(`${p.title} starts at ${clock(p._s)} on ${ch.number}`);
-  }
+  if (!p || p._s <= Date.now()) watchChannel(ch);
+  else guideOpenActions();
+}
+
+// watchChannel goes back to TV on a channel. Choosing what's already
+// playing goes back to it without tuning again (and losing the rewind
+// buffer); a failed channel retries.
+function watchChannel(ch) {
+  if (!ch) return;
+  const playing = state.current && state.current.key === ch.key && !state.recording && $('#nosignal').hidden;
+  if (!playing) tune(ch);
+  setView('tv');
+  if (playing) showBanner();
 }
 
 function selectedProgram(list) {
@@ -1324,7 +1926,7 @@ function renderGuide() {
     state.guideFilter = k;
     const n = guideChannels().length;
     state.guideFilter = saved;
-    return `<button data-filter="${k}" class="${k === state.guideFilter ? 'on' : ''}">${label}<span class="n">${n}</span></button>`;
+    return `<button type="button" role="tab" aria-selected="${k === state.guideFilter}" data-filter="${k}" class="fx${k === state.guideFilter ? ' on' : ''}">${label}<span class="n">${n}</span></button>`;
   }).join('');
   $$('.g-filters button').forEach((b) => b.addEventListener('click', () => {
     state.guideFilter = b.dataset.filter;
@@ -1382,7 +1984,14 @@ function renderGuide() {
   } else nl.style.display = 'none';
 
   renderGuideDetail(list[state.gRow], sel);
-  f(g, 'status').innerHTML = `${list.length} channels  |  ${hints([['Enter', 'Enter', 'watches'], ['f', 'F', 'favorite'], ['h', 'H', 'hide'], ['[', '[ ]', 'filter']])}`;
+  f(g, 'status').innerHTML = `${list.length} channels  |  ${guideStatusHints()}`;
+  guideRefocus();
+}
+
+// guideStatusHints names the guide's keys beside its filters.
+function guideStatusHints() {
+  if (androidTV && !prompts.pad) return 'Up from the top row for filters';
+  return hints([['i', 'I', 'more'], ['f', 'F', 'favorite'], ['h', 'H', 'hide'], ['[', '[ ]', 'filter']]);
 }
 
 // moveGuideSelection marks the selected row and program in rows already
@@ -1406,25 +2015,38 @@ function humanMinutes(m) {
   return m % 60 ? `${h} h ${m % 60} min` : `${h} h`;
 }
 
+// renderGuideActions draws the selected program's actions: Watch first for
+// what's on now, the recording ones where recording applies (the
+// antenna's channels, on a server with a DVR), then the channel's.
 function renderGuideActions(ch, p) {
   const box = f($('#guide'), 'actions');
-  if (!state.info.dvr || !p || p._e <= Date.now() || ch.weather || ch.custom) { box.innerHTML = ''; return; }
-  const it = state.dvrKeys.get(airingKey(ch, p));
-  const rule = seriesRuleFor(ch, p);
+  if (!ch) { box.innerHTML = ''; return; }
+  const now = Date.now();
+  const airing = !p || p._s <= now;
+  const act = (name, label, cls = '') => `<button type="button" class="act fx${cls ? ` ${cls}` : ''}" data-act="${name}">${label}</button>`;
   const parts = [];
-  if (it) {
-    const label = it.status === 'recording' ? 'Recording now' : it.status === 'unavailable' ? 'Channel not tuned on server' : 'Recording scheduled';
-    parts.push(`<span class="chip ${it.status === 'unavailable' ? '' : 'live'}">${label}</span>`);
-    if (it.id || !rule) parts.push('<button class="act" data-act="once">Cancel</button>');
-  } else {
-    parts.push('<button class="act rec" data-act="once"><i></i>Record</button>');
+  if (airing) parts.push(act('watch', !p || now < p._e ? 'Watch' : `Watch ${esc(ch.number)}`));
+  if (state.info.dvr && p && p._e > now && !ch.weather && !ch.custom) {
+    const it = state.dvrKeys.get(airingKey(ch, p));
+    const rule = seriesRuleFor(ch, p);
+    if (it) {
+      const label = it.status === 'recording' ? 'Recording now' : it.status === 'unavailable' ? 'Channel not tuned on server' : 'Recording scheduled';
+      parts.push(`<span class="chip ${it.status === 'unavailable' ? '' : 'live'}">${label}</span>`);
+      if (it.id || !rule) parts.push(act('once', 'Cancel'));
+    } else {
+      parts.push(act('once', '<i></i>Record', 'rec'));
+    }
+    if (rule) {
+      parts.push(`<span class="chip new">Series${rule.newOnly ? ', new only' : ''}</span>${act('series', 'Stop series')}`);
+    } else if (p.seriesId) {
+      parts.push(act('series', 'Record series') + act('new', 'New episodes only'));
+    }
   }
-  if (rule) {
-    parts.push(`<span class="chip new">Series${rule.newOnly ? ', new only' : ''}</span><button class="act" data-act="series">Stop series</button>`);
-  } else if (p.seriesId) {
-    parts.push('<button class="act" data-act="series">Record series</button><button class="act" data-act="new">New episodes only</button>');
-  }
+  if (!airing) parts.push(act('watch', `Watch ${esc(ch.number)}`));
+  parts.push(act('fav', isFav(ch) ? 'Unfavorite' : 'Favorite'));
+  parts.push(act('hide', 'Hide channel'));
   box.innerHTML = parts.join('');
+  guideRefocus();
 }
 
 function recordSelected(kind, newOnly) {
@@ -1473,7 +2095,12 @@ async function recordAiring(ch, p, kind, newOnly) {
 
 function renderGuideDetail(ch, p) {
   const g = $('#guide');
-  if (!ch) return;
+  if (!ch) {
+    // No channels under this filter.
+    for (const k of ['kicker', 'title', 'ep', 'meta', 'desc', 'actions', 'hint']) f(g, k).textContent = '';
+    f(g, 'art').classList.remove('has');
+    return;
+  }
   const now = Date.now();
   f(g, 'kicker').innerHTML = `<span>${esc(ch.number)} ${esc(ch.own ? ch.call : displayCall(ch))}</span><span style="color:var(--muted)">${p ? `${clock(p._s)} to ${clock(p._e)}` : ''}</span>`;
   f(g, 'title').textContent = p ? p.title : ch.atsc3Only ? `${ch.network} (ATSC 3.0)` : ch.own ? ch.name : 'No listings';
@@ -1483,9 +2110,12 @@ function renderGuideDetail(ch, p) {
   const genres = p ? p.genres || [] : ch.own && ch.category !== 'Other' ? [ch.category] : [];
   f(g, 'meta').innerHTML = chipsFor(p, ch) + genres.map((x) => `<span class="chip">${esc(x)}</span>`).join('');
   f(g, 'desc').textContent = p ? p.description || '' : ch.description || '';
-  const live = !p || (p._s <= now && now < p._e);
-  const when = live ? `${keyHint('Enter', 'Enter')} to watch` : `Starts in ${humanMinutes(Math.round((p._s - now) / MIN))}`;
-  f(g, 'hint').innerHTML = state.info.dvr && p && p._e > now && !ch.weather && !ch.custom && !prompts.pad && !androidTV ? `${when}  |  R record, Shift R series, N new only` : when;
+  const live = !p || p._s <= now;
+  const ok = keyHint('Enter', 'Enter');
+  const when = !live ? `Starts in ${humanMinutes(Math.round((p._s - now) / MIN))}  |  ${ok} for more` : p && p._e <= now ? `Ended ${clock(p._e)}  |  ${ok} to watch ${esc(ch.number)}` : `${ok} to watch`;
+  const more = !live ? '' : prompts.pad ? hints([['i', 'I', 'for more']]) : `hold ${ok} for more`;
+  const rec = state.info.dvr && p && p._e > now && !ch.weather && !ch.custom && !prompts.pad && !androidTV ? '  |  R record, Shift R series, N new only' : '';
+  f(g, 'hint').innerHTML = `${when}${more ? `, ${more}` : ''}${rec}`;
   renderGuideActions(ch, p);
   const art = f(g, 'art');
   if (p && p.image) { art.style.backgroundImage = `url('${p.image}')`; art.classList.add('has'); } else { art.style.backgroundImage = ''; art.classList.remove('has'); }
@@ -1496,7 +2126,16 @@ function wireAntenna() {
   const a = $('#antenna');
   f(a, 'preview').addEventListener('submit', (e) => {
     e.preventDefault();
-    startPreview(e.target.elements.zip.value.trim());
+    const zip = e.target.elements.zip;
+    zip.blur();
+    antZone('rail', 'zip');
+    // Once previewing, the focus goes to the preview's first button.
+    antUI.key = 'copy';
+    startPreview(zip.value.trim());
+  });
+  $('.rail', a).addEventListener('focusin', (e) => {
+    const el = e.target.closest('[data-p], [data-act], .rail-preview label');
+    if (el) antUI.key = el.dataset.p || el.dataset.act || 'zip';
   });
   f(a, 'previewing').addEventListener('click', (e) => {
     const b = e.target.closest('[data-act]');
@@ -1514,13 +2153,70 @@ function wireAntenna() {
   });
 }
 
+// Reception's parts take the focus in turn (data-zone): the transmitters'
+// table, and the rail beside it, Left from the table: while previewing,
+// Copy summary and Back to my setup; the antenna presets (OK picks one);
+// and Preview a ZIP code, where OK brings up the keyboard.
+const antUI = { zone: 'table', key: '' };
+
+function openAntenna() {
+  renderAntenna();
+  antZone(stationOrder().length ? 'table' : 'rail');
+}
+
+function antRail() {
+  const a = $('#antenna');
+  return [...$$('[data-f="previewing"] .fx', a), ...$$('[data-f="presets"] .fx', a), $('.rail-preview label', a)].filter(isShown);
+}
+
+function antZone(zone, key = '') {
+  antUI.zone = zone;
+  $('#antenna').dataset.zone = zone;
+  if (key) antUI.key = key;
+  if (state.dock >= 0 || state.view !== 'antenna') return;
+  if (zone === 'table') return blurIn($('#antenna'));
+  const items = antRail();
+  const keyOf = (el) => el.dataset.p || el.dataset.act || 'zip';
+  focusEl(items.find((el) => keyOf(el) === antUI.key) || items.find((el) => el.classList.contains('on')) || items[0]);
+}
+
+function antRefocus() {
+  if (state.view !== 'antenna' || state.dock >= 0 || antUI.zone !== 'rail') return;
+  const el = document.activeElement;
+  if (el && el.matches(TEXT_INPUT)) return;
+  if (!$('#antenna').contains(el) || !isShown(el)) antZone('rail');
+}
+
 function antennaKey(e) {
+  if (e.key === '1' || e.key === '2' || e.key === '3') return setPreset(state.presets[Number(e.key) - 1].name);
+  if (antUI.zone === 'rail') {
+    const items = antRail();
+    const el = document.activeElement;
+    const i = items.indexOf(el);
+    switch (e.key) {
+      case 'ArrowUp': if (i > 0) focusEl(items[i - 1]); else openDock(); break;
+      case 'ArrowDown': focusEl(items[Math.min(items.length - 1, i + 1)]); break;
+      case 'ArrowRight': if (stationOrder().length) antZone('table'); break;
+      case 'ArrowLeft': openDock(); break;
+      case 'Enter':
+        if (el && el.matches('.rail-preview label')) {
+          const input = $('input', el);
+          input.focus();
+          input.select();
+        } else if (i >= 0) el.click();
+        else antZone('rail');
+        break;
+      default: return;
+    }
+    e.preventDefault();
+    return;
+  }
   const keys = stationOrder().map((s) => `${s.facilityId}:${s.rfChannel}`);
   let i = keys.indexOf(state.aSel);
-  if ((e.key === 'ArrowUp' && i <= 0) || e.key === 'ArrowLeft') { e.preventDefault(); return openDock(); }
+  if (e.key === 'ArrowUp' && i <= 0) { e.preventDefault(); return openDock(); }
+  if (e.key === 'ArrowLeft') { e.preventDefault(); return antZone('rail'); }
   if (e.key === 'ArrowDown') i = Math.min(keys.length - 1, i + 1);
   else if (e.key === 'ArrowUp') i = Math.max(0, i - 1);
-  else if (e.key === '1' || e.key === '2' || e.key === '3') return setPreset(state.presets[Number(e.key) - 1].name);
   else return;
   e.preventDefault();
   selectStation(keys[i]);
@@ -1558,7 +2254,7 @@ function renderAntenna() {
   const where = { indoor: 'Inside, by a window', attic: 'Under the roof', rooftop: 'Outside, 30 ft up' };
   f(a, 'presets').innerHTML = state.presets.map((p, i) => {
     const n = rep.channels.filter((c) => receivable(c.tier && c.tier[p.name])).length;
-    return `<button class="rm-item ${p.name === preset ? 'on' : ''}" data-p="${p.name}" title="Key ${i + 1}">
+    return `<button type="button" role="radio" aria-checked="${p.name === preset}" class="rm-item fx ${p.name === preset ? 'on' : ''}" data-p="${p.name}" title="Key ${i + 1}">
       <span class="rm-label">${esc(p.name[0].toUpperCase() + p.name.slice(1))}</span><span class="rm-count">${n}</span>
       <small>${where[p.name] || ''}</small></button>`;
   }).join('');
@@ -1573,6 +2269,7 @@ function renderAntenna() {
   renderNextGen(preset);
   if (!state.aSel && good[0]) state.aSel = `${good[0].facilityId}:${good[0].rfChannel}`;
   if (state.aSel) selectStation(state.aSel, true);
+  antRefocus();
 }
 
 function renderTable(stations, preset) {
@@ -1820,6 +2517,8 @@ const AUDIO_LANGS = [['', 'As broadcast'], ['en', 'English'], ['es', 'Spanish'],
 const GUIDE_HOURS = [6, 12, 24, 36, 48, 72];
 const WATCHED = [[0, 'Keep them'], [1, 'Delete after a day'], [7, 'Delete after a week'], [30, 'Delete after a month']];
 const SETTINGS_LISTS = { hidden: 'Hidden channels', controls: 'Remote, controller and keys', sources: 'Data sources' };
+// How to hide a channel, with the keys there are.
+const HIDE_HOW = () => (androidTV && !prompts.pad ? 'In the guide, hold OK on a channel\'s program: Hide channel' : 'In the guide, H hides a channel');
 
 // padNames names face buttons ("A, Y") as the pad in use labels them, by
 // their place in the standard mapping.
@@ -1832,11 +2531,11 @@ const padNames = (names) => names.replace(/\b[ABXY]\b/g, (n) => (FACES[prompts.f
 // CONTROLS is the legend of the controls list: glyph keys, the controller's
 // buttons by name (for a keyboard user), the keys, and what they do.
 const CONTROLS = [
-  ['Arrows', 'D-pad, left stick', 'Arrows', 'Move. On TV, Up and Down change channel, Left and Right go back 10 s or ahead 30 s'],
-  ['Enter', 'A', 'Enter', 'Choose. On TV, A plays and pauses, and Enter (the remote\'s OK) opens the guide'],
-  ['Escape', 'B', 'Esc, Back', 'Back'],
+  ['Arrows', 'D-pad, left stick', 'Arrows', 'Move. On TV, Up and Down change channel, Left and Right go back 10 s or ahead 30 s and bring up the controls'],
+  ['Enter', 'A', 'Enter', 'Choose. On TV, Enter (the remote\'s OK) brings up the controls, Guide first, and A plays and pauses'],
+  ['Escape', 'B', 'Esc, Back', 'Back, and puts the controls away'],
   ['g', 'Y', 'G', 'Guide'],
-  ['i', 'X', 'I', 'Program info, twice for reception'],
+  ['i', 'X', 'I', 'Program info, twice for reception. In the guide, more for a program: record, favorite, hide'],
   ['PageUp PageDown', 'LB, RB', 'Page Up, Page Down', 'Channel down or up, a page of the guide or of Settings'],
   ['ShiftLeft ShiftRight', 'LT, RT', 'Shift Left, Shift Right', 'Back or ahead a minute'],
   ['Space', 'R3', 'Space, Play', 'Pause'],
@@ -1947,7 +2646,7 @@ function settingsRows() {
   }
 
   const hidden = (s.hidden || []).length;
-  add('Channels', { id: 'hidden', kind: 'open', label: 'Hidden channels', sub: 'In the guide, H hides a channel', value: hidden ? `${hidden} hidden` : 'None', open: 'hidden' });
+  add('Channels', { id: 'hidden', kind: 'open', label: 'Hidden channels', sub: HIDE_HOW(), value: hidden ? `${hidden} hidden` : 'None', open: 'hidden' });
   add('Channels', { id: 'hideshop', kind: 'action', verb: 'hides them', label: 'Hide shopping channels', sub: 'QVC, HSN, Jewelry TV and the like', value: 'Hide', run: hideShopping });
 
   // In a browser the server is the one the page came from (web.js).
@@ -1984,7 +2683,7 @@ function settingsList(name) {
     for (const c of hidden) {
       add({ id: c.key, kind: 'action', verb: 'shows it', label: `${c.number} ${c.network || displayCall(c)}`.trim(), value: 'Show', run: () => showHidden([c.key]) });
     }
-    if (!hidden.length) add({ id: 'none', kind: 'info', label: 'No hidden channels', sub: 'In the guide, H hides a channel' });
+    if (!hidden.length) add({ id: 'none', kind: 'info', label: 'No hidden channels', sub: HIDE_HOW() });
   }
   if (name === 'controls') {
     for (const [keys, pad, label, what] of CONTROLS) {
@@ -2021,9 +2720,9 @@ function renderSettings() {
   });
   if (section) html += '</div>';
   if (settingsUI.sub === 'controls' && androidTV) {
-    html += '<p class="s-note">On the remote: OK opens the guide, Back goes back, and digits tune a channel. Channel up and down change channel, Play/Pause pauses, Fast forward and Rewind skip.</p>';
+    html += '<p class="s-note">On the remote: OK brings up the controls over the picture, with Guide first, so OK twice opens the guide. In them Left and Right move along a row, Up and Down between rows: the timeline (Left and Right skip), the buttons (play, captions, record, last channel and more), and the views at the top. On live TV Up and Down change channel, and Left and Right skip. In the guide OK watches what\'s on, and holding OK offers more: record, series, favorite, hide. Back goes back. Remotes with them: digits tune a channel, Channel up and down change channel, Play/Pause pauses.</p>';
   } else if (settingsUI.sub === 'controls') {
-    html += '<p class="s-note">Digits tune a channel. The remote\'s Fast forward and Rewind skip, Record records. Keyboard only: L last channel, C captions, V audio track, F favorite, R record, D recordings, A reception, Shift F full screen. In Steam, give Airwaves the Gamepad controller layout, not a keyboard one.</p>';
+    html += '<p class="s-note">Enter on TV brings up the controls, with the guide, captions, recording, the last channel and the views; Esc puts them away. Digits tune a channel. The remote\'s Fast forward and Rewind skip, Record records. Keyboard only: L last channel, C captions, V audio track, F favorite, R record, D recordings, A reception, Shift F full screen. In the guide hold Enter, or press I, for a program\'s actions. In Steam, give Airwaves the Gamepad controller layout, not a keyboard one.</p>';
   }
   const keep = list.scrollTop;
   list.innerHTML = html;
@@ -2317,8 +3016,10 @@ function applyScale() {
     root.style.zoom = z === 1 ? '' : String(z);
     root.style.setProperty('--zoom', String(z));
   }
-  // Larger sizes leave less room above the guide (.tight in style.css).
-  root.classList.toggle('tight', z > 1 && (native ? innerHeight : innerHeight / z) < 900);
+  // Larger sizes leave less room above the guide (.tight in style.css):
+  // the size chosen, not the zoom, which on the Android TV app also fits a
+  // 1080p screen's interface into the WebView.
+  root.classList.toggle('tight', z / fit > 1 && (native ? innerHeight : innerHeight / z) < 900);
   fitWX();
   if (state.view === 'guide' && state.report) renderGuide();
 }
@@ -2362,7 +3063,7 @@ function renderRecordingBanner(b, it) {
   const pos = (state.recOffset || 0) + (video.currentTime || 0);
   f(b, 'progress').style.width = it.duration ? `${Math.min(100, (pos / it.duration) * 100)}%` : '0';
   f(b, 'desc').textContent = it.description || '';
-  f(b, 'next').innerHTML = hints([['LeftRight', 'Arrows', 'skip'], [prompts.pad ? 'Enter' : ' ', 'Space', 'pauses'], ['Escape', 'Esc', 'returns to live TV']]);
+  f(b, 'next').innerHTML = hints([['LeftRight', 'Arrows', 'skip'], ...(androidTV || prompts.pad ? [] : [[' ', 'Space', 'pauses']]), ['Enter', 'Enter', 'controls'], ['Escape', 'Esc', 'returns to live TV']]);
   f(b, 'meter').innerHTML = '';
   f(b, 'tier').textContent = sizeLabel(it.sizeBytes);
   f(b, 'tier').style.color = '';
@@ -2385,7 +3086,10 @@ const dayLabel = (t) => {
   return d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
 };
 
+// A delete, a skip or a stopped series asks for a second press: the
+// button says so (armed) until then, for a few seconds.
 let pendingDelete = '';
+let pendingTimer = 0;
 
 const REC_TABS = [['library', 'Library'], ['upcoming', 'Coming up'], ['series', 'Series']];
 
@@ -2398,14 +3102,52 @@ function recLists() {
   };
 }
 
+// The view's parts take the focus in turn (data-zone): the list, the menu
+// of lists in the rail (Left from the list's left edge), and the selected
+// item's actions (OK): for a recording Play (or Resume), From the start,
+// Watched and Delete, above the grid; for one to come, Don't record; for a
+// series, how many to keep, new episodes only, and Stop.
+const recUI = { zone: 'list', act: '' };
+
+function openRecordings() {
+  const tab = state.recTab || 'library';
+  renderRecordings();
+  recZone(recLists()[tab].length ? 'list' : 'menu');
+}
+
+function recZone(zone, act = '') {
+  recUI.zone = zone;
+  $('#recordings').dataset.zone = zone;
+  if (act) recUI.act = act;
+  if (state.dock >= 0 || state.view !== 'recordings') return;
+  if (zone === 'list') return blurIn($('#recordings'));
+  if (zone === 'menu') return void focusEl($(`#recordings [data-tab="${state.recTab || 'library'}"]`));
+  const acts = recActs();
+  if (!acts.length) return recZone('list');
+  focusEl(acts.find((b) => b.dataset.act === recUI.act) || acts[0]);
+}
+
+const recActs = () => $$('#recordings .r-panel.on .act.fx').filter(isShown);
+
+function recRefocus() {
+  if (state.view !== 'recordings' || state.dock >= 0 || recUI.zone === 'list') return;
+  if (!$('#recordings').contains(document.activeElement) || !isShown(document.activeElement)) recZone(recUI.zone);
+}
+
+// armed is whether a delete-like action waits for its second press; ARMED
+// says what the second does.
+const armed = (act, it) => pendingDelete === `${act}:${it && it.id}`;
+const ARMED = { delete: 'delete', skip: 'skip it', stop: 'stop it' };
+
 function renderRecordings() {
   const v = $('#recordings');
   const lists = recLists();
   const tab = state.recTab || 'library';
   const sel = state.recSelBy || (state.recSelBy = { library: 0, upcoming: 0, series: 0 });
   for (const k of Object.keys(sel)) sel[k] = Math.min(sel[k], Math.max(0, lists[k].length - 1));
+  const act = (name, label, it, cls = '') => `<button type="button" class="act fx${cls ? ` ${cls}` : ''}${armed(name, it) ? ' armed' : ''}" data-act="${name}">${armed(name, it) ? `${androidTV ? 'OK' : 'Press'} again to ${ARMED[name]}` : label}</button>`;
 
-  f(v, 'menu').innerHTML = REC_TABS.map(([k, label]) => `<button class="rm-item ${k === tab ? 'on' : ''}" data-tab="${k}"><span class="rm-label">${label}</span><span class="rm-count">${lists[k].length}</span></button>`).join('');
+  f(v, 'menu').innerHTML = REC_TABS.map(([k, label]) => `<button type="button" class="rm-item fx ${k === tab ? 'on' : ''}" data-tab="${k}"><span class="rm-label">${label}</span><span class="rm-count">${lists[k].length}</span></button>`).join('');
   $$('.r-panel', v).forEach((p) => p.classList.toggle('on', p.dataset.panel === tab));
 
   // Library: the selected recording above a grid of everything recorded.
@@ -2417,10 +3159,11 @@ function renderRecordings() {
       <div class="rd-title">${esc(cur.title)}</div>
       <div class="rd-ep">${esc(cur.subtitle || '')}</div>
       <p class="rd-desc">${esc(cur.status === 'failed' ? cur.detail || 'This recording failed' : cur.description || '')}</p>
-      <div class="rd-hint">${hints([['Enter', 'Enter', resumable(cur) ? `resumes at ${mmss(cur.position)}` : 'plays'], ...(resumable(cur) ? [['', 'Shift Enter', 'from the start']] : []), ['w', 'W', cur.watched ? 'unwatched' : 'watched'], ['', 'Delete', 'removes']])}</div>
+      <div class="rd-actions">${cur.status === 'failed' ? '' : act('play', resumable(cur) ? `Resume at ${mmss(cur.position)}` : 'Play', cur)}${resumable(cur) ? act('restart', 'From the start', cur) : ''}${cur.status === 'failed' ? '' : act('watched', cur.watched ? 'Mark unwatched' : 'Mark watched', cur)}${act('delete', 'Delete', cur)}</div>
+      <div class="rd-hint">${recHint(cur)}</div>
     </div>
     <div class="rd-art" style="${cur.image ? `background-image:url('${esc(cur.image)}')` : ''}"></div>`
-    : '<div class="rd-empty">Nothing recorded yet. In the guide, press R to record a program, or Shift R for every episode.</div><div></div>';
+    : '<div class="rd-empty">Nothing recorded yet. In the guide, OK on a program to come records it, or every episode.</div><div></div>';
   f(v, 'library').innerHTML = lib.map((it, i) => `
     <article class="r-card ${i === sel.library ? 'sel' : ''} ${it.status === 'failed' ? 'failed' : ''} ${it.watched ? 'watched' : ''}" data-i="${i}">
       <div class="r-art" style="${it.image ? `background-image:url('${esc(it.image)}')` : ''}">${it.image ? '' : `<span>${esc(it.title)}</span>`}
@@ -2437,16 +3180,22 @@ function renderRecordings() {
     <li class="r-item ${it.status} ${i === sel.upcoming ? 'sel' : ''}" data-i="${i}">
       <div class="r-time">${dayLabel(it.start)}<b>${clock(it.start)}</b></div>
       <div class="r-what"><div class="r-name">${esc(it.title)}</div><div class="r-sub">${esc(it.channel)} ${esc(it.callSign ? it.callSign.replace(/(DT|LD|CD|LP|CA|D)\d*$/, '') : '')}${it.subtitle ? '  |  ' + esc(it.subtitle) : ''}</div>
-        ${it.status === 'recording' ? '<span class="chip live">Recording now</span>' : it.status === 'unavailable' ? '<span class="chip">Channel not available</span>' : ''}</div>
-      ${it.id ? `<button class="x" title="Don't record this" data-del="${esc(it.id)}">✕</button>` : '<span></span>'}
+        ${it.status === 'recording' ? '<span class="chip live">Recording now</span>' : it.status === 'unavailable' ? '<span class="chip">Channel not available</span>' : ''}${!it.id ? '<span class="chip">Part of a series</span>' : ''}</div>
+      <div class="r-acts">${i === sel.upcoming && it.id ? act('skip', "Don't record", it) : ''}</div>
     </li>`).join('') : '<li class="r-empty">Nothing scheduled.</li>';
 
   f(v, 'rules').innerHTML = lists.series.length ? lists.series.map((r, i) => `
     <li class="r-item ${i === sel.series ? 'sel' : ''}" data-i="${i}">
       <div class="r-what"><div class="r-name">${esc(r.title)}</div><div class="r-sub">${esc(r.channel)}  |  ${r.newOnly ? 'New episodes' : 'Every episode'}  |  ${r.keep ? `Keep newest ${r.keep}` : 'Keep all'}</div></div>
-      <button class="x" title="Stop recording this series" data-rule="${esc(r.id)}">✕</button>
-    </li>`).join('') : '<li class="r-empty">No series recordings. In the guide, press Shift R on a show.</li>';
-  if (lists.series.length && !prompts.pad) f(v, 'rules').insertAdjacentHTML('beforeend', '<li class="r-hint">K changes how many to keep  |  N new episodes only  |  Delete stops the series</li>');
+      <div class="r-acts">${i === sel.series ? act('keep', r.keep ? `Keeps newest ${r.keep}` : 'Keeps all', r) + act('newonly', r.newOnly ? 'New episodes only' : 'Every episode', r) + act('stop', 'Stop series', r) : ''}</div>
+    </li>`).join('') : '<li class="r-empty">No series recordings. In the guide, OK on a show to come, then Record series.</li>';
+  if (lists.series.length && !prompts.pad && !androidTV) f(v, 'rules').insertAdjacentHTML('beforeend', '<li class="r-hint">K changes how many to keep  |  N new episodes only  |  Delete stops the series</li>');
+  recRefocus();
+}
+
+function recHint(cur) {
+  if (androidTV && !prompts.pad) return 'OK for the actions, Left for the other lists';
+  return hints([['Enter', 'Enter', 'for the actions'], ...(resumable(cur) ? [['', 'Shift Enter', 'plays from the start']] : []), ['w', 'W', cur.watched ? 'unwatched' : 'watched'], ['', 'Delete', 'removes']]);
 }
 
 function wireRecordings() {
@@ -2457,23 +3206,19 @@ function wireRecordings() {
     state.recTab = b.dataset.tab;
     renderRecordings();
   });
-  v.addEventListener('click', async (e) => {
-    const del = e.target.closest('[data-del]');
-    const rule = e.target.closest('[data-rule]');
-    if (del || rule) {
-      try {
-        if (del) { await api().DeleteRecording(del.dataset.del); toast('Removed from the schedule'); }
-        if (rule) { await api().DeleteRule(rule.dataset.rule); toast('Series recording stopped'); }
-      } catch (err) {
-        toast(String(err && err.message ? err.message : err), 6000);
-      }
-      return loadDVR();
-    }
+  v.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-act]');
+    if (b) return recAct(b.dataset.act);
     const item = e.target.closest('[data-i]');
     if (item && state.recSelBy) {
       state.recSelBy[state.recTab || 'library'] = Number(item.dataset.i);
       renderRecordings();
     }
+    return null;
+  });
+  v.addEventListener('focusin', (e) => {
+    const b = e.target.closest('[data-act]');
+    if (b) recUI.act = b.dataset.act;
   });
   f(v, 'library').addEventListener('dblclick', (e) => {
     const card = e.target.closest('[data-i]');
@@ -2482,6 +3227,44 @@ function wireRecordings() {
       playRecording(it, resumable(it) ? it.position : 0);
     }
   });
+}
+
+// recAct does one of the selected item's actions.
+function recAct(act) {
+  const tab = state.recTab || 'library';
+  const it = recLists()[tab][(state.recSelBy || {})[tab] || 0];
+  if (!it) return null;
+  const fail = (err) => toast(String(err && err.message ? err.message : err), 6000);
+  switch (act) {
+    case 'play': return playRecording(it, resumable(it) ? it.position : 0);
+    case 'restart': return playRecording(it, 0);
+    case 'watched': return api().MarkWatched(it.id, !it.watched).then(loadDVR).catch(fail);
+    case 'keep': case 'newonly': {
+      const steps = [0, 3, 5, 10];
+      const u = act === 'keep' ? { keep: steps[(steps.indexOf(it.keep || 0) + 1) % steps.length], newOnly: !!it.newOnly } : { keep: it.keep || 0, newOnly: !it.newOnly };
+      return api().UpdateRule(it.id, u).then(loadDVR).catch(fail);
+    }
+    case 'delete': case 'skip': case 'stop': {
+      if (!it.id) return null;
+      if (!armed(act, it)) {
+        pendingDelete = `${act}:${it.id}`;
+        clearTimeout(pendingTimer);
+        pendingTimer = setTimeout(() => { pendingDelete = ''; if (state.view === 'recordings') renderRecordings(); }, 4000);
+        const what = act === 'delete' ? `delete ${it.title}` : act === 'stop' ? `stop recording ${it.title}` : `skip ${it.title}`;
+        if (recUI.zone !== 'actions') toast(`Press Delete again to ${what}`);
+        return renderRecordings();
+      }
+      pendingDelete = '';
+      clearTimeout(pendingTimer);
+      const done = act === 'stop' ? api().DeleteRule(it.id) : api().DeleteRecording(it.id);
+      return done.then(() => {
+        toast(act === 'delete' ? 'Deleted' : act === 'stop' ? 'Series recording stopped' : 'Removed from the schedule');
+        recZone('list');
+        return loadDVR();
+      }).catch(fail);
+    }
+    default: return null;
+  }
 }
 
 function recordingsKey(e) {
@@ -2494,62 +3277,92 @@ function recordingsKey(e) {
     state.recTab = REC_TABS[(i + (e.key === ']' ? 1 : REC_TABS.length - 1)) % REC_TABS.length][0];
     return renderRecordings();
   }
+  if (recUI.zone === 'menu') return recMenuKey(e);
+  if (recUI.zone === 'actions' && recActionsKey(e)) return undefined;
   const cols = tab === 'library' ? Math.max(1, Math.round(f($('#recordings'), 'library').clientWidth / 280)) : 1;
-  if ((e.key === 'ArrowUp' && (!list.length || sel[tab] < cols)) || (e.key === 'ArrowLeft' && (tab !== 'library' || !sel[tab]))) {
-    e.preventDefault();
-    return openDock();
-  }
-  if (!list.length) return;
+  if (e.key === 'ArrowUp' && (!list.length || sel[tab] < cols)) { e.preventDefault(); return openDock(); }
+  if (e.key === 'ArrowLeft' && (tab !== 'library' || sel[tab] % cols === 0)) { e.preventDefault(); return recZone('menu'); }
+  if (!list.length) return undefined;
   switch (e.key) {
-    case 'ArrowRight': if (tab === 'library') sel[tab] = Math.min(list.length - 1, sel[tab] + 1); break;
-    case 'ArrowLeft': if (tab === 'library') sel[tab] = Math.max(0, sel[tab] - 1); break;
+    case 'ArrowRight':
+      if (tab === 'library') sel[tab] = Math.min(list.length - 1, sel[tab] + 1);
+      else { e.preventDefault(); return recZone('actions', '-'); }
+      break;
+    case 'ArrowLeft': sel[tab] = Math.max(0, sel[tab] - 1); break;
     case 'ArrowDown': sel[tab] = Math.min(list.length - 1, sel[tab] + cols); break;
     case 'ArrowUp': sel[tab] = Math.max(0, sel[tab] - cols); break;
-    case 'Enter': {
+    case 'Enter':
       e.preventDefault();
-      const it = list[sel[tab]];
-      if (tab === 'library') playRecording(it, !e.shiftKey && resumable(it) ? it.position : 0);
-      return;
-    }
-    case 'w': case 'W':
-      if (tab === 'library') {
-        const it = list[sel[tab]];
-        api().MarkWatched(it.id, !it.watched).then(loadDVR);
-      }
-      return;
-    case 'k': case 'K': case 'n': case 'N':
-      if (tab === 'series') {
-        const r = list[sel[tab]];
-        const steps = [0, 3, 5, 10];
-        const u = e.key.toLowerCase() === 'k'
-          ? { keep: steps[(steps.indexOf(r.keep || 0) + 1) % steps.length], newOnly: !!r.newOnly }
-          : { keep: r.keep || 0, newOnly: !r.newOnly };
-        api().UpdateRule(r.id, u).then(loadDVR).catch((err) => toast(String(err), 6000));
-      }
-      return;
-    case 'Delete': case 'Backspace': {
+      // Shift Enter, on a keyboard, plays a recording from its start.
+      if (tab === 'library' && e.shiftKey) return playRecording(list[sel[tab]], 0);
+      return recZone('actions', '-');
+    case 'w': case 'W': return tab === 'library' ? recAct('watched') : undefined;
+    case 'k': case 'K': return tab === 'series' ? recAct('keep') : undefined;
+    case 'n': case 'N': return tab === 'series' ? recAct('newonly') : undefined;
+    case 'Delete': case 'Backspace':
       e.preventDefault();
-      const it = list[sel[tab]];
-      const id = it.id;
-      if (!id) return;
-      if (pendingDelete !== id) {
-        pendingDelete = id;
-        const what = tab === 'library' ? `delete ${it.title}` : tab === 'series' ? `stop recording ${it.title}` : `skip ${it.title}`;
-        toast(`Press Delete again to ${what}`);
-        setTimeout(() => { if (pendingDelete === id) pendingDelete = ''; }, 4000);
-        return;
-      }
-      pendingDelete = '';
-      const done = tab === 'series' ? api().DeleteRule(id) : api().DeleteRecording(id);
-      done.then(() => { toast('Done'); loadDVR(); }).catch((err) => toast(String(err), 6000));
-      return;
-    }
-    default: return;
+      return recAct(tab === 'library' ? 'delete' : tab === 'series' ? 'stop' : 'skip');
+    default: return undefined;
   }
   e.preventDefault();
   renderRecordings();
   const el = $(`#recordings .r-panel.on [data-i="${sel[tab]}"]`);
   if (el) el.scrollIntoView({ block: 'nearest' });
+  return undefined;
+}
+
+// recMenuKey: Up and Down pick a list (as tabs do), Right or OK goes into
+// it, Left (or Up from the first) to the dock.
+function recMenuKey(e) {
+  const i = REC_TABS.findIndex(([k]) => k === (state.recTab || 'library'));
+  switch (e.key) {
+    case 'ArrowUp': case 'ArrowDown': {
+      const j = i + (e.key === 'ArrowUp' ? -1 : 1);
+      if (j < 0) return openDock();
+      if (j >= REC_TABS.length) break;
+      state.recTab = REC_TABS[j][0];
+      renderRecordings();
+      break;
+    }
+    case 'ArrowRight': case 'Enter':
+      if (recLists()[state.recTab || 'library'].length) recZone('list');
+      break;
+    case 'ArrowLeft': return openDock();
+    default: return undefined;
+  }
+  e.preventDefault();
+  return undefined;
+}
+
+// recActionsKey: Left and Right along the actions, OK presses. Above the
+// library's grid, Down goes back to it and Up to the dock; in a list Up
+// and Down move to the item above or below, and Left from the first
+// action back to the item.
+function recActionsKey(e) {
+  const acts = recActs();
+  const el = document.activeElement;
+  const lib = (state.recTab || 'library') === 'library';
+  switch (e.key) {
+    case 'ArrowLeft': case 'ArrowRight': {
+      const next = neighbor(acts, el, e.key === 'ArrowLeft' ? -1 : 1);
+      if (next) focusEl(next);
+      else if (e.key === 'ArrowLeft' && !lib) recZone('list');
+      break;
+    }
+    case 'ArrowUp': case 'ArrowDown':
+      if (lib) {
+        if (e.key === 'ArrowUp') openDock(); else recZone('list');
+        break;
+      }
+      recZone('list');
+      return false; // and moves in the list
+    case 'Enter':
+      if (acts.includes(el)) el.click(); else recZone('actions');
+      break;
+    default: return false;
+  }
+  e.preventDefault();
+  return true;
 }
 
 const resumable = (it) => !!it && !it.watched && it.position > 30 && it.duration > 0 && it.position < it.duration - 60;
@@ -2568,7 +3381,6 @@ async function playRecording(it, from = 0) {
     const pb = await api().PlayRecording(it.id, from);
     if (token !== state.tuneToken) return;
     state.recOffset = pb.offset || 0;
-    video.controls = true;
     await play(pb, token);
   } catch (e) {
     if (token !== state.tuneToken) return;
@@ -2600,7 +3412,7 @@ async function hideChannel(ch) {
   state.lastHidden = ch.key;
   await saveAppSettings({ ...state.settings, hidden: [...hidden] });
   buildLineup();
-  toast(`Hid ${ch.number} ${ch.network || displayCall(ch)}. Press U to undo.`, 5000);
+  toast(`Hid ${ch.number} ${ch.network || displayCall(ch)}. ${androidTV && !prompts.pad ? 'Settings, Hidden channels shows it again.' : 'Press U to undo.'}`, 5000);
   if (state.view === 'guide') renderGuide();
 }
 
@@ -3304,6 +4116,7 @@ function saveRecordingProgress() {
 
 video.addEventListener('timeupdate', () => {
   if ($('#banner').classList.contains('show')) showTimeshift();
+  if (osd.open) renderTimeline();
   if (state.recording && Date.now() - progressTimer > 15000) {
     progressTimer = Date.now();
     saveRecordingProgress();
@@ -3312,6 +4125,14 @@ video.addEventListener('timeupdate', () => {
 video.addEventListener('pause', () => { if (state.recording) saveRecordingProgress(); });
 video.addEventListener('play', () => updatePlaybackState());
 video.addEventListener('pause', () => updatePlaybackState());
+// The controls stay while paused, and count down again once playing.
+for (const ev of ['play', 'pause', 'playing', 'emptied']) {
+  video.addEventListener(ev, () => {
+    if (!osd.open) return;
+    renderOSD();
+    osdTouch();
+  });
+}
 video.addEventListener('playing', () => {
   if (!state.recording && state.liveBaseline == null) state.liveBaseline = Math.max(0, liveEdge() - video.currentTime);
   applyCaptions();
@@ -3724,8 +4545,71 @@ function renderCrawl() {
   }
 }
 
+// ---------- weather view ----------
+// Its parts take the focus in turn, Up and Down, scrolling with it: the
+// alerts, the next 24 hours, the week, the maps. Left goes to Watch the
+// weather channel in the rail, when there is one, and from there to the
+// dock, as does Up from the first part.
+const wxUI = { at: 0 };
+const wxBlocks = () => $$('#weather .wx-main > .fx').filter(isShown);
+const wxWatch = () => $('#weather .wx-watch');
+
+function wireWeather() {
+  const v = $('#weather');
+  wxWatch().addEventListener('click', () => {
+    const ch = weatherChannel();
+    if (!ch) return;
+    if (!(state.current && state.current.weather && !state.recording)) tune(ch);
+    setView('tv');
+  });
+  $('.wx-main', v).addEventListener('focusin', (e) => {
+    const i = wxBlocks().indexOf(e.target);
+    if (i >= 0) wxUI.at = i;
+  });
+}
+
+function wxFocus() {
+  if (state.dock >= 0 || state.view !== 'weather') return;
+  const blocks = wxBlocks();
+  const i = Math.min(wxUI.at, blocks.length - 1);
+  if (i < 0) return void (isShown(wxWatch()) && focusEl(wxWatch()));
+  focusEl(blocks[i]);
+  if (i === 0) $('#weather .wx-main').scrollTop = 0;
+}
+
+function weatherKey(e) {
+  const el = document.activeElement;
+  const blocks = wxBlocks();
+  if (el === wxWatch()) {
+    switch (e.key) {
+      case 'ArrowRight': if (blocks.length) wxFocus(); break;
+      case 'ArrowLeft': case 'ArrowUp': openDock(); break;
+      case 'ArrowDown': break;
+      case 'Enter': el.click(); break;
+      default: return;
+    }
+    e.preventDefault();
+    return;
+  }
+  const i = blocks.indexOf(el);
+  switch (e.key) {
+    case 'ArrowUp':
+      if (i > 0) { wxUI.at = i - 1; wxFocus(); } else openDock();
+      break;
+    case 'ArrowDown':
+      if (i < 0) wxFocus();
+      else if (i < blocks.length - 1) { wxUI.at = i + 1; wxFocus(); }
+      break;
+    case 'ArrowLeft': if (isShown(wxWatch())) focusEl(wxWatch()); else openDock(); break;
+    case 'ArrowRight': if (i < 0) wxFocus(); break;
+    default: return;
+  }
+  e.preventDefault();
+}
+
 function renderWeather() {
   const v = $('#weather');
+  wxWatch().hidden = !weatherChannel();
   const wx = state.wx;
   if (!wx) {
     f(v, 'now').innerHTML = '<dl class="rail-stats"><div><dt>Weather</dt><dd>Loading</dd></div></dl>';
@@ -3789,6 +4673,8 @@ function renderWeather() {
   const bust = Math.floor(Date.now() / (4 * MIN));
   f(v, 'radar').src = `${state.boot.serverUrl}${wx.radar}?t=${bust}`;
   f(v, 'satellite').src = `${state.boot.serverUrl}${wx.satellite}?t=${bust}`;
+  // An alert that went had the focus, perhaps.
+  if (state.view === 'weather' && !v.contains(document.activeElement)) wxFocus();
 }
 
 // wxPrograms is the weather channel's guide: hour-long "Local Forecast" blocks

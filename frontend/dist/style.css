@@ -130,7 +130,7 @@ body.mode-tv #entry.show { opacity: 1; transform: none; }
 
 #banner {
   position: fixed; z-index: 30; left: 28px; right: 28px; bottom: 26px;
-  display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 30px;
+  display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 14px 30px;
   padding: 24px 28px 22px;
   background: linear-gradient(180deg, rgba(13,15,18,.86), rgba(7,8,10,.94));
   backdrop-filter: blur(20px) saturate(1.2); -webkit-backdrop-filter: blur(20px) saturate(1.2);
@@ -209,7 +209,10 @@ body.mode-guide #guide, body.mode-antenna #antenna, body.mode-settings #settings
 .tight .gd-title { -webkit-line-clamp: 1; font-size: clamp(30px, calc(5.2 * var(--vh)), 48px); }
 .tight .gd-meta { margin: 6px 0; }
 .tight .gd-desc { -webkit-line-clamp: 2; }
-.tight .gd-hint { display: none; }
+/* The program's picture makes way for its actions and the hint. */
+.tight .g-top { grid-template-columns: var(--pv-w) minmax(0, 1fr); }
+.tight .gd-art { display: none; }
+.tight .gd-desc, .tight .gd-hint { max-width: none; }
 
 .g-bar { height: 44px; padding: 0 28px; display: flex; align-items: center; justify-content: space-between; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .g-filters { display: flex; gap: 2px; height: 100%; }
@@ -259,10 +262,8 @@ body.mode-guide #guide, body.mode-antenna #antenna, body.mode-settings #settings
 .g-cell.past { opacity: .45; }
 .g-cell.empty { background: transparent; box-shadow: inset 0 0 0 1px var(--line); }
 .g-cell.empty .t { color: var(--faint); font-weight: 400; font-style: italic; }
-.g-cell.sel { background: var(--amber); box-shadow: none; opacity: 1; }
-.g-cell.sel .t, .g-cell.sel .s { color: var(--ink); }
+.g-cell.sel { background: var(--focus-fill); box-shadow: inset 0 0 0 1px var(--amber-2); opacity: 1; }
 .g-cell .tag { color: var(--teal); }
-.g-cell.sel .tag { color: var(--ink); }
 .g-now { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--amber); pointer-events: none; box-shadow: 0 0 14px rgba(255,178,36,.45); }
 .g-now span { position: absolute; top: 0; left: -5px; border: 6px solid transparent; border-top: 8px solid var(--amber); }
 
@@ -324,7 +325,7 @@ body.mode-guide #guide, body.mode-antenna #antenna, body.mode-settings #settings
 .a-table .r { text-align: right; } .a-table .c { text-align: center; }
 .a-table tr { cursor: pointer; transition: background .15s; }
 .a-table tbody tr:hover { background: var(--ink-2); }
-.a-table tr.sel { background: var(--ink-3); box-shadow: inset 3px 0 0 var(--amber); }
+.a-table tr.sel { background: var(--ink-3); box-shadow: inset 3px 0 0 var(--amber-2); }
 .a-table tr.dim td { opacity: .42; }
 .a-table .call { font: 600 18px var(--f-display); letter-spacing: .03em; }
 .a-table .sub { font-size: 11px; color: var(--muted); }
@@ -348,7 +349,7 @@ body.mode-guide #guide, body.mode-antenna #antenna, body.mode-settings #settings
    a controller: the focused row is filled and outlined in amber. */
 #settings { grid-template-rows: minmax(0, 1fr); }
 .s-main { display: grid; grid-template-rows: minmax(0, 1fr) auto; min-height: 0; max-width: 940px; }
-.s-list { overflow: auto; min-height: 0; padding: 2px 2px 48px; scrollbar-width: none; }
+.s-list { overflow: auto; min-height: 0; padding: 4px 2px 48px; scrollbar-width: none; }
 .s-list::-webkit-scrollbar { display: none; }
 .s-head { margin: 28px 0 10px 18px; font: 500 11px var(--f-mono); letter-spacing: .16em; text-transform: uppercase; color: var(--amber); }
 .s-head:first-child { margin-top: 2px; }
@@ -359,8 +360,7 @@ body.mode-guide #guide, body.mode-antenna #antenna, body.mode-settings #settings
   scroll-margin: 48px 0 24px;
 }
 body.mouse-active .s-row:hover { background: var(--ink-3); } /* not under a resting pointer */
-.s-row.focus { background: #1f1d18; box-shadow: inset 0 0 0 2px var(--amber), inset 6px 0 0 var(--amber); }
-body.dock-nav .s-row.focus { box-shadow: inset 0 0 0 1px var(--line-2); background: var(--ink-3); }
+.s-row.focus { background: var(--ink-3); box-shadow: inset 0 0 0 1px var(--line-2); }
 .s-label { min-width: 0; }
 .s-label b { display: block; font: 500 17px/1.25 var(--f-body); color: var(--paper); }
 .s-label small { display: block; margin-top: 3px; font-size: 13px; color: var(--muted); }
@@ -413,11 +413,12 @@ body:not(.has-dvr) #dock [data-view="recordings"] { display: none; }
 .glyph { height: 1.4em; width: auto; vertical-align: middle; margin: -.25em 0; opacity: .9; }
 body.pad-input #dock kbd { padding: 0; box-shadow: none; }
 #dock .glyph { height: 17px; margin: -3px 0; }
-#dock button.pick .glyph { filter: invert(1); }
 /* Picked with the arrow keys, from a remote or a controller. */
 body.dock-nav #dock { opacity: 1; transform: translate(-50%, 0); }
-#dock button.pick { background: var(--amber); color: var(--ink); }
-#dock button.pick kbd { color: var(--ink); box-shadow: inset 0 0 0 1px rgba(7,8,10,.35); }
+#dock button.pick kbd { color: var(--amber); }
+body.osd-open #dock { opacity: 1; transform: translate(-50%, 0); }
+/* Larger on a TV, where it's the way to every view. */
+body.android-tv #dock button { padding: 7px 15px 7px 11px; font-size: 13px; }
 
 #boot { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; background: radial-gradient(90% 70% at 50% 40%, #12151b, var(--ink) 70%); transition: opacity .9s .2s, visibility 0s 1.1s; }
 body:not(.booting) #boot { opacity: 0; visibility: hidden; }
@@ -437,11 +438,13 @@ body:not(.booting) #boot { opacity: 0; visibility: hidden; }
 @keyframes rise { from { opacity: 0; transform: translateY(6px) } }
 .boot-connect { display: grid; grid-template-columns: 2fr 1fr auto; gap: 10px; margin-top: 22px; }
 .boot-connect[hidden] { display: none; }
+.boot-field { display: grid; border-radius: 3px; }
 .boot-connect input {
-  background: var(--ink); border: 1px solid var(--line-2); border-radius: 3px; padding: 12px 14px;
+  min-width: 0; background: var(--ink); border: 1px solid var(--line-2); border-radius: 3px; padding: 12px 14px;
   font: 400 15px var(--f-mono); color: var(--paper); outline: none; -webkit-user-select: text; user-select: text;
 }
 .boot-connect input:focus { border-color: var(--amber); }
+.boot-hint { margin-top: 14px; font: 400 12px var(--f-mono); color: var(--faint); letter-spacing: .04em; min-height: 1.4em; }
 /* In a browser the address is the page's own (web.js). */
 .boot-connect input[readonly] { background: transparent; border-style: dashed; color: var(--muted); }
 
@@ -460,9 +463,9 @@ body:not(.booting) #boot { opacity: 0; visibility: hidden; }
 .gd-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
 .gd-actions:empty { display: none; }
 .act {
-  border: 0; cursor: pointer; padding: 7px 12px; border-radius: 3px; background: none;
+  border: 0; cursor: pointer; padding: 8px 13px; border-radius: 3px; background: none;
   box-shadow: inset 0 0 0 1px var(--line-2); color: var(--paper);
-  font: 500 11px var(--f-mono); letter-spacing: .1em; text-transform: uppercase;
+  font: 500 12px var(--f-mono); letter-spacing: .1em; text-transform: uppercase;
   display: inline-flex; align-items: center; gap: 7px;
 }
 .act:hover { box-shadow: inset 0 0 0 1px var(--paper); }
@@ -475,13 +478,13 @@ body:not(.booting) #boot { opacity: 0; visibility: hidden; }
 .g-cell.rec-on::after { animation: pulse 1.4s ease-in-out infinite; }
 body:not(.mode-guide) .g-cell.rec-on::after { animation: none; } /* hidden, so still */
 .g-cell.rec-x::after { background: transparent; box-shadow: inset 0 0 0 1.5px var(--red); }
-.g-cell.sel.rec::after { box-shadow: 0 0 0 2px var(--amber); }
+.g-cell.sel.rec::after { box-shadow: 0 0 0 2px var(--focus-fill); }
 @keyframes pulse { 50% { opacity: .35; } }
 
-.r-main { display: grid; min-height: 0; }
+.r-main { display: grid; grid-template-columns: minmax(0, 1fr); min-height: 0; }
 .r-panel { display: none !important; min-height: 0; }
 .r-panel.on { display: grid !important; }
-.r-lib.on { grid-template-rows: auto minmax(0, 1fr); gap: 24px; }
+.r-lib.on { grid-template-rows: auto minmax(0, 1fr); grid-template-columns: minmax(0, 1fr); gap: 24px; }
 .r-detail { display: grid; grid-template-columns: minmax(0, 1fr) min(34%, 420px); gap: 30px; min-height: var(--pip-h); align-items: end; }
 .r-detail .rd-title { font: 800 clamp(34px, calc(4 * var(--vw)), 54px)/.95 var(--f-display); margin: 6px 0 6px; }
 .r-detail .rd-kicker { font: 500 12px var(--f-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--amber); }
@@ -491,10 +494,10 @@ body:not(.mode-guide) .g-cell.rec-on::after { animation: none; } /* hidden, so s
 .r-detail .rd-art { align-self: stretch; aspect-ratio: 16 / 9; border-radius: 3px; background: var(--ink-2) center/cover no-repeat;
   -webkit-mask-image: linear-gradient(90deg, transparent, #000 35%); mask-image: linear-gradient(90deg, transparent, #000 35%); }
 .r-detail .rd-empty { font: 600 28px/1.15 var(--f-display); color: var(--muted); max-width: 30ch; }
-.r-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 18px; align-content: start; overflow: auto; min-height: 0; padding: 4px; scrollbar-width: thin; }
+.r-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 18px; align-content: start; overflow: auto; min-height: 0; padding: 7px; scrollbar-width: thin; }
 .r-card { background: var(--ink-2); border-radius: 3px; overflow: hidden; cursor: pointer; box-shadow: 0 0 0 1px var(--line); transition: box-shadow .15s, transform .15s; }
 .r-card:hover { box-shadow: 0 0 0 1px var(--line-2); }
-.r-card.sel { box-shadow: 0 0 0 2px var(--amber); transform: translateY(-2px); }
+.r-card.sel { box-shadow: 0 0 0 1px var(--amber-2); }
 .r-card.failed { opacity: .55; }
 .r-art { aspect-ratio: 16 / 9; background: linear-gradient(135deg, #2a2219, #0d0f12) center/cover no-repeat; display: grid; place-items: end start; }
 .r-art span { padding: 12px 14px; font: 800 26px/.95 var(--f-display); color: var(--amber); }
@@ -508,7 +511,7 @@ body:not(.mode-guide) .g-cell.rec-on::after { animation: none; } /* hidden, so s
 .r-list { list-style: none; margin: 0; padding: 0; gap: 2px; align-content: start; overflow: auto; max-width: 900px; scrollbar-width: thin; }
 .r-item { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 18px; align-items: center; padding: 14px 16px; border-radius: 3px; cursor: pointer; }
 .r-item:hover { background: var(--ink-2); }
-.r-item.sel { background: var(--ink-3); box-shadow: inset 3px 0 0 var(--amber); }
+.r-item.sel { background: var(--ink-3); box-shadow: inset 3px 0 0 var(--amber-2); }
 .r-item .r-name { font-size: 16px; }
 .r-item .r-time { font: 400 11px var(--f-mono); color: var(--muted); text-align: right; min-width: 64px; }
 .r-item .r-time b { display: block; font: 600 18px var(--f-display); color: var(--paper); letter-spacing: .02em; }
@@ -646,7 +649,96 @@ body.lite #stage { box-shadow: 0 0 0 1px var(--line-2); }
 body.lite .g-now, body.lite #toast { box-shadow: none; }
 body.lite #toast { border-left: 3px solid var(--amber); }
 body.lite #stage.tuning #static, body.lite #entry::after, body.lite .boot-mark, body.lite .boot-log li,
-body.lite .g-cell.rec-on::after { animation: none !important; }
+body.lite .g-cell.rec-on::after, body.lite .ob svg { animation: none !important; }
 body.lite .boot-mark { background: none; color: var(--paper); }
 /* The spinner turns in eight steps: eight redraws a second, not sixty. */
 body.lite .ps-spin { animation-timing-function: steps(8); }
+
+/* ---------- On-screen controls ---------- */
+/* OK on live TV (app.js, on-screen controls): the banner grows a timeline
+   and a row of buttons, and the dock shows above as the way to the views. */
+#banner .tl, #banner .osd-bar { grid-column: 1 / -1; }
+#banner:not(.osd) .tl, #banner:not(.osd) .osd-bar { display: none; }
+#banner.osd.tl-on .bn-progress { display: none; }
+#banner.osd .bn-desc { -webkit-line-clamp: 1; }
+#banner.osd .bn-next { margin-top: 8px; }
+/* The timeline: the program from its start to its end, what's aired of it,
+   what can be rewound (amber), the live edge (red) and where the picture
+   is. Left and Right skip while it has the focus. */
+.tl { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 18px; margin: 0 -12px; padding: 12px; border-radius: 3px; cursor: pointer; }
+.tl-t { font: 500 13px var(--f-mono); color: var(--muted); letter-spacing: .04em; min-width: 4.6em; white-space: nowrap; }
+.tl-t:last-child { text-align: right; }
+.tl-bar { position: relative; height: 6px; border-radius: 3px; background: var(--line-2); }
+.tl-bar i { position: absolute; top: 0; bottom: 0; left: 0; display: block; border-radius: 3px; }
+.tl-past { background: rgba(237, 230, 214, .2); }
+.tl-buf { background: var(--amber-2); }
+.tl-edge { width: 3px; margin-left: -1px; top: -5px !important; bottom: -5px !important; background: var(--red); border-radius: 1px !important; }
+.tl-head { width: 14px; height: 14px; top: 50% !important; margin: -7px 0 0 -7px; border-radius: 50% !important; background: var(--paper); box-shadow: 0 0 0 3px rgba(7, 8, 10, .75); }
+.tl-head b { display: none; position: absolute; bottom: 22px; left: 50%; transform: translateX(-50%); padding: 4px 7px; border-radius: 2px; background: var(--ink); box-shadow: inset 0 0 0 1px var(--amber-2); font: 500 13px/1 var(--f-mono); color: var(--paper); white-space: nowrap; }
+.tl:focus .tl-head { width: 20px; height: 20px; margin: -10px 0 0 -10px; background: var(--amber); }
+.tl:focus .tl-head b:not(:empty) { display: block; }
+.tl:focus .tl-bar { height: 8px; }
+/* The buttons: an icon over a label each. */
+.osd-bar { display: flex; gap: 6px; padding-top: 14px; border-top: 1px solid var(--line); }
+.ob {
+  flex: 0 1 118px; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 8px;
+  padding: 11px 6px 10px; border: 0; border-radius: 3px; background: none; color: var(--muted); cursor: pointer;
+}
+.ob svg { width: 28px; height: 28px; fill: currentColor; flex: none; }
+.ob span { max-width: 100%; font: 500 12px var(--f-mono); letter-spacing: .08em; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+body.mouse-active .ob:hover { color: var(--paper); background: var(--ink-3); }
+.ob.on svg { color: var(--amber); }
+.ob[data-act="record"] svg, .ob[data-act="live"].at svg { color: var(--red); }
+.ob[data-act="record"].on svg { animation: pulse 1.4s ease-in-out infinite; }
+
+/* ---------- Focus ---------- */
+/* One mark for wherever the remote, a controller or the arrow keys are, in
+   every view: an amber ring, a warm fill and a slight lift (Android TV's
+   focus system: an outline and a raise). Buttons, fields and blocks take
+   the page's focus (.fx, only ever from keys); the guide's grid, the lists
+   and the dock mark their pick with a class, only while their part of the
+   view has the focus (data-zone in app.js). The ring is drawn inside where
+   a scrolling box would clip it. */
+:root {
+  --ring: 0 0 0 3px var(--amber);
+  --ring-in: inset 0 0 0 3px var(--amber);
+  --focus-fill: #2a2216;
+  --lift: translateY(-2px);
+  --glow: 0 12px 28px rgba(0, 0, 0, .55);
+}
+body.lite { --glow: 0 0 0 0 transparent; }
+.fx { outline: none; }
+.fx:focus, #dock button.pick {
+  box-shadow: var(--ring), var(--glow); background-color: var(--focus-fill); color: var(--paper); transform: var(--lift);
+}
+/* A filled button keeps its fill, ringed apart from it. */
+.btn.fx:not(.ghost):focus { background-color: var(--amber); color: var(--ink); box-shadow: 0 0 0 2px var(--ink), 0 0 0 5px var(--amber), var(--glow); }
+.wx-main .fx:focus, .rail-preview label.fx:focus { box-shadow: var(--ring-in), var(--glow); }
+body:not(.dock-nav) #guide[data-zone="grid"] .g-cell.sel,
+body:not(.dock-nav) .s-row.focus,
+body:not(.dock-nav) #recordings[data-zone="list"] .r-item.sel,
+body:not(.dock-nav) #antenna[data-zone="table"] .a-table tr.sel {
+  box-shadow: var(--ring-in), var(--glow); background: var(--focus-fill); transform: var(--lift);
+}
+body:not(.dock-nav) #recordings[data-zone="list"] .r-card.sel { box-shadow: var(--ring), var(--glow); transform: var(--lift); }
+.g-cell.sel { z-index: 1; }
+.s-row.focus .s-value { color: var(--paper); }
+/* Where the focus goes back to when it's elsewhere in the view. */
+.rm-item.fx:focus { box-shadow: var(--ring-in), var(--glow); }
+.g-filters button.fx:focus { box-shadow: var(--ring-in); color: var(--amber); }
+.rail-preview label.fx { margin: -8px -10px; padding: 8px 10px; border-radius: 3px; }
+.wx-main > .fx { border-radius: 3px; }
+.wx-main .wx-block.fx, .wx-main .wx-days.fx, .wx-main .wx-maps.fx { padding: 10px 12px; margin: -10px -12px; }
+.wx-main { padding: 12px 20px 12px 14px; }
+.wx-watch { margin: 0 14px; justify-self: stretch; text-align: center; }
+
+/* ---------- Actions on a selected item ---------- */
+/* Recordings: the selected recording's buttons, and a list item's own. */
+.rd-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.rd-actions:empty { display: none; }
+.r-acts { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
+.act.armed { box-shadow: inset 0 0 0 1px var(--red); color: var(--red); }
+.act.fx.armed:focus { box-shadow: var(--ring), var(--glow); color: var(--red); }
+/* A field being typed in has the ring, not its row. */
+.boot-connect input:focus, .rail-preview input:focus, .s-row input:focus { box-shadow: var(--ring); border-color: var(--amber); }
+body:not(.dock-nav) .s-row.focus:focus-within { box-shadow: inset 0 0 0 1px var(--line-2); transform: none; }
