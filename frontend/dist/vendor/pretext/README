@@ -1,0 +1,3 @@
+Pretext 0.0.9 (https://github.com/chenglou/pretext), MIT: the JavaScript
+build from the npm package @chenglou/pretext, without type declarations
+and source maps. app.js measures captions with it.

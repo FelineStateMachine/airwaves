@@ -1,0 +1,28 @@
+<!doctype html>
+<!-- Library hero, 3840x1240. Steam lays the logo over the lower left, so that stays clear;
+     the now line and the tuned row sit in the middle. -->
+<meta charset="utf-8">
+<link rel="stylesheet" href="art.css">
+<style>
+  #art { width: 3840px; height: 1240px; }
+  #art::before {
+    content: ""; position: absolute; inset: 0;
+    background: radial-gradient(30% 70% at 56% 45%, rgba(255, 178, 36, .08), transparent 70%);
+  }
+  .guide {
+    left: 0; right: 0; top: 70px; bottom: 0;
+    -webkit-mask-image:
+      linear-gradient(to right, transparent 22%, #000 55%, #000 88%, rgba(0,0,0,.5)),
+      linear-gradient(to bottom, #000 55%, transparent);
+    -webkit-mask-composite: source-in; mask-composite: intersect;
+  }
+</style>
+<div class="art grain" id="art">
+  <div class="guide" id="g"></div>
+</div>
+<script type="module">
+  import { guide, ready } from "./art.js";
+  await ready();
+  guide(document.getElementById("g"), { u: 2.1, chw: 0, slot: 300, now: 3.2, ticks: true, t0: 17 * 60, cur: 3, sel: false, seed: 21 });
+  document.body.dataset.ready = "1";
+</script>

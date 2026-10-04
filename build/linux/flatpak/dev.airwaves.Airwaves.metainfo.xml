@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>dev.airwaves.Airwaves</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Airwaves</name>
+  <summary>Live over-the-air TV, the program guide and recordings</summary>
+  <description>
+    <p>
+      The TV for an Airwaves server: watch live over-the-air channels, browse
+      the program guide, schedule and play recordings, and explore antenna
+      reception.
+    </p>
+  </description>
+  <launchable type="desktop-id">dev.airwaves.Airwaves.desktop</launchable>
+  <developer id="dev.airwaves">
+    <name>FelineStateMachine</name>
+  </developer>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-10-03"/>
+  </releases>
+</component>

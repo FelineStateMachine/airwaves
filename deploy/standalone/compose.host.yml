@@ -1,0 +1,16 @@
+# Host networking, so Jellyfin, Channels DVR and the HDHomeRun app find the
+# emulated HDHomeRun on the LAN by themselves (UDP discovery on port 65001).
+# Linux only. Turn it on in .env, with the HDHomeRun itself:
+#   AIRWAVES_HDHR=on
+#   COMPOSE_FILE=compose.yml:compose.host.yml
+# Leave BIND unset with this file: airwavesd reaches the weather display on
+# 127.0.0.1.
+services:
+  airwavesd:
+    network_mode: host
+    ports: !reset []
+    environment:
+      AIRWAVES_LISTEN: :${PORT:-8089}
+      AIRWAVES_HDHR_LISTEN: :${HDHR_PORT:-5004}
+      AIRWAVES_HDHR_DISCOVERY: "on"
+      AIRWAVES_WEATHERSTAR_URL: http://127.0.0.1:${WEATHERSTAR_PORT:-8090}

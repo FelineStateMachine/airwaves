@@ -1,0 +1,6 @@
+# The image build needs only the Go module and the server's packages.
+*
+!go.mod
+!go.sum
+!cmd
+!internal

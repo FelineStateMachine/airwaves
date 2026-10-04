@@ -1,0 +1,76 @@
+{
+ "id": "UC_O58Rr2DOskJvs9bArpLkQ",
+ "channel": "The Library of Letourneau",
+ "channel_id": "UC_O58Rr2DOskJvs9bArpLkQ",
+ "title": "The Library of Letourneau - Videos",
+ "uploader_id": "@TheLibraryofLetourneau",
+ "_type": "playlist",
+ "entries": [
+  {
+   "_type": "url",
+   "ie_key": "Youtube",
+   "id": "9KaMhx-S0jo",
+   "url": "https://www.youtube.com/watch?v=9KaMhx-S0jo",
+   "title": "Streamers go to Jupiter to get more STUPIDER",
+   "duration": 594,
+   "view_count": 36000,
+   "timestamp": 1791039600,
+   "live_status": null
+  },
+  {
+   "_type": "url",
+   "ie_key": "Youtube",
+   "id": "ZAPEKtIcxsc",
+   "url": "https://www.youtube.com/watch?v=ZAPEKtIcxsc",
+   "title": "it wasnt glorp - Bits and Banter [08/12/2026]",
+   "duration": 6633,
+   "view_count": 47000,
+   "timestamp": 1788480000,
+   "live_status": null
+  },
+  {
+   "_type": "url",
+   "ie_key": "Youtube",
+   "id": "gEBsK4HzK_c",
+   "url": "https://www.youtube.com/watch?v=gEBsK4HzK_c",
+   "title": "Joey Chestnut's next competitive eating record",
+   "duration": 274,
+   "view_count": 29000,
+   "timestamp": 1770163200,
+   "live_status": null
+  },
+  {
+   "_type": "url",
+   "ie_key": "Youtube",
+   "id": "e4Db22BgiYY",
+   "url": "https://www.youtube.com/watch?v=e4Db22BgiYY",
+   "title": "not even the best mspainter in the band - Bits and Banter [06/11/2025]",
+   "duration": 5391,
+   "view_count": 52000,
+   "timestamp": 1759536000,
+   "live_status": null
+  },
+  {
+   "_type": "url",
+   "ie_key": "Youtube",
+   "id": "F6X_h3mL5K8",
+   "url": "https://www.youtube.com/watch?v=F6X_h3mL5K8",
+   "title": "Wes Anderson wishes so badly that he was European",
+   "duration": 93,
+   "view_count": 13000,
+   "timestamp": 1696377600,
+   "live_status": null
+  },
+  {
+   "_type": "url",
+   "ie_key": "Youtube",
+   "id": "5Pd0CEmiy_E",
+   "url": "https://www.youtube.com/watch?v=5Pd0CEmiy_E",
+   "title": "Northernlion recreates a Peppa Pig episode",
+   "duration": 76,
+   "view_count": 24000,
+   "timestamp": 1664841600,
+   "live_status": null
+  }
+ ]
+}

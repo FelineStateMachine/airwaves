@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Airwaves</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="mode-tv booting">
+  <div id="titlebar" aria-hidden="true"></div>
+
+  <!-- The TV. It moves into the guide preview and antenna PiP via CSS. -->
+  <div id="stage">
+    <video id="video" playsinline autoplay></video>
+    <div id="captions" aria-hidden="true"></div>
+    <div id="pstate" aria-hidden="true"></div>
+    <iframe id="wx" title="Local forecast" hidden></iframe>
+    <div id="static" aria-hidden="true"></div>
+    <div id="nosignal" hidden>
+      <div class="ns-bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+      <div class="ns-card">
+        <div class="ns-num" data-f="num"></div>
+        <div class="ns-call" data-f="call"></div>
+        <p class="ns-msg" data-f="msg"></p>
+      </div>
+    </div>
+  </div>
+
+  <div id="entry" aria-live="assertive"></div>
+
+  <div id="banner" aria-live="polite">
+    <div class="bn-chan">
+      <div class="bn-num" data-f="num"></div>
+      <div class="bn-call" data-f="call"></div>
+      <div class="bn-net" data-f="net"></div>
+      <div class="bn-logo" data-f="logo" hidden></div>
+    </div>
+    <div class="bn-now">
+      <div class="bn-kicker"><span class="bn-label">Now</span><span data-f="time"></span><span class="bn-shift" data-f="shift"></span><span class="chips" data-f="chips"></span></div>
+      <h2 class="bn-title" data-f="title"></h2>
+      <div class="bn-ep" data-f="ep"></div>
+      <div class="bn-progress"><i data-f="progress"></i></div>
+      <p class="bn-desc" data-f="desc"></p>
+      <div class="bn-next"><span class="bn-label">Next</span><span data-f="next"></span></div>
+      <div class="bn-note" data-f="note"></div>
+    </div>
+    <div class="bn-signal">
+      <div class="meter big" data-f="meter"></div>
+      <div class="bn-tier" data-f="tier"></div>
+      <div class="bn-tx" data-f="tx"></div>
+      <div class="bn-atsc3" data-f="atsc3"></div>
+    </div>
+  </div>
+
+  <!-- Guide -->
+  <section id="guide" class="view" aria-label="Program guide">
+    <div class="g-top">
+      <div class="g-preview" aria-hidden="true"></div>
+      <article class="g-detail">
+        <div class="gd-kicker" data-f="kicker"></div>
+        <h1 class="gd-title" data-f="title"></h1>
+        <div class="gd-ep" data-f="ep"></div>
+        <div class="gd-meta" data-f="meta"></div>
+        <p class="gd-desc" data-f="desc"></p>
+        <div class="gd-actions" data-f="actions"></div>
+        <div class="gd-hint" data-f="hint"></div>
+      </article>
+      <div class="gd-art" data-f="art"></div>
+    </div>
+    <div class="g-bar">
+      <div class="g-filters" role="tablist"></div>
+      <div class="g-status" data-f="status"></div>
+    </div>
+    <div class="g-grid">
+      <div class="g-head">
+        <div class="g-day" data-f="day"></div>
+        <div class="g-ticks"></div>
+      </div>
+      <div class="g-rows" tabindex="-1"></div>
+      <div class="g-now" aria-hidden="true"><span></span></div>
+    </div>
+  </section>
+
+  <!-- Reception -->
+  <section id="antenna" class="view railed" aria-label="Reception">
+    <nav class="rail">
+      <div class="rail-previewing" data-f="previewing" hidden>
+        <dl class="rail-stats" data-f="pvplace"></dl>
+        <button type="button" class="btn" data-act="copy">Copy summary</button>
+        <button type="button" class="btn ghost" data-act="back">Back to my setup</button>
+      </div>
+      <div class="rail-menu" data-f="presets" role="radiogroup" aria-label="Antenna"></div>
+      <dl class="rail-stats" data-f="stats"></dl>
+      <form class="rail-preview" data-f="preview" autocomplete="off">
+        <label>Preview a ZIP code <input name="zip" inputmode="numeric" maxlength="5" placeholder="80302"></label>
+      </form>
+    </nav>
+    <div class="main a-body">
+      <div class="a-left">
+        <div class="radar-box"><svg class="radar" viewBox="-226 -226 452 452" role="img" aria-label="Transmitter map"></svg></div>
+        <div class="a-profile">
+          <div class="ap-head" data-f="phead"></div>
+          <svg class="ap-svg" viewBox="0 0 600 180" preserveAspectRatio="none"></svg>
+          <div class="ap-foot" data-f="pfoot"></div>
+        </div>
+      </div>
+      <div class="a-right">
+        <div class="a-tablewrap">
+          <table class="a-table">
+            <thead><tr>
+              <th>Transmitter</th><th>RF</th><th>Carries</th><th class="r">Dist</th><th class="r">ERP</th>
+              <th class="c" title="Noise margin, indoor">In</th><th class="c" title="Noise margin, attic">Attic</th><th class="c" title="Noise margin, rooftop">Roof</th>
+            </tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="a-nextgen" data-f="nextgen"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Weather -->
+  <section id="weather" class="view railed" aria-label="Weather">
+    <nav class="rail"><div class="wx-now" data-f="now"></div></nav>
+    <div class="main wx-main">
+      <div class="wx-alerts" data-f="alerts"></div>
+      <div class="wx-block">
+        <div class="wx-label">Next 24 hours</div>
+        <svg class="wx-chart" data-f="chart" viewBox="0 0 960 200" preserveAspectRatio="none"></svg>
+        <div class="wx-hours" data-f="hours"></div>
+      </div>
+      <div class="wx-days" data-f="days"></div>
+      <div class="wx-maps">
+        <figure><img data-f="radar" alt=""><figcaption>Radar, last hour</figcaption></figure>
+        <figure><img data-f="satellite" alt=""><figcaption>Satellite</figcaption></figure>
+      </div>
+    </div>
+  </section>
+
+  <!-- Recordings -->
+  <section id="recordings" class="view railed" aria-label="Recordings">
+    <nav class="rail"><div class="rail-menu" data-f="menu"></div></nav>
+    <div class="main r-main">
+      <div class="r-panel r-lib" data-panel="library">
+        <article class="r-detail" data-f="detail"></article>
+        <div class="r-grid" data-f="library"></div>
+      </div>
+      <ol class="r-panel r-list" data-panel="upcoming" data-f="upcoming"></ol>
+      <ul class="r-panel r-list" data-panel="series" data-f="rules"></ul>
+    </div>
+  </section>
+
+  <!-- Settings: one list of rows for a remote or a controller (app.js) -->
+  <section id="settings" class="view railed" aria-label="Settings">
+    <nav class="rail"><div class="rail-menu s-index" data-f="index" aria-hidden="true"></div></nav>
+    <div class="main s-main">
+      <div class="s-list" data-f="list" role="list"></div>
+      <div class="s-hint" data-f="hint"></div>
+    </div>
+  </section>
+
+  <nav id="dock" aria-label="Views">
+    <button data-view="tv"><kbd data-key="Escape" data-label="Esc">Esc</kbd>TV</button>
+    <button data-view="guide"><kbd data-key="g" data-label="G">G</kbd>Guide</button>
+    <button data-view="recordings"><kbd data-key="d" data-label="D">D</kbd>Recordings</button>
+    <button data-view="weather"><kbd data-key="w" data-label="W">W</kbd>Weather</button>
+    <button data-view="antenna"><kbd data-key="a" data-label="A">A</kbd>Reception</button>
+    <button data-view="settings"><kbd data-key="," data-label=",">,</kbd>Settings</button>
+  </nav>
+
+  <div id="boot">
+    <div class="boot-inner">
+      <div class="boot-mark">Airwaves</div>
+      <div class="boot-sub" data-f="sub">Over-the-air television</div>
+      <ol class="boot-log"></ol>
+      <form class="boot-connect" hidden autocomplete="off">
+        <input name="server" placeholder="Server address" autocapitalize="off" spellcheck="false">
+        <input name="token" type="password" placeholder="Token, if set">
+        <button class="btn">Connect</button>
+      </form>
+    </div>
+  </div>
+
+  <div id="crawl" aria-live="polite"><span data-f="text"></span></div>
+
+  <div id="toast" role="status"></div>
+
+  <script src="vendor/hls.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,3753 @@
+'use strict';
+
+// ---------- helpers ----------
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+const f = (root, name) => root.querySelector(`[data-f="${name}"]`);
+const api = () => window.go && window.go.main && window.go.main.App;
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const MIN = 60_000;
+const floor30 = (t) => Math.floor(t / (30 * MIN)) * 30 * MIN;
+// One formatter for every time shown: toLocaleTimeString makes a new one
+// each call, which is most of the guide's build time.
+const clockFormat = new Intl.DateTimeFormat([], { hour: 'numeric', minute: '2-digit' });
+const clock = (t) => clockFormat.format(new Date(t));
+const COMPASS = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+const compass = (deg) => COMPASS[Math.round(deg / 22.5) % 16];
+
+const TIERS = ['unknown', 'unlikely', 'weak', 'fair', 'good', 'strong'];
+const TIER_LABEL = { strong: 'Strong', good: 'Good', fair: 'Fair', weak: 'Weak', unlikely: 'Unlikely', unknown: 'Unknown' };
+const TIER_COLOR = { strong: 'var(--t-strong)', good: 'var(--t-good)', fair: 'var(--t-fair)', weak: 'var(--t-weak)', unlikely: 'var(--t-unlikely)', unknown: 'var(--t-unlikely)' };
+const rankOf = (t) => Math.max(0, TIERS.indexOf(t));
+const receivable = (t) => t === 'strong' || t === 'good' || t === 'fair';
+const EARTH_M = 8_495_000; // 4/3 effective earth radius
+
+function log(level, msg) {
+  try { api().Log(level, String(msg)); } catch { /* not in Wails */ }
+}
+
+function meter(tier, big) {
+  const lit = rankOf(tier);
+  let html = '';
+  for (let i = 1; i <= 5; i++) html += `<i class="${i <= lit ? 'on' : ''}"></i>`;
+  return `<span class="meter${big ? ' big' : ''}" style="--c:${TIER_COLOR[tier] || TIER_COLOR.unknown}">${html}</span>`;
+}
+
+let toastTimer = 0;
+function toast(msg, ms = 3500, html = false) {
+  const t = $('#toast');
+  if (html) t.innerHTML = msg; else t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), ms);
+}
+
+// Lite mode is for Linux, where the app is WebKitGTK on a TV box: the same
+// look without the blurs, film grain, big soft shadows and animations that
+// cost a weak CPU and GPU most (style.css), and less video kept in memory.
+// AIRWAVES_LITE=1 or 0 (in Boot) turns it on or off anywhere.
+let lite = false;
+function setLite(on) {
+  lite = on;
+  document.body.classList.toggle('lite', on);
+}
+setLite(/Linux/.test(navigator.userAgent) && !/Android/.test(navigator.userAgent));
+
+// ---------- state ----------
+const state = {
+  boot: null,
+  settings: null,
+  presets: [],
+  report: null,
+  guide: null,
+  byFacility: new Map(), // facilityId -> best station
+  bySite: new Map(),     // "facilityId:rf" -> station
+  lineup: [],
+  custom: [],      // the server's own channels: the weather channel, folder, Jellyfin and YouTube channels
+  current: null,
+  previous: null,
+  note: '',
+  view: 'tv',
+  tuneToken: 0,
+  hls: null,
+  entry: '',
+  entryTimer: 0,
+  bannerTimer: 0,
+  guideFilter: 'all',
+  gStart: 0,
+  gSpan: 150,
+  gRow: 0,
+  gTime: 0,
+  aSel: null,
+  tuners: [],
+  info: null,      // backend: local engine or a server
+  config: null,    // location the lineup is built for
+  dvr: null,       // recording state from the server
+  dvrKeys: new Map(), // "7.1@1791058239" -> upcoming item
+  recording: null, // recording being played instead of live TV
+  captionsFor: null, // captions turned off or on for one program: { key, on }
+  recTab: 'library',
+  recSelBy: null,
+  dock: -1,        // dock button picked with the arrow keys, or -1
+};
+
+const video = $('#video');
+const stage = $('#stage');
+
+// ---------- data ----------
+async function scan(refresh) {
+  const snap = await api().Scan(refresh);
+  state.report = snap.report;
+  state.guide = snap.guide || { programs: {} };
+  // The server's own channels, with the details set on its admin page. The
+  // weather channel plays here, from the WeatherStar display; the others'
+  // schedules join the guide like a station's, under their own guide id,
+  // their category counting as a genre of each program. A server from
+  // before the weather channel was listed here sends no list, or channels
+  // without a kind: then the weather channel is the old WX.
+  const listed = Array.isArray(snap.custom) && snap.custom.every((c) => c.kind);
+  state.custom = (snap.custom || []).map((c) => {
+    const ch = ownChannel(c);
+    if (!ch.weather) {
+      const genres = categoryGenres(ch.category);
+      state.guide.programs[ch.guideId] = (c.programs || []).map((p) => (genres.length ? { ...p, genres: [...new Set([...(p.genres || []), ...genres])] } : p));
+    }
+    return ch;
+  });
+  if (!listed && state.info.weatherStar && !state.custom.some((c) => c.weather)) state.custom.unshift(OLD_WX);
+  indexData();
+  await migrateKeys();
+  buildLineup();
+}
+
+function indexData() {
+  state.byFacility.clear();
+  state.bySite.clear();
+  for (const s of state.report.stations) {
+    if (!state.byFacility.has(s.facilityId)) state.byFacility.set(s.facilityId, s);
+    state.bySite.set(`${s.facilityId}:${s.rfChannel}`, s);
+  }
+  for (const c of state.report.channels) c.key = `${c.number}|${c.callSign}`;
+  const progs = (state.guide && state.guide.programs) || {};
+  for (const list of Object.values(progs)) {
+    for (const p of list) { p._s = Date.parse(p.start); p._e = Date.parse(p.end); }
+  }
+}
+
+// ---------- the server's own channels ----------
+// Keys (for favorites and hidden channels) stay with a channel through a new
+// number or name: the weather channel has one key, and a custom channel's
+// carries its name as well as its number (migrateKeys follows either).
+const WEATHER_KEY = 'weather';
+const OWN_TIER = { indoor: 'strong', attic: 'strong', rooftop: 'strong' };
+
+// A custom channel's category counts as these genres for its programs, so
+// the guide's filters find it; categories with no filter of their own get
+// one while a channel has them (guideFilters).
+const CATEGORY_GENRES = {
+  Sports: ['sports'], Movies: ['movie'], News: ['news'], Family: ['family'], Kids: ['kids', 'family'],
+  Music: ['music'], Pets: ['pets'], Gaming: ['gaming'], Documentary: ['documentary'], Weather: ['weather'],
+};
+const categoryGenres = (category) => CATEGORY_GENRES[category] || [];
+
+// ownChannel is a channel the server lists as its own, for the lineup. Its
+// call sign is the short label (call); its name stands where a station's
+// network does.
+function ownChannel(c) {
+  const [major, minor] = c.number.split('.').map(Number);
+  const weather = c.kind === 'weather';
+  return {
+    key: weather ? WEATHER_KEY : `${c.number}|custom|${c.name}`,
+    number: c.number, major: major || 0, minor: minor || 0, name: c.name, network: c.name,
+    call: c.callSign || '', callSign: c.callSign || '', baseCall: c.callSign || '',
+    kind: c.kind || 'folder', category: c.category || 'Other', description: c.description || '',
+    logo: c.logo ? state.boot.serverUrl + c.logo : '',
+    own: true, weather, custom: !weather, guideId: weather ? '' : `custom:${c.number}`, tier: OWN_TIER,
+  };
+}
+
+// OLD_WX is the weather channel of a server from before it listed it.
+const OLD_WX = {
+  key: WEATHER_KEY, number: 'WX', major: 0, minor: 0, name: 'Airwaves Weather', network: 'Local Forecast',
+  call: 'WX', callSign: 'WX', baseCall: 'WX', kind: 'weather', category: 'Weather', description: '', logo: '',
+  own: true, weather: true, custom: false, guideId: '', tier: OWN_TIER,
+};
+
+const weatherChannel = () => state.custom.find((c) => c.weather) || null;
+
+// migrateKeys moves saved favorites and hidden channels to where the
+// server's own channels are now: the weather channel's from the old WX key,
+// and a custom channel's to its current number and name (found by name, or
+// else by number). Keys of channels not listed now are kept for when they
+// are. A saved last channel of WX becomes the weather channel's number, and
+// one no longer in use the new number of the custom channel a saved key
+// names with it.
+async function migrateKeys() {
+  const s = state.settings;
+  const custom = state.custom.filter((c) => !c.weather);
+  const known = new Set([...state.custom, ...state.report.channels].map((c) => c.key));
+  const fix = (k) => {
+    if (k === 'WX|WX') return WEATHER_KEY;
+    if (known.has(k)) return k;
+    const [num, kind, ...rest] = String(k).split('|');
+    if (kind !== 'custom') return k;
+    const name = rest.join('|').toLowerCase();
+    const named = name ? custom.filter((c) => c.name.toLowerCase() === name) : [];
+    if (named.length === 1) return named[0].key;
+    const numbered = custom.find((c) => numberKey(c) === numberKey({ number: num }));
+    return numbered ? numbered.key : k;
+  };
+  const favorites = [...new Set((s.favorites || []).map(fix))];
+  const hidden = [...new Set((s.hidden || []).map(fix))];
+  const wx = weatherChannel();
+  let lastChannel = s.lastChannel;
+  const numbers = new Set([...state.custom, ...state.report.channels].map((c) => c.number));
+  if (lastChannel === 'WX' && wx) lastChannel = wx.number;
+  else if (lastChannel && !numbers.has(lastChannel)) {
+    const old = [...(s.favorites || []), ...(s.hidden || [])].find((k) => k.startsWith(`${lastChannel}|custom|`));
+    const now = old && state.custom.find((c) => c.key === fix(old));
+    if (now) lastChannel = now.number;
+  }
+  const same = (a, b) => a.length === (b || []).length && a.every((k, i) => k === b[i]);
+  if (same(favorites, s.favorites) && same(hidden, s.hidden) && lastChannel === s.lastChannel) return;
+  log('info', 'settings: moved saved channels to their current numbers');
+  try {
+    await saveAppSettings({ ...s, favorites, hidden, lastChannel });
+  } catch (e) {
+    log('warn', `settings: ${e}`);
+    state.settings = { ...s, favorites, hidden, lastChannel };
+  }
+}
+
+const isFav = (ch) => !!ch && (state.settings.favorites || []).includes(ch.key);
+const isHidden = (ch) => !!ch && (state.settings.hidden || []).includes(ch.key);
+
+// numberKey is a channel number's value: "1.05" and "1.5" are one number.
+function numberKey(c) {
+  const [major, minor] = String(c.number).split('.').map((x) => parseInt(x, 10) || 0);
+  return `${major}.${minor}`;
+}
+const byNumber = (a, b) => (a.major - b.major) || (a.minor - b.minor);
+
+// buildLineup is the channels to show, by number: the server's own and the
+// antenna channels expected at this antenna, less those hidden. A custom
+// channel takes the place of an antenna channel with its number, as it does
+// on the server, which plays it for that number.
+function buildLineup() {
+  const preset = state.settings.antenna;
+  const taken = new Set(state.custom.map(numberKey));
+  const antenna = state.report.channels.filter((c) => !taken.has(numberKey(c)) && !isHidden(c) && (state.settings.showAll || receivable(c.tier && c.tier[preset])));
+  state.lineup = [...state.custom.filter((c) => !isHidden(c)), ...antenna].sort(byNumber);
+  if (state.current) state.current = state.lineup.find((c) => c.key === state.current.key) || state.current;
+}
+
+const programsFor = (ch) => (ch && ch.weather ? wxPrograms() : (ch && ch.guideId && state.guide && state.guide.programs[ch.guideId]) || []);
+const airingAt = (ch, t) => programsFor(ch).find((p) => p._s <= t && t < p._e);
+const nextAfter = (ch, t) => programsFor(ch).find((p) => p._s > t);
+const stationFor = (ch) => ch && state.byFacility.get(ch.facilityId);
+// displayCall is a channel's short label: a station's call sign, or an own
+// channel's call sign, "Airwaves" when it has none.
+const displayCall = (ch) => (ch && ch.own ? ch.call || 'Airwaves' : (ch && (ch.baseCall || ch.callSign)) || '');
+
+function findChannel(number) {
+  if (!number) return null;
+  const n = number;
+  return state.lineup.find((c) => c.number === n)
+    || state.lineup.find((c) => c.major === Number(n) && (c.minor === 1 || c.minor === 0))
+    || state.report.channels.find((c) => c.number === n)
+    || state.custom.find((c) => c.number === n);
+}
+
+// ---------- boot ----------
+function bootLog(msg, err) {
+  const li = document.createElement('li');
+  li.textContent = msg;
+  if (err) li.className = 'err';
+  const ol = $('.boot-log');
+  ol.append(li);
+  while (ol.children.length > 7) ol.firstChild.remove();
+}
+
+async function init() {
+  wireKeys();
+  wireDock();
+  wireMouse();
+  wireGuide();
+  wireAntenna();
+  wireSettings();
+  wireRecordings();
+  wirePads();
+  wireMediaSession();
+  renderHints();
+  // Keys work from launch, without a click first.
+  window.focus();
+  if (document.activeElement && document.activeElement !== document.body && !document.activeElement.matches(TEXT_INPUT)) document.activeElement.blur();
+  if (!api()) {
+    bootLog('Wails runtime not found. Run this page inside the Airwaves app.', true);
+    return;
+  }
+  window.runtime.EventsOn('progress', (msg) => {
+    if (document.body.classList.contains('booting')) bootLog(msg);
+  });
+  applyBoot(await api().Boot());
+  if (!state.settings.server) return showConnect('');
+  f($('#boot'), 'sub').textContent = `Connecting to ${state.settings.server}`;
+  try {
+    if (state.boot.error) throw new Error(state.boot.error);
+    await scan(false);
+  } catch (e) {
+    return showConnect(String(e && e.message ? e.message : e));
+  }
+  f($('#boot'), 'sub').textContent = state.info.name;
+  for (const w of state.report.warnings || []) bootLog(w, true);
+  bootLog(`Ready: ${state.lineup.length} channels you can likely receive`);
+  setTimeout(() => document.body.classList.remove('booting'), 700);
+  // Gone once faded out, so its title stops animating.
+  setTimeout(() => { $('#boot').hidden = true; }, 700 + 1200);
+
+  renderAntenna();
+  renderSettings();
+  const view = state.boot.view;
+  const start = findChannel(state.settings.lastChannel) || state.lineup.find((c) => c.major >= 2) || state.lineup[0];
+  if (state.info.playback) toast(`Playback unavailable: ${state.info.playback}`, 8000);
+  if (start) tune(start, { quiet: !!view && view !== 'tv' });
+  if (view === 'info') {
+    // Pinned banner, for screenshots.
+    showBanner();
+    clearTimeout(state.bannerTimer);
+  } else if (view) setView(view);
+  setInterval(tick, 30_000);
+  setInterval(() => scan(false).then(renderAll).catch((e) => log('warn', e)), 30 * MIN);
+  setInterval(() => { if (state.view === 'guide' || state.view === 'recordings') loadDVR(); }, MIN);
+  setInterval(loadWeather, 2 * MIN);
+  loadDVR();
+  loadWeather();
+}
+
+// showConnect asks for the server address on first launch or when the
+// configured server cannot be reached.
+function showConnect(err) {
+  const form = $('.boot-connect');
+  f($('#boot'), 'sub').textContent = 'Connect to your Airwaves server';
+  if (err) bootLog(err, true);
+  form.elements.server.value = state.settings.server || '';
+  form.elements.token.value = state.settings.token || '';
+  form.hidden = false;
+  form.elements.server.focus();
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const server = form.elements.server.value.trim();
+    if (!server) return;
+    bootLog(`Connecting to ${server}`);
+    const b = await api().SaveSettings({ ...state.settings, server, token: form.elements.token.value });
+    if (b.error) return bootLog(b.error, true);
+    location.reload();
+  };
+}
+
+function applyBoot(b) {
+  state.boot = b;
+  state.settings = b.settings;
+  state.presets = b.presets;
+  state.info = b.info || { name: '', tuner: {}, dvr: false };
+  state.config = b.config || {};
+  document.body.classList.toggle('has-dvr', !!state.info.dvr);
+  // A server without an antenna (custom channels only) has no reception.
+  $('#dock [data-view="antenna"]').style.display = state.info.antenna === false ? 'none' : '';
+  if (b.lite === '1' || b.lite === '0') setLite(b.lite === '1');
+  applyScale();
+}
+
+// ---------- recordings ----------
+async function loadDVR() {
+  if (!state.info || !state.info.dvr) return;
+  try {
+    state.dvr = await api().DVR();
+  } catch (e) {
+    log('warn', `dvr: ${e}`);
+    return;
+  }
+  state.dvrKeys = new Map((state.dvr.upcoming || []).map((it) => [it.key, it]));
+  if (state.view === 'guide') renderGuide();
+  if (state.view === 'recordings') renderRecordings();
+}
+
+const airingKey = (ch, p) => `${ch.number}@${Math.floor(p._s / 1000)}`;
+
+function seriesRuleFor(ch, p) {
+  return p && p.seriesId && state.dvr && (state.dvr.rules || []).find((r) => r.kind === 'series' && r.seriesId === p.seriesId && r.channel === ch.number);
+}
+
+function renderAll() {
+  renderBanner();
+  if (state.view === 'guide') renderGuide();
+  renderAntenna();
+  renderSettings();
+}
+
+function tick() {
+  renderBanner();
+  if (state.view === 'guide') renderGuide();
+  applyCaptions(); // a new program may want them otherwise
+}
+
+// ---------- views ----------
+function setView(v) {
+  if (state.dock >= 0) closeDock();
+  if (v === state.view) return;
+  const prev = state.view;
+  state.view = v;
+  document.body.classList.remove(`mode-${prev}`);
+  document.body.classList.add(`mode-${v}`);
+  $$('#dock button').forEach((b) => b.classList.toggle('on', b.dataset.view === v));
+  if (v === 'guide') { openGuide(); loadDVR(); }
+  if (v === 'recordings') { renderRecordings(); loadDVR(); }
+  if (v === 'weather') {
+    renderWeather();
+    loadWeather();
+    if (state.info.weatherStar && !(state.current && state.current.weather)) {
+      state.wxPreview = true;
+      video.muted = true;
+      showWX(true, true);
+    }
+  }
+  if (prev === 'weather' && state.wxPreview) {
+    state.wxPreview = false;
+    video.muted = !!state.userMuted;
+    if (!(state.current && state.current.weather)) showWX(false);
+  }
+  if (v === 'antenna') renderAntenna();
+  if (v === 'settings') openSettings();
+}
+
+function wireDock() {
+  $$('#dock button').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view)));
+  $('#dock button[data-view="tv"]').classList.add('on');
+  stage.addEventListener('click', () => {
+    if (state.view === 'weather' && state.wxPreview) tune(weatherChannel());
+    if (state.view !== 'tv') setView('tv');
+  });
+  stage.addEventListener('dblclick', () => { if (state.view === 'tv') toggleFullscreen(); });
+}
+
+let mouseTimer = 0;
+function wireMouse() {
+  // WebKitGTK focuses a button when it is clicked, and Enter or Space then
+  // pressed it again besides doing what the key does here. Clicks leave
+  // the focus where it was, as on a Mac.
+  document.addEventListener('mousedown', (e) => { if (e.target.closest('button')) e.preventDefault(); });
+  // Only a pointer that really moved counts. WebKit also sends moves (and
+  // mouseenter) when content appears under a pointer left still, as on a
+  // TV where it rests wherever it was; the banner then never hid.
+  document.addEventListener('mousemove', (e) => {
+    if (!e.movementX && !e.movementY) return;
+    document.body.classList.add('mouse-active');
+    clearTimeout(mouseTimer);
+    mouseTimer = setTimeout(() => document.body.classList.remove('mouse-active'), 2500);
+    if (state.view === 'tv' && e.clientY > window.innerHeight - 140) showBanner();
+  });
+  $('#banner').addEventListener('mouseenter', () => {
+    if (document.body.classList.contains('mouse-active')) clearTimeout(state.bannerTimer);
+  });
+  $('#banner').addEventListener('mouseleave', () => {
+    if (document.body.classList.contains('mouse-active')) hideBannerSoon();
+  });
+}
+
+async function toggleFullscreen() {
+  const rt = window.runtime;
+  if (!rt) return;
+  if (await rt.WindowIsFullscreen()) rt.WindowUnfullscreen(); else rt.WindowFullscreen();
+}
+
+// ---------- tuning & playback ----------
+async function tune(ch, { quiet = false } = {}) {
+  if (!ch) return;
+  if (state.recording) saveRecordingProgress();
+  if (state.current && state.current.key !== ch.key) state.previous = state.current;
+  state.current = ch;
+  state.note = '';
+  state.recording = null;
+  video.controls = false;
+  const token = ++state.tuneToken;
+  if (!quiet) showBanner(); else renderBanner();
+  stage.classList.add('tuning');
+  $('#nosignal').hidden = true;
+  showWX(!!ch.weather);
+  if (ch.weather) {
+    resetPlayer();
+    api().StopTV();
+    setTimeout(() => stage.classList.remove('tuning'), 400);
+    return renderBanner();
+  }
+  try {
+    const pb = await api().Tune(ch.number);
+    if (token !== state.tuneToken) return;
+    state.note = pb.note || '';
+    await play(pb, token);
+  } catch (e) {
+    if (token !== state.tuneToken) return;
+    log('warn', `tune ${ch.number}: ${e}`);
+    showNoSignal(ch, String(e && e.message ? e.message : e));
+  } finally {
+    if (token === state.tuneToken) setTimeout(() => stage.classList.remove('tuning'), 200);
+  }
+  renderBanner();
+}
+
+function resetPlayer() {
+  state.liveBaseline = null;
+  if (state.hls) { state.hls.destroy(); state.hls = null; }
+  video.removeAttribute('src');
+  video.load();
+}
+
+async function play(pb, token) {
+  resetPlayer();
+  // hls.js first, so playback and captions work the same everywhere: it
+  // hands the app a stream's captions ahead of time, where macOS's own HLS
+  // gives them only as they show. Native HLS when there's no hls.js.
+  const tries = [];
+  if (window.Hls && window.Hls.isSupported()) tries.push(['hls.js', pb.url], ['hls.js', pb.path]);
+  if (video.canPlayType('application/vnd.apple.mpegurl')) tries.push(['native', pb.url]);
+  let last = 'no HLS support in this webview';
+  for (const [how, src] of tries) {
+    if (token !== state.tuneToken) return;
+    try {
+      await attempt(how, src);
+      log('info', `playing ${state.recording ? 'recording ' + state.recording.title : state.current.number} via ${how}`);
+      return;
+    } catch (e) {
+      last = `${how}: ${e.message || e}`;
+      log('warn', `${how} ${src}: ${last}`);
+      resetPlayer();
+    }
+  }
+  throw new Error(`Could not play the stream (${last})`);
+}
+
+function attempt(how, src) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const done = (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      video.removeEventListener('playing', onPlaying);
+      video.removeEventListener('error', onError);
+      if (err) reject(err); else resolve();
+    };
+    const onPlaying = () => done();
+    const onError = () => done(new Error((video.error && video.error.message) || `media error ${video.error && video.error.code}`));
+    const timer = setTimeout(() => done(new Error('timed out')), 15000);
+    video.addEventListener('playing', onPlaying);
+    video.addEventListener('error', onError);
+    if (how === 'native') {
+      video.src = src;
+    } else {
+      // hls.js keeps all it has played, up to WebKit's limit, for rewinding;
+      // lite mode keeps 90 s, and loads older video again from the server.
+      const h = new window.Hls({ liveSyncDurationCount: 2, maxBufferLength: 12, subtitleDisplay: false, ...(lite ? { backBufferLength: 90 } : {}) });
+      state.hls = h;
+      h.on(window.Hls.Events.ERROR, (_, d) => { if (d.fatal) done(new Error(d.details)); });
+      h.loadSource(src);
+      h.attachMedia(video);
+    }
+    video.play().catch((err) => {
+      if (err && err.name === 'NotAllowedError') {
+        video.muted = true;
+        video.play().catch(() => {});
+        toast(`Started muted. Press ${keyHint('m', 'M')} for sound.`, 3500, true);
+      }
+    });
+  });
+}
+
+function showNoSignal(ch, msg) {
+  resetPlayer();
+  const ns = $('#nosignal');
+  f(ns, 'num').textContent = ch.number;
+  f(ns, 'call').textContent = `${displayCall(ch)} ${ch.network ? '| ' + ch.network : ''}`;
+  f(ns, 'msg').textContent = msg;
+  ns.hidden = false;
+}
+
+function step(dir) {
+  const list = state.lineup;
+  if (!list.length) return;
+  let i = list.findIndex((c) => c.key === (state.current && state.current.key));
+  i = (i + dir + list.length) % list.length;
+  tune(list[i]);
+}
+
+// ---------- banner ----------
+function chipsFor(p, ch) {
+  const out = [];
+  for (const fl of (p && p.flags) || []) out.push(`<span class="chip ${fl === 'Live' ? 'live' : fl === 'New' ? 'new' : ''}">${esc(fl)}</span>`);
+  if (p && p.rating) out.push(`<span class="chip">${esc(p.rating)}</span>`);
+  for (const t of (p && p.tags) || []) out.push(`<span class="chip">${esc(t)}</span>`);
+  return out.join('');
+}
+
+function episodeLine(p) {
+  if (!p) return '';
+  const se = p.season && p.episode ? `S${p.season} E${p.episode}` : '';
+  return [p.episodeTitle && `"${p.episodeTitle}"`, se, p.year].filter(Boolean).join('   ');
+}
+
+function renderBanner() {
+  updateMediaSession();
+  showTimeshift();
+  const ch = state.current;
+  const b = $('#banner');
+  if (state.recording) return renderRecordingBanner(b, state.recording);
+  if (!ch) return;
+  if (ch.weather) return renderWXBanner(b, ch);
+  const now = Date.now();
+  const p = airingAt(ch, now);
+  const nx = p ? nextAfter(ch, p._e - 1) : nextAfter(ch, now);
+  f(b, 'num').textContent = ch.number;
+  f(b, 'num').classList.toggle('long', ch.number.length > 4);
+  f(b, 'call').textContent = displayCall(ch);
+  f(b, 'net').textContent = ch.network || '';
+  showChannelLogo(b, ch);
+  f(b, 'time').textContent = p ? `${clock(p._s)} to ${clock(p._e)}` : '';
+  // What's on is being recorded, or will be.
+  const rec = p && state.dvrKeys.get(airingKey(ch, p));
+  f(b, 'chips').innerHTML = (rec ? `<span class="chip live">${rec.status === 'recording' ? 'Recording' : 'Will record'}</span>` : '') + chipsFor(p, ch);
+  f(b, 'title').textContent = p ? p.title : ch.atsc3Only ? 'ATSC 3.0 service' : 'No listings';
+  f(b, 'ep').textContent = episodeLine(p);
+  f(b, 'progress').style.width = p ? `${Math.min(100, ((now - p._s) / (p._e - p._s)) * 100)}%` : '0';
+  f(b, 'desc').textContent = p ? p.description || '' : ch.atsc3Only ? 'Broadcast only in ATSC 3.0, which needs a NextGen TV tuner. No Gracenote listings for this service.' : ch.description || '';
+  f(b, 'next').textContent = nx ? `${clock(nx._s)}  ${nx.title}` : '';
+
+  f(b, 'note').textContent = state.note || '';
+
+  // The server's own channels have no reception to show. The meter is
+  // rebuilt on the next antenna channel.
+  if (ch.custom) {
+    b.classList.remove('warn');
+    f(b, 'meter').hidden = true;
+    f(b, 'tier').textContent = ch.category && ch.category !== 'Other' ? ch.category : '';
+    f(b, 'tier').style.color = '';
+    f(b, 'tx').textContent = OWN_SOURCE[ch.kind] || OWN_SOURCE.folder;
+    f(b, 'atsc3').textContent = '';
+    return;
+  }
+
+  // Reception is shown only when asked for (I twice) or when it is weak
+  // enough to explain a bad picture.
+  const preset = state.settings.antenna;
+  const tier = (ch.tier && ch.tier[preset]) || 'unknown';
+  const weak = tier === 'weak' || tier === 'unlikely';
+  b.classList.toggle('warn', weak);
+  const st = stationFor(ch);
+  f(b, 'meter').outerHTML = meter(tier, true).replace('class="meter big"', 'class="meter big" data-f="meter"');
+  f(b, 'tier').textContent = weak ? 'Weak signal' : `${TIER_LABEL[tier]} signal`;
+  f(b, 'tier').style.color = TIER_COLOR[tier];
+  if (st) {
+    const sig = st.signal[preset];
+    f(b, 'tx').innerHTML = `${ch.via ? `On ${esc(st.callSign)}'s transmitter, ` : `${esc(st.callSign)} `}RF ${st.rfChannel} ${esc(st.band)}<br>${st.distanceKm.toFixed(0)} km ${compass(st.bearingDeg)}, ${sig && sig.tier !== 'unknown' ? `margin ${sig.noiseMarginDb > 0 ? '+' : ''}${sig.noiseMarginDb.toFixed(0)} dB, ${preset} antenna` : 'margin unknown'}`;
+  } else {
+    f(b, 'tx').textContent = 'No licensed transmitter matched';
+  }
+  f(b, 'atsc3').textContent = ch.atsc3 ? `Also in ATSC 3.0 on ${ch.atsc3.hostCall} RF ${ch.atsc3.rf}` : '';
+}
+
+// What the server's own channels play, for the banner's details.
+const OWN_SOURCE = {
+  folder: 'Videos from your server, on a loop',
+  jellyfin: 'From your Jellyfin library, on a schedule',
+  youtube: 'YouTube uploads, streamed as they air',
+};
+
+// showChannelLogo puts an own channel's logo under its number in the
+// banner; stations' logos are for the guide.
+function showChannelLogo(b, ch) {
+  const el = f(b, 'logo');
+  if (!el) return;
+  const logo = ch && ch.own && !state.recording ? ch.logo : '';
+  el.hidden = !logo;
+  el.style.backgroundImage = logo ? `url('${logo}')` : '';
+}
+
+// The banner shows briefly on a channel change and on request. Pressing I
+// cycles: banner, banner with reception details, hidden.
+function showBanner(detail = false) {
+  renderBanner();
+  const b = $('#banner');
+  b.classList.toggle('detail', detail);
+  b.classList.add('show');
+  hideBannerSoon(detail ? 12000 : 4000);
+}
+
+function hideBanner() {
+  clearTimeout(state.bannerTimer);
+  $('#banner').classList.remove('show', 'detail');
+}
+
+function hideBannerSoon(ms = 4000) {
+  clearTimeout(state.bannerTimer);
+  state.bannerTimer = setTimeout(hideBanner, ms);
+}
+
+// cycleBanner is the info key. It also flashes where the picture is, in
+// the playback badge.
+function cycleBanner() {
+  const b = $('#banner');
+  if (b.classList.contains('show') && (b.classList.contains('detail') || state.recording)) return hideBanner();
+  flashPlace();
+  return showBanner(b.classList.contains('show'));
+}
+
+const presetLabel = (name) => (state.presets.find((p) => p.name === name) || { label: name }).label;
+
+// ---------- number entry ----------
+function entryKey(k) {
+  state.entry = (state.entry + k).slice(0, 6);
+  const e = $('#entry');
+  e.textContent = state.entry;
+  e.classList.add('show');
+  clearTimeout(state.entryTimer);
+  state.entryTimer = setTimeout(commitEntry, 2200);
+}
+
+function commitEntry() {
+  clearTimeout(state.entryTimer);
+  const n = state.entry;
+  state.entry = '';
+  $('#entry').classList.remove('show');
+  if (!n) return;
+  const ch = findChannel(n);
+  if (ch) tune(ch); else toast(`No channel ${n} in your lineup`);
+}
+
+function cancelEntry() {
+  clearTimeout(state.entryTimer);
+  state.entry = '';
+  $('#entry').classList.remove('show');
+}
+
+// ---------- keyboard ----------
+// Text fields keep their keys (but Esc).
+const TEXT_INPUT = 'input:not([type=checkbox]):not([type=radio]), textarea, select';
+
+// The media keys of a TV remote (over HDMI-CEC) or a keyboard, as the keys
+// the views handle: [key, shift].
+const KEY_ALIASES = {
+  MediaPlayPause: [' '], MediaPlay: [' '], MediaPause: [' '],
+  MediaFastForward: ['ArrowRight'], MediaRewind: ['ArrowLeft'],
+  MediaTrackNext: ['PageDown'], MediaTrackPrevious: ['PageUp'],
+  MediaRecord: ['r'], BrowserBack: ['Escape'], GoBack: ['Escape'],
+};
+
+// pressKey does what a key does, for a controller button or a media key:
+// an untrusted keydown runs the same handler and nothing else (no button
+// is pressed, no text typed).
+function pressKey(key, { shiftKey = false, repeat = false } = {}) {
+  (document.activeElement || document.body).dispatchEvent(new KeyboardEvent('keydown', { key, shiftKey, repeat, bubbles: true, cancelable: true }));
+}
+
+function wireKeys() {
+  document.addEventListener('keydown', (e) => {
+    if (e.isTrusted) setPrompts(false);
+    const alias = KEY_ALIASES[e.key];
+    if (alias) {
+      e.preventDefault();
+      return pressKey(alias[0], { shiftKey: !!alias[1] });
+    }
+    const typing = e.target.matches && e.target.matches(TEXT_INPUT);
+    if (typing && e.key !== 'Escape') return;
+    if (typing && document.body.classList.contains('booting')) return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const k = e.key;
+
+    if (document.body.classList.contains('booting')) {
+      if (!typing && (k === 'r' || k === 'R')) location.reload();
+      return;
+    }
+    if (state.dock >= 0 && dockKey(e)) return;
+    if (state.view === 'settings' && !typing && settingsKey(e)) return;
+    if (k === 'Escape') {
+      if (state.entry) return cancelEntry();
+      if (typing) e.target.blur();
+      if (state.view !== 'tv') return setView('tv');
+      if (state.recording && state.current) return tune(state.current);
+      return hideBanner();
+    }
+    if (k === 'g' || k === 'G') return setView(state.view === 'guide' ? 'tv' : 'guide');
+    if ((k === 'a' || k === 'A') && state.info.antenna !== false) return setView(state.view === 'antenna' ? 'tv' : 'antenna');
+    if ((k === 'd' || k === 'D') && state.info.dvr) return setView(state.view === 'recordings' ? 'tv' : 'recordings');
+    if ((k === 'w' || k === 'W') && state.view !== 'recordings') return setView(state.view === 'weather' ? 'tv' : 'weather');
+    if (k === ',' || k === 's' || k === 'S') return setView(state.view === 'settings' ? 'tv' : 'settings');
+    if (k === 'm' || k === 'M') {
+      const onWX = state.current && state.current.weather;
+      const muted = !(onWX ? state.userMuted : video.muted);
+      state.userMuted = muted;
+      if (!state.wxPreview) video.muted = muted;
+      wxMusic.muted = muted;
+      return toast(muted ? 'Muted' : 'Sound on', 1200);
+    }
+    if ((k === 'u' || k === 'U') && state.lastHidden) {
+      const key = state.lastHidden;
+      state.lastHidden = null;
+      return unhide([key]).then(() => toast('Channel shown again', 1800));
+    }
+    if (k === 'F') return toggleFullscreen();
+
+    if (state.view === 'guide') return guideKey(e);
+    if (state.view === 'antenna') return antennaKey(e);
+    if (state.view === 'recordings') return recordingsKey(e);
+    if (state.view !== 'tv') {
+      // Weather: Up and Down scroll, Up at the top and Left move to the
+      // dock. (Settings has its own keys, settingsKey.)
+      const main = $(`#${state.view} .main`);
+      if (k === 'ArrowLeft' || (k === 'ArrowUp' && (!main || main.scrollTop <= 0))) { e.preventDefault(); return openDock(); }
+      if (main && (k === 'ArrowUp' || k === 'ArrowDown')) { e.preventDefault(); main.scrollTop += k === 'ArrowDown' ? 240 : -240; }
+      return;
+    }
+
+    if (/^[0-9]$/.test(k) || (k === '.' && state.entry)) { e.preventDefault(); return entryKey(k); }
+    switch (k) {
+      case 'ArrowUp': case 'PageUp': e.preventDefault(); return step(-1);
+      case 'ArrowDown': case 'PageDown': e.preventDefault(); return step(1);
+      case 'ArrowLeft': e.preventDefault(); return skip(e.shiftKey ? -60 : -10);
+      case 'ArrowRight': e.preventDefault(); return skip(e.shiftKey ? 60 : 30);
+      case ' ': e.preventDefault(); return togglePause();
+      case 'End': e.preventDefault(); return goLive();
+      case 'Enter': return state.entry ? commitEntry() : setView('guide');
+      case 'i': case 'I': return cycleBanner();
+      case 'l': case 'L': case 'Backspace': return state.previous && tune(state.previous);
+      case 'r': return recordNow('once');
+      case 'R': return recordNow('series', false);
+      case 'n': case 'N': return recordNow('series', true);
+      case 'c': case 'C': return toggleCaptions();
+      case 'v': case 'V': return cycleAudio();
+      case 'f': return toggleFavorite(state.current);
+      default:
+    }
+  });
+}
+
+// ---------- dock ----------
+// Without letter keys (a TV remote, a controller) the dock leads to every
+// view: Left from its left edge, or Up from the top of a view whose rows
+// don't wrap (the guide's do), moves to it;
+// Left and Right pick, Enter opens, Esc or Down goes back.
+const dockButtons = () => $$('#dock button').filter((b) => b.offsetParent);
+
+function openDock() {
+  state.dock = Math.max(0, dockButtons().findIndex((b) => b.dataset.view === state.view));
+  renderDock();
+}
+
+function closeDock() {
+  state.dock = -1;
+  renderDock();
+}
+
+function renderDock() {
+  document.body.classList.toggle('dock-nav', state.dock >= 0);
+  dockButtons().forEach((b, i) => b.classList.toggle('pick', i === state.dock));
+}
+
+// dockKey handles a key while the dock is picked; other keys leave it.
+function dockKey(e) {
+  const buttons = dockButtons();
+  switch (e.key) {
+    case 'ArrowLeft': state.dock = Math.max(0, state.dock - 1); break;
+    case 'ArrowRight': state.dock = Math.min(buttons.length - 1, state.dock + 1); break;
+    case 'ArrowUp': break;
+    case 'Enter': case ' ': {
+      const b = buttons[state.dock];
+      closeDock();
+      if (b) setView(b.dataset.view);
+      e.preventDefault();
+      return true;
+    }
+    case 'Escape': case 'ArrowDown': closeDock(); e.preventDefault(); return true;
+    default: closeDock(); return false;
+  }
+  e.preventDefault();
+  renderDock();
+  return true;
+}
+
+// ---------- game controllers ----------
+// A game controller does what the keyboard does: each button stands for a
+// key and goes through the same handler. Indexes are the standard gamepad
+// mapping (A, B, X, Y, LB, RB, LT, RT, Back, Start, L3, R3, d-pad); Guide is
+// Steam's. WebKit lists a controller once a button is pressed; while one is
+// connected the pads are read every frame, and not while the window is
+// hidden. Pads are merged, so one controller seen twice presses once.
+//
+// The pads are read raw, so Steam's own menus don't hide them from the app.
+// Guide opens Steam's menu, and Guide with A its quick access menu, which
+// leave the window focused under gamescope: from Guide until Guide again or
+// B (which closes them), the pads are Steam's. Nothing acts while the window
+// is unfocused either, and a button held when the app gets the pads back
+// acts only once let go and pressed again.
+const PAD_KEYS = [
+  ['Enter'], ['Escape'], ['i'], ['g'],
+  ['PageUp'], ['PageDown'], ['ArrowLeft', true], ['ArrowRight', true],
+  ['w'], [','], ['m'], [' '],
+  ['ArrowUp'], ['ArrowDown'], ['ArrowLeft'], ['ArrowRight'],
+];
+const PAD_ARROWS = 12; // the d-pad (and the left stick) repeat when held
+// A direction held longer than this stops repeating until it's let go: a
+// pad whose state froze mid-press (asleep, or taken by Steam) would
+// otherwise move the guide or the dock on its own.
+const PAD_REPEAT_MAX = 4000;
+const pad = { raf: 0, held: [], stick: -1, greeted: false, guide: false, away: false, mute: false };
+const PAD_GUIDE = 16;
+const PAD_B = 1;
+
+function wirePads() {
+  if (!navigator.getGamepads) return;
+  window.addEventListener('gamepadconnected', (e) => {
+    log('info', `controller connected: ${e.gamepad.id} (${e.gamepad.mapping || 'no'} mapping)`);
+    setPadFamily(e.gamepad.id);
+    if (!pad.greeted) {
+      pad.greeted = true;
+      toast('Controller connected', 2500);
+    }
+    padWatch();
+  });
+  window.addEventListener('gamepaddisconnected', (e) => log('info', `controller disconnected: ${e.gamepad.id}`));
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+      pad.mute = true;
+      return padWatch();
+    }
+    cancelAnimationFrame(pad.raf);
+    pad.raf = 0;
+  });
+  window.addEventListener('focus', () => {
+    pad.away = false;
+    pad.mute = true;
+  });
+  padWatch(); // pads already listed, after a reload
+}
+
+// padWatch reads the pads on the next frame, unless the window is hidden.
+function padWatch() {
+  if (!pad.raf && !document.hidden) pad.raf = requestAnimationFrame(padPoll);
+}
+
+function padPoll(now) {
+  pad.raf = 0;
+  const pads = [...navigator.getGamepads()].filter(Boolean);
+  if (!pads.length) {
+    pad.held = [];
+    pad.stick = -1;
+    return;
+  }
+  const down = padButtons(pads);
+  const guide = pads.some((p) => p.buttons[PAD_GUIDE] && p.buttons[PAD_GUIDE].pressed);
+  if (guide && !pad.guide) pad.away = !pad.away;
+  else if (pad.away && pad.held[PAD_B] && !down[PAD_B]) pad.away = false;
+  pad.guide = guide;
+  const live = !pad.away && !pad.mute && document.hasFocus();
+  pad.mute = false;
+  down.forEach((on, i) => {
+    const h = pad.held[i];
+    if (!on) {
+      pad.held[i] = null;
+    } else if (!live) {
+      pad.held[i] = h || { next: Infinity }; // acts once let go and pressed again
+    } else if (!h) {
+      pad.held[i] = { next: now + 400, since: now };
+      padPress(i, false);
+    } else if (i >= PAD_ARROWS && now >= h.next && now - h.since < PAD_REPEAT_MAX) {
+      h.next = now + 120;
+      padPress(i, true);
+    }
+  });
+  padWatch();
+}
+
+// padButtons merges the pads' buttons, with the left stick as the d-pad: it
+// points along its stronger axis once pushed past 0.6, until back under 0.35.
+function padButtons(pads) {
+  const down = PAD_KEYS.map(() => false);
+  let x = 0;
+  let y = 0;
+  for (const p of pads) {
+    for (let i = 0; i < down.length && i < p.buttons.length; i++) {
+      if (p.buttons[i].pressed || p.buttons[i].value > 0.5) down[i] = true;
+    }
+    if (Math.abs(p.axes[0] || 0) > Math.abs(x)) x = p.axes[0];
+    if (Math.abs(p.axes[1] || 0) > Math.abs(y)) y = p.axes[1];
+  }
+  const along = { 12: -y, 13: y, 14: -x, 15: x };
+  if (pad.stick >= 0 && along[pad.stick] < 0.35) pad.stick = -1;
+  if (pad.stick < 0 && Math.max(Math.abs(x), Math.abs(y)) > 0.6) {
+    pad.stick = Math.abs(x) > Math.abs(y) ? (x < 0 ? 14 : 15) : (y < 0 ? 12 : 13);
+  }
+  if (pad.stick >= 0) down[pad.stick] = true;
+  return down;
+}
+
+function padPress(i, repeat) {
+  setPrompts(true);
+  // On the TV, A plays and pauses: the guide has its own button, and the
+  // remote's OK (Enter) still opens it.
+  if (i === 0 && state.view === 'tv' && !state.entry) return pressKey(' ', { repeat });
+  const [key, shiftKey] = PAD_KEYS[i];
+  pressKey(key, { shiftKey: !!shiftKey, repeat });
+}
+
+// ---------- key and button hints ----------
+// Hints name keys, or a controller's buttons once one was used (Kenney's
+// CC0 Input Prompts, in vendor/kenney-prompts), until a key is pressed
+// again. Glyphs by the key a button stands for (PAD_KEYS); the face buttons
+// are where the standard mapping puts them, so a Switch pad's read B A Y X.
+const GLYPHS = {
+  xbox: ['xbox_button_a', 'xbox_button_b', 'xbox_button_x', 'xbox_button_y', 'xbox_lb', 'xbox_rb', 'xbox_lt', 'xbox_rt',
+    'xbox_button_view', 'xbox_button_menu', 'xbox_ls', 'xbox_rs', 'xbox_dpad_none', 'xbox_dpad_vertical', 'xbox_dpad_horizontal'],
+  playstation: ['playstation_button_cross', 'playstation_button_circle', 'playstation_button_square', 'playstation_button_triangle',
+    'playstation_trigger_l1', 'playstation_trigger_r1', 'playstation_trigger_l2', 'playstation_trigger_r2', 'playstation5_button_create',
+    'playstation5_button_options', 'playstation_button_l3', 'playstation_button_r3', 'playstation_dpad_none', 'playstation_dpad_vertical', 'playstation_dpad_horizontal'],
+  switch: ['switch_button_b', 'switch_button_a', 'switch_button_y', 'switch_button_x', 'switch_button_l', 'switch_button_r', 'switch_button_zl',
+    'switch_button_zr', 'switch_button_minus', 'switch_button_plus', 'switch_stick_l_press', 'switch_stick_r_press', 'switch_dpad_none', 'switch_dpad_vertical', 'switch_dpad_horizontal'],
+  steamdeck: ['steamdeck_button_a', 'steamdeck_button_b', 'steamdeck_button_x', 'steamdeck_button_y', 'steamdeck_button_l1', 'steamdeck_button_r1',
+    'steamdeck_button_l2', 'steamdeck_button_r2', 'steamdeck_button_view', 'steamdeck_button_options', 'steamdeck_stick_l_press', 'steamdeck_stick_r_press',
+    'steamdeck_dpad_none', 'steamdeck_dpad_vertical', 'steamdeck_dpad_horizontal'],
+};
+// The key each glyph above stands for, in order.
+const GLYPH_KEYS = ['Enter', 'Escape', 'i', 'g', 'PageUp', 'PageDown', 'ShiftLeft', 'ShiftRight', 'w', ',', 'm', ' ', 'Arrows', 'UpDown', 'LeftRight'];
+const prompts = { pad: false, family: 'xbox', detected: 'xbox' };
+
+// An 8BitDo pad's X and Y arrive swapped (its X, on the left, reads as the
+// standard mapping's top button), so it gets Xbox glyphs with X and Y
+// traded.
+GLYPHS.xboxswap = GLYPHS.xbox.map((g, i) => GLYPHS.xbox[i === 2 ? 3 : i === 3 ? 2 : i]);
+
+// PAD_LABELS name the glyph sets, for the Settings choice that overrides
+// what the pad's id suggests.
+const PAD_LABELS = [['', 'Auto'], ['xbox', 'Xbox'], ['xboxswap', 'Xbox, X and Y swapped'], ['switch', 'Nintendo'], ['playstation', 'PlayStation'], ['steamdeck', 'Steam Deck']];
+const padLabelsKey = 'airwaves.padLabels';
+
+function setPadFamily(id) {
+  prompts.detected = /054c|sony|playstation|dualsense|dualshock/i.test(id) ? 'playstation'
+    : /057e|nintendo|switch/i.test(id) ? 'switch'
+      : /2dc8|8bitdo/i.test(id) ? 'xboxswap'
+        : /28de|valve|steam deck/i.test(id) ? 'steamdeck' : 'xbox';
+  applyPadFamily();
+}
+
+function applyPadFamily() {
+  const forced = localStorage.getItem(padLabelsKey) || '';
+  const family = GLYPHS[forced] ? forced : prompts.detected;
+  if (family === prompts.family) return;
+  prompts.family = family;
+  renderHints();
+}
+
+function setPrompts(pad) {
+  if (pad === prompts.pad) return;
+  prompts.pad = pad;
+  document.body.classList.toggle('pad-input', pad);
+  renderHints();
+}
+
+// glyph is the controller button for key, or '' when there is none.
+function glyph(key, label) {
+  const i = GLYPH_KEYS.indexOf(key);
+  if (i < 0) return '';
+  const file = GLYPHS[prompts.family][i];
+  return `<img class="glyph" src="vendor/kenney-prompts/${file}${/press|dpad_none/.test(file) ? '' : '_outline'}.svg" alt="${esc(label)}">`;
+}
+
+// keyHint shows how to press key: its button after a controller was used,
+// else its label; null when the controller has no such button.
+const keyHint = (key, label) => (prompts.pad ? glyph(key, label) || null : esc(label));
+
+// hints joins [key, label, what] into a line of hints, leaving out what the
+// controller can't do.
+const hints = (items) => items.map(([key, label, what]) => {
+  const k = keyHint(key, label);
+  return k == null ? '' : `${k} ${what}`;
+}).filter(Boolean).join('  |  ');
+
+// renderHints redraws whatever shows keys, after the input changed.
+function renderHints() {
+  for (const k of $$('#dock kbd')) {
+    const h = keyHint(k.dataset.key, k.dataset.label);
+    k.innerHTML = h || '';
+    k.hidden = h == null;
+  }
+  renderSettings();
+  if (!state.report) return;
+  if (state.view === 'guide') { guideShown = []; renderGuide(); }
+  if (state.view === 'recordings') renderRecordings();
+  renderBanner();
+}
+
+// ---------- guide ----------
+const FILTERS = [
+  ['all', 'All'],
+  ['favorites', 'Favorites'],
+  ['nextgen', 'NextGen'],
+  ['sports', 'Sports'],
+  ['movie', 'Movies'],
+  ['news', 'News'],
+  ['family', 'Family'],
+];
+
+// guideFilters adds a filter for each category of the lineup's own channels
+// that none of FILTERS covers ("Kids", "Gaming"), in the order categories
+// are listed on the admin page. Not Weather: the weather channel leads the
+// guide anyway.
+function guideFilters() {
+  const keys = new Set([...FILTERS.map(([k]) => k), 'weather']);
+  const extra = [];
+  for (const category of Object.keys(CATEGORY_GENRES)) {
+    const k = categoryGenres(category)[0];
+    if (keys.has(k) || !state.lineup.some((c) => c.own && c.category === category)) continue;
+    keys.add(k);
+    extra.push([k, category]);
+  }
+  return [...FILTERS, ...extra];
+}
+
+function guideChannels() {
+  const lo = state.gStart;
+  const hi = state.gStart + state.gSpan * MIN;
+  switch (state.guideFilter) {
+    case 'all': return state.lineup;
+    case 'favorites': return state.lineup.filter(isFav);
+    case 'nextgen': return state.lineup.filter((c) => c.atsc3);
+    default:
+      return state.lineup.filter((c) => programsFor(c).some((p) => p._e > lo && p._s < hi && (p.genres || []).includes(state.guideFilter)));
+  }
+}
+
+function openGuide() {
+  const now = Date.now();
+  state.gStart = floor30(now);
+  state.gTime = now;
+  const list = guideChannels();
+  state.gRow = Math.max(0, list.findIndex((c) => state.current && c.key === state.current.key));
+  renderGuide();
+  scrollRowIntoView(true);
+}
+
+function wireGuide() {
+  f($('#guide'), 'actions').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-act]');
+    if (!b) return;
+    if (b.dataset.act === 'once') recordSelected('once');
+    if (b.dataset.act === 'series') recordSelected('series', false);
+    if (b.dataset.act === 'new') recordSelected('series', true);
+  });
+  const rows = $('.g-rows');
+  rows.addEventListener('click', (e) => {
+    const cell = e.target.closest('[data-row]');
+    if (!cell) return;
+    state.gRow = Number(cell.dataset.row);
+    if (cell.dataset.t) state.gTime = Number(cell.dataset.t);
+    renderGuide();
+  });
+  rows.addEventListener('dblclick', (e) => {
+    const cell = e.target.closest('[data-row]');
+    if (cell) guideActivate();
+  });
+}
+
+function guideKey(e) {
+  const list = guideChannels();
+  const sel = selectedProgram(list);
+  switch (e.key) {
+    // Rows wrap around, so channels kept at the end of the lineup are one
+    // press away from the top. The dock is Left from the earliest program.
+    case 'ArrowUp': state.gRow = (state.gRow - 1 + list.length) % list.length; break;
+    case 'ArrowDown': state.gRow = (state.gRow + 1) % list.length; break;
+    case 'PageUp': state.gRow = state.gRow === 0 ? list.length - 1 : Math.max(0, state.gRow - 8); break;
+    case 'PageDown': state.gRow = state.gRow === list.length - 1 ? 0 : Math.min(list.length - 1, state.gRow + 8); break;
+    case 'ArrowRight':
+      state.gTime = sel ? sel._e : state.gTime + 30 * MIN;
+      while (state.gTime >= state.gStart + (state.gSpan - 30) * MIN) state.gStart += 30 * MIN;
+      break;
+    case 'ArrowLeft': {
+      const min = floor30(Date.now()) - 30 * MIN;
+      // From the earliest program, Left moves on to the dock.
+      if (!sel || sel._s <= min) { e.preventDefault(); return openDock(); }
+      state.gTime = Math.max(min, (sel ? sel._s : state.gTime) - 1);
+      while (state.gTime < state.gStart && state.gStart > min) state.gStart -= 30 * MIN;
+      break;
+    }
+    case 'Home': state.gStart = floor30(Date.now()); state.gTime = Date.now(); break;
+    case 'Enter': guideActivate(); return;
+    case 'r': e.preventDefault(); recordSelected('once'); return;
+    case 'f': e.preventDefault(); toggleFavorite(list[state.gRow]); return;
+    case 'h': case 'H': e.preventDefault(); hideChannel(list[state.gRow]); return;
+    case 'R': e.preventDefault(); recordSelected('series', false); return;
+    case 'n': case 'N': e.preventDefault(); recordSelected('series', true); return;
+    default: {
+      const filters = guideFilters();
+      const i = filters.findIndex(([k]) => k === state.guideFilter);
+      if (e.key === ']' || e.key === '[') {
+        state.guideFilter = filters[(i + (e.key === ']' ? 1 : filters.length - 1)) % filters.length][0];
+        state.gRow = 0;
+        break;
+      }
+      return;
+    }
+  }
+  e.preventDefault();
+  renderGuide();
+  scrollRowIntoView();
+}
+
+function guideActivate() {
+  const list = guideChannels();
+  const ch = list[state.gRow];
+  if (!ch) return;
+  const p = selectedProgram(list);
+  const now = Date.now();
+  if (!p || (p._s <= now && now < p._e)) {
+    // Choosing what's already playing goes back to it without tuning
+    // again (and losing the rewind buffer); a failed channel retries.
+    const playing = state.current && state.current.key === ch.key && !state.recording && $('#nosignal').hidden;
+    if (!playing) tune(ch);
+    setView('tv');
+    if (playing) showBanner();
+  } else {
+    toast(`${p.title} starts at ${clock(p._s)} on ${ch.number}`);
+  }
+}
+
+function selectedProgram(list) {
+  const ch = list[state.gRow];
+  if (!ch) return null;
+  const t = Math.max(state.gTime, state.gStart);
+  return airingAt(ch, t) || null;
+}
+
+function scrollRowIntoView(center) {
+  const rows = $('.g-rows');
+  const rowH = 58;
+  const top = state.gRow * rowH;
+  if (center) rows.scrollTop = top - rows.clientHeight / 2 + rowH;
+  else if (top < rows.scrollTop) rows.scrollTop = top;
+  else if (top + rowH > rows.scrollTop + rows.clientHeight) rows.scrollTop = top + rowH - rows.clientHeight;
+}
+
+// guideShown is what the guide's rows were last built from. They are built
+// again only when that changes; moving the selection moves two classes, as
+// rebuilding thousands of cells on every key is slow on a TV box.
+let guideShown = [];
+
+function renderGuide() {
+  if (!state.report) return;
+  const g = $('#guide');
+  const list = guideChannels();
+  state.gRow = Math.min(state.gRow, Math.max(0, list.length - 1));
+  const rows = $('.g-rows');
+  const lo = state.gStart;
+  const now = Date.now();
+  const shown = [state.guideFilter, lo, rows.clientWidth, Math.floor(now / MIN), state.lineup, state.guide, state.dvrKeys, state.settings, state.current && state.current.key, state.wx];
+  if (shown.every((v, i) => v === guideShown[i])) return moveGuideSelection(list, lo);
+  guideShown = shown;
+  const chw = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--chw')) || 260;
+  const width = Math.max(300, rows.clientWidth - chw);
+  const ppm = width / state.gSpan;
+  const hi = lo + state.gSpan * MIN;
+
+  // filters
+  const filters = guideFilters();
+  if (!filters.some(([k]) => k === state.guideFilter)) state.guideFilter = 'all';
+  $('.g-filters').innerHTML = filters.map(([k, label]) => {
+    const saved = state.guideFilter;
+    state.guideFilter = k;
+    const n = guideChannels().length;
+    state.guideFilter = saved;
+    return `<button data-filter="${k}" class="${k === state.guideFilter ? 'on' : ''}">${label}<span class="n">${n}</span></button>`;
+  }).join('');
+  $$('.g-filters button').forEach((b) => b.addEventListener('click', () => {
+    state.guideFilter = b.dataset.filter;
+    state.gRow = 0;
+    renderGuide();
+  }));
+
+  // time header
+  const d = new Date(lo);
+  const today = new Date(now).toDateString() === d.toDateString();
+  f(g, 'day').textContent = today ? 'Today' : d.toLocaleDateString([], { weekday: 'long' });
+  let ticks = '';
+  for (let t = lo; t < hi; t += 30 * MIN) ticks += `<span style="left:${(t - lo) / MIN * ppm}px">${clock(t)}</span>`;
+  $('.g-ticks').innerHTML = ticks;
+
+  // rows
+  const sel = selectedProgram(list);
+  let html = '';
+  list.forEach((ch, r) => {
+    const tier = (ch.tier && ch.tier[state.settings.antenna]) || 'unknown';
+    const cls = ['g-row', r === state.gRow ? 'sel' : '', state.current && ch.key === state.current.key ? 'cur' : ''].join(' ');
+    html += `<div class="${cls}"><div class="g-ch" data-row="${r}">
+      <div class="num${ch.number.length > 4 ? ' long' : ''}">${esc(ch.number)}</div>
+      <div class="who"><div class="net">${isFav(ch) ? '<span class="fav">★</span>' : ''}${esc(ch.network || displayCall(ch))}</div><div class="call">${tier === 'weak' || tier === 'unlikely' ? meter(tier) : ''}<span>${esc(displayCall(ch))}</span></div></div>
+      ${ch.logo ? `<div class="logo${ch.own ? ' own' : ''}" style="background-image:url('${esc(ch.logo)}')"></div>` : '<div></div>'}
+    </div><div class="g-progs">`;
+    const progs = programsFor(ch).filter((p) => p._e > lo && p._s < hi);
+    if (!progs.length) {
+      const label = ch.weather ? 'Local forecast, around the clock' : ch.custom ? ch.description || 'Nothing scheduled yet' : ch.atsc3Only ? 'ATSC 3.0 only, no listings' : 'No listings';
+      html += `<div class="g-cell empty${r === state.gRow ? ' sel' : ''}" data-row="${r}" style="left:2px;width:${width - 4}px"><div class="t">${label}</div></div>`;
+    }
+    for (const p of progs) {
+      const left = Math.max(0, (p._s - lo) / MIN * ppm);
+      const right = Math.min(width, (p._e - lo) / MIN * ppm);
+      const w = Math.max(0, right - left - 3);
+      const isSel = r === state.gRow && sel === p;
+      const rec = state.dvrKeys.get(airingKey(ch, p));
+      const recCls = rec ? (rec.status === 'unavailable' ? 'rec rec-x' : rec.status === 'recording' ? 'rec rec-on' : 'rec') : '';
+      const c = ['g-cell', p._e <= now ? 'past' : '', p._s <= now && now < p._e ? 'now' : '', isSel ? 'sel' : '', recCls].join(' ');
+      const tag = (p.flags || []).includes('Live') ? '<span class="tag">LIVE </span>' : (p.flags || []).includes('New') ? '<span class="tag">NEW </span>' : '';
+      const sub = p.episodeTitle || `${clock(p._s)} to ${clock(p._e)}`;
+      html += `<div class="${c}" data-row="${r}" data-t="${Math.max(p._s, lo)}" style="left:${left + 2}px;width:${w}px"><div class="t">${tag}${esc(p.title)}</div>${w > 90 ? `<div class="s">${esc(sub)}</div>` : ''}</div>`;
+    }
+    html += '</div></div>';
+  });
+  const keep = rows.scrollTop;
+  rows.innerHTML = html || '<div style="padding:28px;color:var(--muted)">No channels match this filter.</div>';
+  rows.scrollTop = keep;
+
+  // now line
+  const nl = $('.g-now');
+  if (now >= lo && now < hi) {
+    nl.style.display = '';
+    nl.style.left = `${chw + (now - lo) / MIN * ppm}px`;
+  } else nl.style.display = 'none';
+
+  renderGuideDetail(list[state.gRow], sel);
+  f(g, 'status').innerHTML = `${list.length} channels  |  ${hints([['Enter', 'Enter', 'watches'], ['f', 'F', 'favorite'], ['h', 'H', 'hide'], ['[', '[ ]', 'filter']])}`;
+}
+
+// moveGuideSelection marks the selected row and program in rows already
+// built, as renderGuide would.
+function moveGuideSelection(list, lo) {
+  const rows = $('.g-rows');
+  const sel = selectedProgram(list);
+  for (const el of rows.querySelectorAll('.sel')) el.classList.remove('sel');
+  const row = list.length ? rows.children[state.gRow] : null;
+  if (row) {
+    row.classList.add('sel');
+    const cell = sel ? row.querySelector(`.g-cell[data-t="${Math.max(sel._s, lo)}"]`) : row.querySelector('.g-cell.empty');
+    if (cell) cell.classList.add('sel');
+  }
+  renderGuideDetail(list[state.gRow], sel);
+}
+
+function humanMinutes(m) {
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60);
+  return m % 60 ? `${h} h ${m % 60} min` : `${h} h`;
+}
+
+function renderGuideActions(ch, p) {
+  const box = f($('#guide'), 'actions');
+  if (!state.info.dvr || !p || p._e <= Date.now() || ch.weather || ch.custom) { box.innerHTML = ''; return; }
+  const it = state.dvrKeys.get(airingKey(ch, p));
+  const rule = seriesRuleFor(ch, p);
+  const parts = [];
+  if (it) {
+    const label = it.status === 'recording' ? 'Recording now' : it.status === 'unavailable' ? 'Channel not tuned on server' : 'Recording scheduled';
+    parts.push(`<span class="chip ${it.status === 'unavailable' ? '' : 'live'}">${label}</span>`);
+    if (it.id || !rule) parts.push('<button class="act" data-act="once">Cancel</button>');
+  } else {
+    parts.push('<button class="act rec" data-act="once"><i></i>Record</button>');
+  }
+  if (rule) {
+    parts.push(`<span class="chip new">Series${rule.newOnly ? ', new only' : ''}</span><button class="act" data-act="series">Stop series</button>`);
+  } else if (p.seriesId) {
+    parts.push('<button class="act" data-act="series">Record series</button><button class="act" data-act="new">New episodes only</button>');
+  }
+  box.innerHTML = parts.join('');
+}
+
+function recordSelected(kind, newOnly) {
+  const list = guideChannels();
+  return recordAiring(list[state.gRow], selectedProgram(list), kind, newOnly);
+}
+
+// recordNow records what is on the channel being watched.
+function recordNow(kind, newOnly) {
+  const ch = state.current;
+  if (state.recording || !ch) return;
+  const p = airingAt(ch, Date.now());
+  if (!p) return toast('No listing to record on this channel');
+  return recordAiring(ch, p, kind, newOnly).then(renderBanner);
+}
+
+async function recordAiring(ch, p, kind, newOnly) {
+  if (!state.info.dvr) return toast('Recording is not available on this server');
+  if (!ch || !p) return;
+  if (ch.weather) return toast('The weather channel is always on; nothing to record');
+  if (ch.custom) return toast(`${ch.name} is made by your server; nothing to record`);
+  if (p._e <= Date.now()) return toast('That has already aired');
+  const it = state.dvrKeys.get(airingKey(ch, p));
+  const rule = seriesRuleFor(ch, p);
+  try {
+    if (kind === 'once' && it) {
+      if (it.id) await api().DeleteRecording(it.id);
+      else if (!rule && it.ruleId) await api().DeleteRule(it.ruleId);
+      toast(`Won't record ${p.title}`);
+    } else if (kind === 'series' && rule) {
+      await api().DeleteRule(rule.id);
+      toast(`Stopped the series recording of ${p.title}`);
+    } else if (kind === 'series' && !p.seriesId) {
+      return toast(`${p.title} has no series information. Press R to record this airing.`);
+    } else {
+      await api().Record({ kind, channel: ch.number, callSign: ch.callSign, start: p.start, newOnly: !!newOnly });
+      toast(kind === 'series'
+        ? `Recording ${newOnly ? 'new episodes' : 'every episode'} of ${p.title} on ${ch.number}`
+        : `Recording ${p.title} at ${clock(p._s)} on ${ch.number}`);
+    }
+  } catch (e) {
+    toast(String(e && e.message ? e.message : e), 6000);
+  }
+  await loadDVR();
+}
+
+function renderGuideDetail(ch, p) {
+  const g = $('#guide');
+  if (!ch) return;
+  const now = Date.now();
+  f(g, 'kicker').innerHTML = `<span>${esc(ch.number)} ${esc(ch.own ? ch.call : displayCall(ch))}</span><span style="color:var(--muted)">${p ? `${clock(p._s)} to ${clock(p._e)}` : ''}</span>`;
+  f(g, 'title').textContent = p ? p.title : ch.atsc3Only ? `${ch.network} (ATSC 3.0)` : ch.own ? ch.name : 'No listings';
+  f(g, 'ep').textContent = episodeLine(p);
+  // An own channel's category is among its programs' genres; with nothing
+  // listed it shows on its own, with the channel's description.
+  const genres = p ? p.genres || [] : ch.own && ch.category !== 'Other' ? [ch.category] : [];
+  f(g, 'meta').innerHTML = chipsFor(p, ch) + genres.map((x) => `<span class="chip">${esc(x)}</span>`).join('');
+  f(g, 'desc').textContent = p ? p.description || '' : ch.description || '';
+  const live = !p || (p._s <= now && now < p._e);
+  const when = live ? `${keyHint('Enter', 'Enter')} to watch` : `Starts in ${humanMinutes(Math.round((p._s - now) / MIN))}`;
+  f(g, 'hint').innerHTML = state.info.dvr && p && p._e > now && !ch.weather && !ch.custom && !prompts.pad ? `${when}  |  R record, Shift R series, N new only` : when;
+  renderGuideActions(ch, p);
+  const art = f(g, 'art');
+  if (p && p.image) { art.style.backgroundImage = `url('${p.image}')`; art.classList.add('has'); } else { art.style.backgroundImage = ''; art.classList.remove('has'); }
+}
+
+// ---------- reception ----------
+function wireAntenna() {
+  const a = $('#antenna');
+  f(a, 'preview').addEventListener('submit', (e) => {
+    e.preventDefault();
+    startPreview(e.target.elements.zip.value.trim());
+  });
+  f(a, 'previewing').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-act]');
+    if (!b) return;
+    if (b.dataset.act === 'back') endPreview();
+    if (b.dataset.act === 'copy') api().CopyText(receptionSummary()).then(() => toast('Summary copied', 1800)).catch((err) => toast(String(err), 6000));
+  });
+  $('.a-table tbody').addEventListener('click', (e) => {
+    const tr = e.target.closest('tr[data-k]');
+    if (tr) selectStation(tr.dataset.k);
+  });
+  $('.radar').addEventListener('click', (e) => {
+    const dot = e.target.closest('[data-k]');
+    if (dot) selectStation(dot.dataset.k);
+  });
+}
+
+function antennaKey(e) {
+  const keys = stationOrder().map((s) => `${s.facilityId}:${s.rfChannel}`);
+  let i = keys.indexOf(state.aSel);
+  if ((e.key === 'ArrowUp' && i <= 0) || e.key === 'ArrowLeft') { e.preventDefault(); return openDock(); }
+  if (e.key === 'ArrowDown') i = Math.min(keys.length - 1, i + 1);
+  else if (e.key === 'ArrowUp') i = Math.max(0, i - 1);
+  else if (e.key === '1' || e.key === '2' || e.key === '3') return setPreset(state.presets[Number(e.key) - 1].name);
+  else return;
+  e.preventDefault();
+  selectStation(keys[i]);
+  const tr = $(`.a-table tr[data-k="${keys[i]}"]`);
+  if (tr) tr.scrollIntoView({ block: 'nearest' });
+}
+
+// rx is what the reception view shows: the server's own location, or a
+// previewed ZIP code.
+const rx = () => state.preview || { report: state.report, bySite: state.bySite, byFacility: state.byFacility, zip: '' };
+
+function stationOrder() {
+  const p = state.settings.antenna;
+  return [...rx().report.stations].sort((a, b) => (b.signal[p]?.noiseMarginDb ?? -999) - (a.signal[p]?.noiseMarginDb ?? -999));
+}
+
+async function setPreset(name) {
+  await saveAppSettings({ ...state.settings, antenna: name });
+  buildLineup();
+  renderAntenna();
+  renderBanner();
+  toast(`Antenna: ${presetLabel(name)}. ${state.lineup.length} channels in your lineup.`);
+}
+
+function renderAntenna() {
+  if (!state.report || state.info?.antenna === false) return;
+  const a = $('#antenna');
+  const rep = rx().report;
+  renderPreviewRail(rep);
+  const preset = state.settings.antenna;
+  const stations = stationOrder();
+  const good = stations.filter((s) => receivable(s.signal[preset]?.tier));
+  const chans = rep.channels.filter((c) => receivable(c.tier && c.tier[preset]));
+
+  const where = { indoor: 'Inside, by a window', attic: 'Under the roof', rooftop: 'Outside, 30 ft up' };
+  f(a, 'presets').innerHTML = state.presets.map((p, i) => {
+    const n = rep.channels.filter((c) => receivable(c.tier && c.tier[p.name])).length;
+    return `<button class="rm-item ${p.name === preset ? 'on' : ''}" data-p="${p.name}" title="Key ${i + 1}">
+      <span class="rm-label">${esc(p.name[0].toUpperCase() + p.name.slice(1))}</span><span class="rm-count">${n}</span>
+      <small>${where[p.name] || ''}</small></button>`;
+  }).join('');
+  $$('button', f(a, 'presets')).forEach((b) => b.addEventListener('click', () => setPreset(b.dataset.p)));
+  const aim = aimOf(stations, preset);
+  f(a, 'stats').innerHTML = `
+    <div><dt>Channels</dt><dd>${chans.length}<small>from ${good.length} of ${stations.length} transmitters</small></dd></div>
+    ${aim ? `<div><dt>Aim</dt><dd>${aim.deg.toFixed(0)}° ${compass(aim.deg)}<small>${aim.within} of ${aim.total} channels within ${aim.spread}°</small></dd></div>` : ''}`;
+
+  renderRadar(stations, preset);
+  renderTable(stations, preset);
+  renderNextGen(preset);
+  if (!state.aSel && good[0]) state.aSel = `${good[0].facilityId}:${good[0].rfChannel}`;
+  if (state.aSel) selectStation(state.aSel, true);
+}
+
+function renderTable(stations, preset) {
+  const rows = stations.map((s) => {
+    const k = `${s.facilityId}:${s.rfChannel}`;
+    const t = s.signal[preset]?.tier || 'unknown';
+    const nm = (name) => {
+      const e = s.signal[name];
+      if (!e || e.tier === 'unknown') return '<span class="nm dark" style="--c:var(--ink-3)">?</span>';
+      return `<span class="nm ${rankOf(e.tier) <= 2 ? 'dark' : ''}" style="--c:${TIER_COLOR[e.tier]}">${e.noiseMarginDb > 0 ? '+' : ''}${e.noiseMarginDb.toFixed(0)}</span>`;
+    };
+    const carries = (s.carries || []).length ? compactCarries(s.carries) : '';
+    return `<tr data-k="${k}" class="${receivable(t) ? '' : 'dim'} ${k === state.aSel ? 'sel' : ''}">
+      <td><div class="call">${esc(s.callSign)}${s.atsc3 ? ' <span class="chip ng">3.0</span>' : ''}</div><div class="sub">${esc(s.city)}, ${esc(s.service)}</div></td>
+      <td class="mono">${s.rfChannel} <span class="sub">${esc(s.band)}</span></td>
+      <td class="carries">${esc(carries)}</td>
+      <td class="r mono">${s.distanceKm.toFixed(0)} km ${compass(s.bearingDeg)}</td>
+      <td class="r mono">${s.erpKw >= 10 ? s.erpKw.toFixed(0) : s.erpKw.toFixed(1)} kW</td>
+      <td class="c">${nm('indoor')}</td><td class="c">${nm('attic')}</td><td class="c">${nm('rooftop')}</td>
+    </tr>`;
+  });
+  $('.a-table tbody').innerHTML = rows.join('');
+}
+
+// compactCarries turns ["4.1","4.2","2.1 (3.0)"] into "4.1-2  3.0: 2.1".
+function compactCarries(list) {
+  const fold = (items) => {
+    const majors = new Map();
+    for (const c of items) {
+      const [maj, min] = c.split('.');
+      if (!majors.has(maj)) majors.set(maj, []);
+      majors.get(maj).push(Number(min || 0));
+    }
+    return [...majors].map(([maj, mins]) => (mins.length > 1 ? `${maj}.${Math.min(...mins)}-${Math.max(...mins)}` : `${maj}${mins[0] ? '.' + mins[0] : ''}`)).join('  ');
+  };
+  const v1 = list.filter((c) => !c.endsWith('(3.0)'));
+  const v3 = list.filter((c) => c.endsWith('(3.0)')).map((c) => c.replace(' (3.0)', ''));
+  return [fold(v1), v3.length ? `3.0: ${fold(v3)}` : ''].filter(Boolean).join('  ');
+}
+
+const svgEl = (tag, attrs, text) => {
+  const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for (const [k, v] of Object.entries(attrs || {})) el.setAttribute(k, v);
+  if (text != null) el.textContent = text;
+  return el;
+};
+
+// aimOf is the circular mean bearing of receivable transmitters, weighted by
+// the ATSC 1.0 channels each carries, and how many channels lie near it.
+function aimOf(stations, preset) {
+  const spread = 22;
+  const v1 = (s) => (s.carries || []).filter((c) => !c.endsWith('(3.0)')).length;
+  const good = stations.filter((s) => receivable(s.signal[preset]?.tier) && v1(s));
+  if (!good.length) return null;
+  let sx = 0; let sy = 0;
+  for (const s of good) {
+    sx += v1(s) * Math.sin(s.bearingDeg * Math.PI / 180);
+    sy += v1(s) * Math.cos(s.bearingDeg * Math.PI / 180);
+  }
+  const deg = (Math.atan2(sx, sy) * 180 / Math.PI + 360) % 360;
+  const near = good.filter((s) => Math.abs(((s.bearingDeg - deg + 540) % 360) - 180) <= spread);
+  return { deg, spread, within: near.reduce((n, s) => n + v1(s), 0), total: good.reduce((n, s) => n + v1(s), 0) };
+}
+
+function renderRadar(stations, preset) {
+  const svg = $('.radar');
+  svg.innerHTML = '';
+  const R = 200;
+  const maxKm = rx().report.radiusKm;
+  const rad = (km) => R * Math.sqrt(Math.min(km, maxKm) / maxKm);
+  const pos = (km, deg) => {
+    const a = (deg - 90) * Math.PI / 180;
+    return [rad(km) * Math.cos(a), rad(km) * Math.sin(a)];
+  };
+
+  const defs = svgEl('defs');
+  defs.innerHTML = `<radialGradient id="beam" cx="0" cy="0" r="200" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffb224" stop-opacity=".38"/><stop offset="1" stop-color="#ffb224" stop-opacity="0"/></radialGradient>`;
+  svg.append(defs);
+
+  const aim = aimOf(stations, preset);
+  if (aim) {
+    const [x1, y1] = pos(maxKm, aim.deg - aim.spread);
+    const [x2, y2] = pos(maxKm, aim.deg + aim.spread);
+    svg.append(svgEl('path', { class: 'beam', d: `M0 0 L${x1} ${y1} A${R} ${R} 0 0 1 ${x2} ${y2} Z` }));
+  }
+
+  for (const km of [25, 50, 100, maxKm]) {
+    svg.append(svgEl('circle', { class: `ring${km === maxKm ? ' edge' : ''}`, r: rad(km) }));
+    svg.append(svgEl('text', { x: 3, y: -rad(km) - 3 }, `${km} km`));
+  }
+  svg.append(svgEl('line', { class: 'axis', x1: -R, y1: 0, x2: R, y2: 0 }));
+  svg.append(svgEl('line', { class: 'axis', x1: 0, y1: -R, x2: 0, y2: R }));
+  for (const [t, x, y] of [['N', 0, -R - 8], ['E', R + 10, 4], ['S', 0, R + 16], ['W', -R - 10, 4]]) {
+    svg.append(svgEl('text', { class: 'card', x, y, 'text-anchor': 'middle' }, t));
+  }
+
+  // group transmitters by tower site
+  const sites = new Map();
+  for (const s of stations) {
+    const key = `${s.point.lat.toFixed(3)},${s.point.lon.toFixed(3)}`;
+    if (!sites.has(key)) sites.set(key, []);
+    sites.get(key).push(s);
+  }
+  const ordered = [...sites.values()].sort((a, b) => rankOf(a[0].signal[preset]?.tier) - rankOf(b[0].signal[preset]?.tier));
+  // Label the largest receivable site per city to keep the map readable.
+  const labelled = new Map();
+  for (const group of sites.values()) {
+    const live = group.filter((s) => receivable(s.signal[preset]?.tier));
+    if (live.length < 2) continue;
+    const city = group[0].city;
+    if (!labelled.has(city) || labelled.get(city).length < live.length) labelled.set(city, group);
+  }
+  const labelSet = new Set([...labelled.values()]);
+  const labels = [];
+  for (const group of ordered) {
+    const best = group.reduce((m, s) => ((s.signal[preset]?.noiseMarginDb ?? -999) > (m.signal[preset]?.noiseMarginDb ?? -999) ? s : m));
+    const tier = best.signal[preset]?.tier || 'unknown';
+    const [x, y] = pos(best.distanceKm, best.bearingDeg);
+    const r = 3 + Math.min(7, Math.sqrt(group.length) * 2);
+    const ng = group.some((s) => s.atsc3);
+    const k = `${best.facilityId}:${best.rfChannel}`;
+    const dot = svgEl('circle', { class: `site-dot${ng ? ' ng' : ''}`, cx: x, cy: y, r, fill: TIER_COLOR[tier], 'data-k': k });
+    dot.dataset.site = group.map((s) => `${s.facilityId}:${s.rfChannel}`).join(' ');
+    dot.append(svgEl('title', {}, `${group.map((s) => s.callSign).join(', ')}\n${best.city}, ${best.distanceKm.toFixed(0)} km ${compass(best.bearingDeg)}`));
+    svg.append(dot);
+    if (labelSet.has(group)) labels.push({ x, y, r, text: `${best.city} ${group.length}` });
+  }
+  // Place labels outward from the center, skipping any that would collide.
+  const placed = [];
+  for (const l of labels.sort((a, b) => a.text.length - b.text.length)) {
+    const left = l.x < 0;
+    const w = l.text.length * 7.8;
+    const x0 = left ? l.x - l.r - 5 - w : l.x + l.r + 5;
+    const box = { x0, x1: x0 + w, y0: l.y - 9, y1: l.y + 6 };
+    if (placed.some((b) => box.x0 < b.x1 && b.x0 < box.x1 && box.y0 < b.y1 && b.y0 < box.y1)) continue;
+    placed.push(box);
+    svg.append(svgEl('text', { class: 'site', x: left ? l.x - l.r - 5 : l.x + l.r + 5, y: l.y + 4, 'text-anchor': left ? 'end' : 'start' }, l.text));
+  }
+  svg.append(svgEl('circle', { class: 'home', r: 4 }));
+  svg.append(svgEl('line', { class: 'ray', id: 'ray', x1: 0, y1: 0, x2: 0, y2: 0 }));
+}
+
+async function selectStation(k, quiet) {
+  state.aSel = k;
+  $$('.a-table tr').forEach((tr) => tr.classList.toggle('sel', tr.dataset.k === k));
+  $$('.radar .site-dot').forEach((d) => d.classList.toggle('sel', (d.dataset.site || '').split(' ').includes(k)));
+  const s = rx().bySite.get(k);
+  if (!s) return;
+  const ray = $('#ray');
+  if (ray) {
+    const R = 200;
+    const rr = R * Math.sqrt(Math.min(s.distanceKm, rx().report.radiusKm) / rx().report.radiusKm);
+    const a = (s.bearingDeg - 90) * Math.PI / 180;
+    ray.setAttribute('x2', rr * Math.cos(a));
+    ray.setAttribute('y2', rr * Math.sin(a));
+  }
+  const a = $('#antenna');
+  f(a, 'phead').innerHTML = `<b>${esc(s.callSign)}</b><span>RF ${s.rfChannel} ${esc(s.band)} | ${s.erpKw} kW | ${s.distanceKm.toFixed(1)} km at ${s.bearingDeg.toFixed(0)}° ${compass(s.bearingDeg)}</span>`;
+  try {
+    const prof = await api().Profile(s.facilityId, s.rfChannel, rx().zip);
+    if (state.aSel !== k) return;
+    drawProfile(prof, s);
+  } catch (e) {
+    if (!quiet) toast(String(e));
+  }
+}
+
+function drawProfile(prof, s) {
+  const svg = $('.ap-svg');
+  const preset = state.presets.find((p) => p.name === state.settings.antenna) || state.presets[0];
+  const W = 600; const H = 180;
+  const D = prof.distanceKm * 1000;
+  const n = prof.elevations.length;
+  const xs = prof.elevations.map((_, i) => (D * i) / (n - 1));
+  const z = prof.elevations.map((e, i) => e + (xs[i] * (D - xs[i])) / (2 * EARTH_M));
+  const rxH = prof.rxGroundM + preset.heightM;
+  const txH = prof.txHeightM;
+  const lo = Math.min(...z) - 40;
+  const hi = Math.max(...z, rxH, txH) + 60;
+  const X = (x) => (x / D) * W;
+  const Y = (h) => H - ((h - lo) / (hi - lo)) * H;
+
+  // obstruction: highest terrain above the line of sight
+  let worst = -Infinity; let wi = -1;
+  for (let i = 1; i < n - 1; i++) {
+    const los = rxH + ((txH - rxH) * xs[i]) / D;
+    if (z[i] - los > worst) { worst = z[i] - los; wi = i; }
+  }
+  const blocked = worst > 0;
+
+  let d = `M0 ${H} `;
+  z.forEach((h, i) => { d += `L${X(xs[i]).toFixed(1)} ${Y(h).toFixed(1)} `; });
+  d += `L${W} ${H} Z`;
+  svg.innerHTML = `<defs><linearGradient id="terrainfill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4a4236"/><stop offset="1" stop-color="#15130f"/></linearGradient></defs>
+    <path class="terrain" d="${d}"/>
+    <line class="los${blocked ? ' blocked' : ''}" x1="${X(0)}" y1="${Y(rxH)}" x2="${X(D)}" y2="${Y(txH)}"/>
+    <line class="mast" x1="1" y1="${Y(prof.rxGroundM)}" x2="1" y2="${Y(rxH)}"/>
+    <line class="mast" x1="${W - 1}" y1="${Y(prof.elevations[n - 1])}" x2="${W - 1}" y2="${Y(txH)}"/>
+    ${blocked ? `<circle class="hit" cx="${X(xs[wi])}" cy="${Y(z[wi])}" r="4"/>` : ''}`;
+
+  const sig = prof.signal;
+  const parts = state.presets.map((p) => {
+    const e = sig[p.name];
+    if (!e || e.tier === 'unknown') return `${p.name} ?`;
+    return `${p.name} <b style="color:${TIER_COLOR[e.tier]}">${e.noiseMarginDb > 0 ? '+' : ''}${e.noiseMarginDb.toFixed(0)} dB</b>`;
+  });
+  const e = sig[preset.name] || {};
+  const why = blocked
+    ? `<span style="color:var(--red)">Blocked: terrain ${(xs[wi] / 1000).toFixed(0)} km out rises ${worst.toFixed(0)} m above the line of sight</span>`
+    : '<span style="color:var(--amber)">Clear line of sight</span>';
+  f($('#antenna'), 'pfoot').innerHTML = `${why}<span>${parts.join('  ')}</span><span>diffraction ${e.diffractionDb ?? '?'} dB</span><span>field ${e.fieldDbuVm ?? '?'} dBuV/m</span>`;
+}
+
+function renderNextGen(preset) {
+  const box = f($('#antenna'), 'nextgen');
+  const hosts = rx().report.atsc3 || [];
+  if (!hosts.length) {
+    box.innerHTML = '';
+    return;
+  }
+  const items = hosts.map((h) => {
+    const s = rx().byFacility.get(h.facilityId);
+    const e = s && s.signal[preset];
+    const tier = e ? e.tier : 'unknown';
+    const svcs = (h.services || []).map((v) => `<li><span>${esc(v.display.replace('-', '.'))}</span>${esc(v.network)} ${esc(v.name)}${v.atsc1Call && v.atsc1Call.split('-')[0] !== v.name.split('-')[0] ? ` <em>(1.0 on ${esc(v.atsc1Call)})</em>` : ''}</li>`).join('');
+    return `<div class="ng-host"><b>${esc(h.callSign)}</b> ${meter(tier)} <div class="mono">RF ${esc(h.rf)}${h.launched ? `, since ${esc(h.launched)}` : ''}${e && tier !== 'unknown' ? `, ${e.noiseMarginDb > 0 ? '+' : ''}${e.noiseMarginDb.toFixed(0)} dB` : ''}</div><ul>${svcs}</ul></div>`;
+  }).join('');
+  box.innerHTML = `<div class="ng-label">NextGen TV (ATSC 3.0)</div><div class="ng-hosts">${items}</div>`;
+}
+
+// ---------- settings ----------
+// Settings is one list of rows by section, for a remote or a controller
+// first (a mouse and a keyboard work too): Up and Down move, Left and Right
+// change a choice or a switch, Enter switches, runs or opens a list (hidden
+// channels, the controls, data sources), Esc goes back. Up from the first
+// row, or Left on a row with nothing to change, moves to the dock. Changes
+// are saved as they're made. The server's address and token need a
+// keyboard: Enter on their row puts the cursor in them.
+const settingsUI = { at: 0, sub: null, from: 0, rows: [], sections: [], pending: {}, timers: {}, tested: '' };
+
+const AUDIO_LANGS = [['', 'As broadcast'], ['en', 'English'], ['es', 'Spanish'], ['fr', 'French'], ['ko', 'Korean'],
+  ['vi', 'Vietnamese'], ['zh', 'Chinese'], ['ru', 'Russian'], ['pt', 'Portuguese']];
+const GUIDE_HOURS = [6, 12, 24, 36, 48, 72];
+const WATCHED = [[0, 'Keep them'], [1, 'Delete after a day'], [7, 'Delete after a week'], [30, 'Delete after a month']];
+const SETTINGS_LISTS = { hidden: 'Hidden channels', controls: 'Remote, controller and keys', sources: 'Data sources' };
+
+// padNames names face buttons ("A, Y") as the pad in use labels them, by
+// their place in the standard mapping.
+const FACES = {
+  xbox: ['A', 'B', 'X', 'Y'], xboxswap: ['A', 'B', 'Y', 'X'], switch: ['B', 'A', 'Y', 'X'],
+  playstation: ['Cross', 'Circle', 'Square', 'Triangle'], steamdeck: ['A', 'B', 'X', 'Y'],
+};
+const padNames = (names) => names.replace(/\b[ABXY]\b/g, (n) => (FACES[prompts.family] || FACES.xbox)['ABXY'.indexOf(n)]);
+
+// CONTROLS is the legend of the controls list: glyph keys, the controller's
+// buttons by name (for a keyboard user), the keys, and what they do.
+const CONTROLS = [
+  ['Arrows', 'D-pad, left stick', 'Arrows', 'Move. On TV, Up and Down change channel, Left and Right go back 10 s or ahead 30 s'],
+  ['Enter', 'A', 'Enter', 'Choose. On TV, A plays and pauses, and Enter (the remote\'s OK) opens the guide'],
+  ['Escape', 'B', 'Esc, Back', 'Back'],
+  ['g', 'Y', 'G', 'Guide'],
+  ['i', 'X', 'I', 'Program info, twice for reception'],
+  ['PageUp PageDown', 'LB, RB', 'Page Up, Page Down', 'Channel down or up, a page of the guide or of Settings'],
+  ['ShiftLeft ShiftRight', 'LT, RT', 'Shift Left, Shift Right', 'Back or ahead a minute'],
+  ['Space', 'R3', 'Space, Play', 'Pause'],
+  ['m', 'L3', 'M', 'Mute'],
+  [',', 'Start', ',', 'Settings'],
+  ['w', 'Back', 'W', 'Weather'],
+];
+
+function wireSettings() {
+  const v = $('#settings');
+  const list = f(v, 'list');
+  list.addEventListener('click', (e) => {
+    const el = e.target.closest('.s-row');
+    if (!el) return;
+    const i = Number(el.dataset.i);
+    if (i !== settingsUI.at) moveSetting(i, false);
+    if (e.target.closest('input')) return;
+    const r = settingsUI.rows[i];
+    const step = e.target.closest('[data-step]');
+    if (r.kind === 'choice') stepSetting(r, step ? Number(step.dataset.step) : 1, !step);
+    else activateSetting(r);
+  });
+  // The text rows: Enter keeps what was typed, Esc puts it back.
+  list.addEventListener('keydown', (e) => {
+    const input = e.target.closest('input');
+    if (!input) return;
+    if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      input.value = input.dataset.was;
+      input.blur();
+    }
+  });
+  list.addEventListener('change', (e) => {
+    if (e.target.name === 'server' || e.target.name === 'token') saveServer(e.target.name, e.target.value);
+  });
+  list.addEventListener('focusout', () => setTimeout(renderSettings));
+  f(v, 'index').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-section]');
+    if (!b) return;
+    if (settingsUI.sub) closeSettingsList();
+    moveSetting(settingsUI.rows.findIndex((r) => r.section === b.dataset.section));
+  });
+}
+
+// openSettings shows the list from the top level, where it was left.
+function openSettings() {
+  settingsUI.sub = null;
+  renderSettings();
+  moveSetting(settingsUI.at);
+}
+
+const settingsValue = (r) => (r.id in settingsUI.pending ? settingsUI.pending[r.id] : r.get());
+
+// settingsRows lists what can be set, by section. A row is a choice (Left
+// and Right), a switch, an action, a list it opens, text, or information.
+function settingsRows() {
+  const s = state.settings;
+  const info = state.info || {};
+  const rows = [];
+  const add = (section, row) => rows.push({ section, ...row });
+
+  add('Display', {
+    id: 'scale', kind: 'choice', label: 'Interface size', sub: 'Larger reads better across a room',
+    choices: SCALES.map((x) => [x, x ? `${x}%` : `Auto, ${autoScale()}%`]), get: () => s.scale || 0, set: setScale,
+  });
+  const detected = PAD_LABELS.find(([k]) => k === prompts.detected)[1];
+  add('Display', {
+    id: 'padlabels', kind: 'choice', label: 'Button labels', sub: 'How hints name a controller\'s buttons',
+    choices: PAD_LABELS.map(([k, label]) => [k, k ? label : `Auto, ${detected}`]), get: () => localStorage.getItem(padLabelsKey) || '', set: setPadLabels,
+  });
+
+  if (info.antenna !== false) {
+    add('Watching', {
+      id: 'antenna', kind: 'choice', label: 'Antenna', choices: state.presets.map((p) => [p.name, p.label]), get: () => s.antenna, set: setPreset,
+      subFor: (name) => {
+        const p = state.presets.find((x) => x.name === name);
+        const n = state.report ? state.report.channels.filter((c) => receivable(c.tier && c.tier[name])).length : 0;
+        return p ? `${p.heightM} m above ground${n ? `, ${n} channels` : ''}` : '';
+      },
+    });
+    add('Watching', {
+      id: 'showAll', kind: 'switch', label: 'Unlikely channels', sub: 'List channels you probably can\'t receive too',
+      get: () => !!s.showAll, set: setShowAll,
+    });
+  }
+  const hours = (state.config && state.config.guideHours) || 24;
+  add('Watching', {
+    id: 'guideHours', kind: 'choice', delay: true, label: 'Listings', sub: 'How far ahead the guide goes',
+    choices: [...new Set([...GUIDE_HOURS, hours])].sort((a, b) => a - b).map((h) => [h, `${h} hours`]), get: () => hours, set: setGuideHours,
+  });
+  add('Watching', {
+    id: 'captions', kind: 'switch', label: 'Captions', sub: 'Programs that aren\'t in English start with them on',
+    get: () => !!s.captions, set: setCaptionsDefault,
+  });
+  const lang = s.audioLang || '';
+  add('Watching', {
+    id: 'audioLang', kind: 'choice', label: 'Audio language', sub: 'When a channel has more than one',
+    choices: AUDIO_LANGS.some(([k]) => k === lang) ? AUDIO_LANGS : [...AUDIO_LANGS, [lang, lang.toUpperCase()]], get: () => lang, set: setAudioLang,
+  });
+
+  if (info.dvr) {
+    add('Recordings', {
+      id: 'watched', kind: 'choice', delay: true, label: 'Watched recordings', sub: 'Unwatched ones are always kept',
+      choices: WATCHED, get: () => (state.dvr && state.dvr.prefs && state.dvr.prefs.deleteWatchedAfterDays) || 0, set: setWatched,
+    });
+  }
+
+  const hidden = (s.hidden || []).length;
+  add('Channels', { id: 'hidden', kind: 'open', label: 'Hidden channels', sub: 'In the guide, H hides a channel', value: hidden ? `${hidden} hidden` : 'None', open: 'hidden' });
+  add('Channels', { id: 'hideshop', kind: 'action', verb: 'hides them', label: 'Hide shopping channels', sub: 'QVC, HSN, Jewelry TV and the like', value: 'Hide', run: hideShopping });
+
+  add('Server', { id: 'server', kind: 'text', label: 'Address', sub: 'Type it with a keyboard', name: 'server', text: s.server || '', placeholder: 'nas.local' });
+  add('Server', { id: 'token', kind: 'text', label: 'Token', sub: 'If the server needs one. Type it with a keyboard', name: 'token', text: s.token || '', password: true });
+  add('Server', {
+    id: 'test', kind: 'action', verb: 'tests it', label: 'Test connection',
+    value: settingsUI.tested || (info.name ? `Connected to ${info.name}` : 'Test'), run: testServer,
+  });
+  add('Server', { id: 'refresh', kind: 'action', verb: 'refreshes', label: 'Refresh all data', sub: 'Transmitters, reception and listings, fetched again', value: 'Refresh', run: refreshAll });
+
+  add('About', { id: 'app', kind: 'info', label: 'Airwaves', value: state.boot && state.boot.version ? `Version ${state.boot.version}` : '' });
+  if (info.name) {
+    add('About', { id: 'server-info', kind: 'info', label: 'Server', value: info.name, sub: [info.version && `Version ${info.version}`, s.server].filter(Boolean).join(', ') });
+  }
+  if (info.tuner && info.tuner.name) add('About', { id: 'tuner', kind: 'info', label: 'Tuner', value: info.tuner.name, sub: info.tuner.detail || '' });
+  add('About', { id: 'controls', kind: 'open', label: SETTINGS_LISTS.controls, open: 'controls' });
+  if (state.report && state.report.sources.length) add('About', { id: 'sources', kind: 'open', label: SETTINGS_LISTS.sources, value: `${state.report.sources.length}`, open: 'sources' });
+  for (const [i, w] of ((state.report && state.report.warnings) || []).entries()) add('About', { id: `warning${i}`, kind: 'info', label: 'Note', sub: w });
+  return rows;
+}
+
+// settingsList is the rows of a list opened from a row.
+function settingsList(name) {
+  const title = SETTINGS_LISTS[name];
+  const rows = [];
+  const add = (row) => rows.push({ section: title, ...row });
+  if (name === 'hidden') {
+    const known = state.report ? [...state.custom, ...state.report.channels] : [];
+    const hidden = (state.settings.hidden || []).map((k) => known.find((c) => c.key === k) || unlistedChannel(k));
+    if (hidden.length > 1) add({ id: 'all', kind: 'action', verb: 'shows them', label: 'All of them', value: 'Show', run: () => showHidden(hidden.map((c) => c.key)) });
+    for (const c of hidden) {
+      add({ id: c.key, kind: 'action', verb: 'shows it', label: `${c.number} ${c.network || displayCall(c)}`.trim(), value: 'Show', run: () => showHidden([c.key]) });
+    }
+    if (!hidden.length) add({ id: 'none', kind: 'info', label: 'No hidden channels', sub: 'In the guide, H hides a channel' });
+  }
+  if (name === 'controls') {
+    for (const [keys, pad, label, what] of CONTROLS) {
+      add({ id: label, kind: 'info', label: what, html: `<span class="s-glyphs" title="${esc(padNames(pad))}">${keys.split(' ').map((k) => glyph(k === 'Space' ? ' ' : k, pad)).join('')}</span><kbd>${esc(label)}</kbd>` });
+    }
+  }
+  if (name === 'sources') {
+    for (const x of (state.report && state.report.sources) || []) {
+      add({ id: x.url, kind: 'action', verb: 'opens it', label: x.name, sub: x.use, value: 'Open', run: () => api().OpenURL(x.url) });
+    }
+  }
+  return rows;
+}
+
+function renderSettings() {
+  if (!state.settings) return;
+  const v = $('#settings');
+  const list = f(v, 'list');
+  // Not under the cursor while something is typed.
+  if (list.contains(document.activeElement) && document.activeElement.matches('input')) return;
+  if (state.view !== 'settings') settingsUI.sub = null;
+  const main = settingsRows();
+  settingsUI.sections = [...new Set(main.map((r) => r.section))];
+  const rows = settingsUI.rows = settingsUI.sub ? settingsList(settingsUI.sub) : main;
+  settingsUI.at = Math.min(settingsUI.at, Math.max(0, rows.length - 1));
+  let html = '';
+  let section = '';
+  rows.forEach((r, i) => {
+    if (r.section !== section) {
+      html += `${section ? '</div>' : ''}<h2 class="s-head">${esc(r.section)}</h2><div class="s-group">`;
+      section = r.section;
+    }
+    html += settingsRowHTML(r, i);
+  });
+  if (section) html += '</div>';
+  if (settingsUI.sub === 'controls') {
+    html += '<p class="s-note">Digits tune a channel. The remote\'s Fast forward and Rewind skip, Record records. Keyboard only: L last channel, C captions, V audio track, F favorite, R record, D recordings, A reception, Shift F full screen. In Steam, give Airwaves the Gamepad controller layout, not a keyboard one.</p>';
+  }
+  const keep = list.scrollTop;
+  list.innerHTML = html;
+  list.scrollTop = keep;
+  renderSettingsIndex();
+  renderSettingsHint();
+}
+
+function settingsRowHTML(r, i) {
+  let value = '';
+  let sub = r.sub || '';
+  if (r.kind === 'choice') {
+    const x = settingsValue(r);
+    const at = r.choices.findIndex(([k]) => k === x);
+    if (r.subFor) sub = r.subFor(x);
+    value = `<i class="s-step${at <= 0 ? ' end' : ''}" data-step="-1">‹</i><span class="s-choice">${esc(at >= 0 ? r.choices[at][1] : x)}</span><i class="s-step${at >= r.choices.length - 1 ? ' end' : ''}" data-step="1">›</i>`;
+  } else if (r.kind === 'switch') {
+    const on = settingsValue(r);
+    value = `<span>${on ? 'On' : 'Off'}</span><span class="s-switch${on ? ' on' : ''}"><i></i></span>`;
+  } else if (r.kind === 'text') {
+    value = `<input name="${r.name}" type="${r.password ? 'password' : 'text'}" value="${esc(r.text)}" data-was="${esc(r.text)}" placeholder="${esc(r.placeholder || '')}" autocapitalize="off" autocomplete="off" spellcheck="false">`;
+  } else {
+    value = `${r.html || `<span>${esc(r.value || '')}</span>`}${r.kind === 'open' ? '<i class="s-more">›</i>' : ''}`;
+  }
+  return `<div class="s-row k-${r.kind}${i === settingsUI.at ? ' focus' : ''}" data-i="${i}" role="listitem">
+    <div class="s-label"><b>${esc(r.label)}</b>${sub ? `<small>${esc(sub)}</small>` : ''}</div><div class="s-value">${value}</div></div>`;
+}
+
+// renderSettingsIndex lists the sections beside the rows, marking where the
+// focus is. It follows the focus; the arrows never land on it.
+function renderSettingsIndex() {
+  const r = settingsUI.sub ? null : settingsUI.rows[settingsUI.at];
+  const cur = r ? r.section : (settingsUI.from >= 0 && settingsRows()[settingsUI.from] || {}).section;
+  f($('#settings'), 'index').innerHTML = settingsUI.sections.map((s) => `<button type="button" class="rm-item ${s === cur ? 'on' : ''}" data-section="${esc(s)}" tabindex="-1">
+    <span class="rm-label">${esc(s)}</span></button>`).join('');
+}
+
+function renderSettingsHint() {
+  const r = settingsUI.rows[settingsUI.at];
+  const top = settingsUI.at === 0 && !settingsUI.sub;
+  const items = [['UpDown', 'Up, Down', top ? 'move, Up to the menu' : 'move']];
+  if (r && (r.kind === 'choice' || r.kind === 'switch')) items.push(['LeftRight', 'Left, Right', 'change']);
+  if (r && r.kind === 'switch') items.push(['Enter', 'Enter', 'switches']);
+  if (r && r.kind === 'open') items.push(['Enter', 'Enter', 'opens']);
+  if (r && r.kind === 'action') items.push(['Enter', 'Enter', r.verb || 'runs']);
+  if (r && r.kind === 'text') items.push(['Enter', 'Enter', 'types in it, with a keyboard']);
+  items.push(['Escape', 'Esc', settingsUI.sub ? 'back' : 'leaves Settings']);
+  f($('#settings'), 'hint').innerHTML = hints(items);
+}
+
+function moveSetting(i, scroll = true) {
+  const rows = settingsUI.rows;
+  if (!rows.length) return;
+  settingsUI.at = Math.max(0, Math.min(rows.length - 1, i));
+  const list = f($('#settings'), 'list');
+  for (const el of list.querySelectorAll('.s-row.focus')) el.classList.remove('focus');
+  const el = list.querySelector(`.s-row[data-i="${settingsUI.at}"]`);
+  if (el) {
+    el.classList.add('focus');
+    if (scroll && settingsUI.at === 0) list.scrollTop = 0;
+    else if (scroll) el.scrollIntoView({ block: 'nearest' });
+  }
+  renderSettingsIndex();
+  renderSettingsHint();
+}
+
+// settingsKey handles a key in Settings, or returns false to leave it to
+// the keys every view has (Esc at the top level goes back to TV).
+function settingsKey(e) {
+  const r = settingsUI.rows[settingsUI.at];
+  switch (e.key) {
+    case 'ArrowUp':
+      if (settingsUI.at > 0) moveSetting(settingsUI.at - 1);
+      else if (!settingsUI.sub) openDock();
+      break;
+    case 'ArrowDown': moveSetting(settingsUI.at + 1); break;
+    case 'PageUp': case 'PageDown': moveSetting(settingsPage(e.key === 'PageDown' ? 1 : -1)); break;
+    case 'ArrowLeft':
+      if (r && r.kind === 'choice') stepSetting(r, -1);
+      else if (r && r.kind === 'switch') { if (settingsValue(r)) changeSetting(r, false); }
+      else if (settingsUI.sub) closeSettingsList();
+      else openDock();
+      break;
+    case 'ArrowRight':
+      if (r && r.kind === 'choice') stepSetting(r, 1);
+      else if (r && r.kind === 'switch') { if (!settingsValue(r)) changeSetting(r, true); }
+      else if (r && r.kind === 'open') activateSetting(r);
+      break;
+    case 'Enter':
+      if (r && r.kind === 'choice') stepSetting(r, 1, true);
+      else if (r) activateSetting(r);
+      break;
+    case 'Escape':
+      if (!settingsUI.sub) return false;
+      closeSettingsList();
+      break;
+    default: return false;
+  }
+  e.preventDefault();
+  return true;
+}
+
+// settingsPage is where Page Up or Down goes: the next section, or the
+// start of this one (the one before when already there); in a list, eight
+// rows on.
+function settingsPage(dir) {
+  const rows = settingsUI.rows;
+  const at = settingsUI.at;
+  if (settingsUI.sub) return at + dir * 8;
+  const cur = rows[at].section;
+  if (dir > 0) {
+    const i = rows.findIndex((r, j) => j > at && r.section !== cur);
+    return i < 0 ? rows.length - 1 : i;
+  }
+  let i = at;
+  while (i > 0 && rows[i - 1].section === cur) i--;
+  if (i < at || i === 0) return i;
+  const prev = rows[i - 1].section;
+  while (i > 0 && rows[i - 1].section === prev) i--;
+  return i;
+}
+
+function stepSetting(r, dir, wrap = false) {
+  const x = settingsValue(r);
+  const n = r.choices.length;
+  let i = r.choices.findIndex(([k]) => k === x);
+  i = wrap ? (i + dir + n) % n : Math.max(0, Math.min(n - 1, i + dir));
+  if (r.choices[i][0] !== x) changeSetting(r, r.choices[i][0]);
+}
+
+// changeSetting shows the new value at once and saves it; a row with delay
+// (a rescan or a call to the server) saves once the value rests.
+function changeSetting(r, value) {
+  settingsUI.pending[r.id] = value;
+  renderSettings();
+  clearTimeout(settingsUI.timers[r.id]);
+  const save = async () => {
+    try {
+      await r.set(value);
+    } catch (err) {
+      toast(String(err && err.message ? err.message : err), 6000);
+    }
+    if (settingsUI.pending[r.id] === value) delete settingsUI.pending[r.id];
+    renderSettings();
+  };
+  if (r.delay) settingsUI.timers[r.id] = setTimeout(save, 900);
+  else save();
+}
+
+function activateSetting(r) {
+  if (r.kind === 'switch') return changeSetting(r, !settingsValue(r));
+  if (r.kind === 'open') return openSettingsList(r.open);
+  if (r.kind === 'text') {
+    const input = f($('#settings'), 'list').querySelector(`input[name="${r.name}"]`);
+    if (input) { input.focus(); input.select(); }
+    return null;
+  }
+  if (r.run) return Promise.resolve(r.run()).catch((err) => toast(String(err && err.message ? err.message : err), 6000));
+  return null;
+}
+
+function openSettingsList(name) {
+  settingsUI.from = settingsUI.at;
+  settingsUI.sub = name;
+  settingsUI.at = 0;
+  renderSettings();
+  f($('#settings'), 'list').scrollTop = 0;
+}
+
+function closeSettingsList() {
+  settingsUI.sub = null;
+  settingsUI.at = settingsUI.from;
+  renderSettings();
+  moveSetting(settingsUI.at);
+}
+
+// ---------- what the settings rows do ----------
+async function setShowAll(on) {
+  await saveAppSettings({ ...state.settings, showAll: on });
+  buildLineup();
+  renderAll();
+  toast(`${on ? 'Listing' : 'Not listing'} channels you probably can't receive. ${state.lineup.length} channels.`, 2500);
+}
+
+async function setGuideHours(hours) {
+  toast('Updating the listings...', 30000);
+  state.config = await api().SetConfig({ ...state.config, guideHours: hours });
+  await scan(false);
+  renderAll();
+  toast(`${hours} hours of listings`, 2000);
+}
+
+async function setCaptionsDefault(on) {
+  await saveAppSettings({ ...state.settings, captions: on });
+  applyCaptions();
+  toast(on ? 'Captions on' : 'Captions off', 1800);
+}
+
+async function setAudioLang(lang) {
+  await saveAppSettings({ ...state.settings, audioLang: lang });
+  applyAudio();
+  toast(`Audio: ${(AUDIO_LANGS.find(([k]) => k === lang) || [lang, lang.toUpperCase()])[1]}`, 1800);
+}
+
+async function setWatched(days) {
+  const prefs = await api().SetDVRPrefs({ deleteWatchedAfterDays: days });
+  if (state.dvr) state.dvr.prefs = prefs;
+  toast(prefs.deleteWatchedAfterDays ? `Watched recordings are deleted after ${prefs.deleteWatchedAfterDays} day${prefs.deleteWatchedAfterDays > 1 ? 's' : ''}` : 'Watched recordings are kept', 2500);
+}
+
+async function hideShopping() {
+  if (!state.report) return;
+  const shop = state.report.channels.filter((c) => SHOPPING.test(c.network || '')).map((c) => c.key);
+  const was = new Set(state.settings.hidden || []);
+  const added = shop.filter((k) => !was.has(k)).length;
+  if (!added) return toast(shop.length ? 'Shopping channels are hidden already' : 'No shopping channels to hide', 2500);
+  await saveAppSettings({ ...state.settings, hidden: [...was, ...shop.filter((k) => !was.has(k))] });
+  buildLineup();
+  renderAll();
+  return toast(`Hid ${added} shopping channel${added > 1 ? 's' : ''}`);
+}
+
+async function showHidden(keys) {
+  await unhide(keys);
+  toast(keys.length > 1 ? 'Every channel shown again' : 'Channel shown again', 1800);
+  if (!(state.settings.hidden || []).length) closeSettingsList();
+}
+
+async function testServer() {
+  const s = state.settings;
+  settingsUI.tested = `Connecting to ${s.server}...`;
+  renderSettings();
+  try {
+    const info = await api().TestServer(s.server, s.token || '');
+    settingsUI.tested = `Connected to ${info.name}`;
+  } catch (err) {
+    settingsUI.tested = `Can't reach ${s.server}`;
+    toast(`Can't reach ${s.server}: ${err && err.message ? err.message : err}`, 6000);
+  }
+  renderSettings();
+}
+
+async function refreshAll() {
+  toast('Fetching everything again...', 60000);
+  await scan(true);
+  renderAll();
+  toast(`Updated. ${state.lineup.length} channels.`, 2500);
+}
+
+// saveServer switches to a new server address or token, after checking it
+// answers; the app starts over with it.
+async function saveServer(name, value) {
+  const prev = state.settings;
+  const next = { ...prev, [name]: name === 'server' ? value.trim() : value };
+  if (next.server === prev.server && next.token === prev.token) return;
+  if (!next.server) {
+    toast('Enter the server address', 3000);
+    return renderSettings();
+  }
+  toast(`Connecting to ${next.server}...`, 15000);
+  const boot = await api().SaveSettings(next);
+  if (boot.error) {
+    applyBoot(await api().SaveSettings(prev));
+    toast(`Can't reach ${next.server}: ${boot.error}`, 6000);
+    return renderSettings();
+  }
+  location.reload();
+  return null;
+}
+
+// ---------- interface size ----------
+// Larger for a TV across the room. On Linux WebKitGTK zooms the page (Go
+// sets it at launch, SetZoom after); elsewhere CSS zoom on the root scales
+// everything together, and style.css undoes it for viewport units. Auto
+// is 125% under gamescope, where the window is 1080p on a TV, else 100%.
+const SCALES = [0, 100, 115, 130, 150]; // 0 is Auto
+const autoScale = () => (state.boot && state.boot.autoScale) || 100;
+let pageZoom = 0;
+
+function applyScale() {
+  const z = ((state.settings && state.settings.scale) || autoScale()) / 100;
+  const root = document.documentElement;
+  const native = !!(state.boot && state.boot.nativeZoom);
+  if (native && z !== pageZoom) {
+    pageZoom = z;
+    api().SetZoom(z);
+  } else if (!native) {
+    root.style.zoom = z === 1 ? '' : String(z);
+    root.style.setProperty('--zoom', String(z));
+  }
+  // Larger sizes leave less room above the guide (.tight in style.css).
+  root.classList.toggle('tight', z > 1 && (native ? innerHeight : innerHeight / z) < 900);
+  fitWX();
+  if (state.view === 'guide' && state.report) renderGuide();
+}
+
+function setPadLabels(k) {
+  if (k) localStorage.setItem(padLabelsKey, k); else localStorage.removeItem(padLabelsKey);
+  applyPadFamily();
+  toast(`Button labels: ${PAD_LABELS.find(([x]) => x === k)[1]}`, 1800);
+}
+
+async function setScale(s) {
+  await saveAppSettings({ ...state.settings, scale: s });
+  toast(s ? `Interface size ${s}%` : `Interface size automatic, ${autoScale()}%`, 1800);
+}
+
+// unlistedChannel stands for a hidden channel that isn't listed now (an
+// antenna channel out of range, or one of the server's turned off), by its
+// key: "7.1|KMGH", "104.0|custom|Cartoons" or the weather channel's.
+function unlistedChannel(k) {
+  if (k === WEATHER_KEY) return { key: k, number: '', network: 'Weather channel' };
+  const [number, call, ...rest] = String(k).split('|');
+  return call === 'custom' ? { key: k, number, network: rest.join('|') || 'Custom channel' } : { key: k, number, callSign: call };
+}
+
+window.addEventListener('resize', applyScale);
+document.addEventListener('DOMContentLoaded', init);
+
+// ---------- recordings view ----------
+function renderRecordingBanner(b, it) {
+  const d = new Date(it.start);
+  showChannelLogo(b, null);
+  f(b, 'num').classList.remove('long');
+  f(b, 'num').textContent = 'REC';
+  f(b, 'call').textContent = `${it.channel} ${it.callSign || ''}`;
+  f(b, 'net').textContent = d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+  b.classList.remove('warn', 'detail');
+  f(b, 'time').textContent = `Recorded ${clock(d)}${it.sizeBytes ? '  |  ' + sizeLabel(it.sizeBytes) : ''}`;
+  f(b, 'chips').innerHTML = '';
+  f(b, 'title').textContent = it.title;
+  f(b, 'ep').textContent = it.subtitle || '';
+  const pos = (state.recOffset || 0) + (video.currentTime || 0);
+  f(b, 'progress').style.width = it.duration ? `${Math.min(100, (pos / it.duration) * 100)}%` : '0';
+  f(b, 'desc').textContent = it.description || '';
+  f(b, 'next').innerHTML = hints([['LeftRight', 'Arrows', 'skip'], [prompts.pad ? 'Enter' : ' ', 'Space', 'pauses'], ['Escape', 'Esc', 'returns to live TV']]);
+  f(b, 'meter').innerHTML = '';
+  f(b, 'tier').textContent = sizeLabel(it.sizeBytes);
+  f(b, 'tier').style.color = '';
+  f(b, 'tx').textContent = `On ${state.info.name}`;
+  f(b, 'atsc3').textContent = '';
+  f(b, 'note').textContent = '';
+}
+
+function sizeLabel(bytes) {
+  if (!bytes) return '';
+  return bytes > 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`;
+}
+
+const dayLabel = (t) => {
+  const d = new Date(t);
+  const today = new Date();
+  const tomorrow = new Date(Date.now() + 86_400_000);
+  if (d.toDateString() === today.toDateString()) return 'Today';
+  if (d.toDateString() === tomorrow.toDateString()) return 'Tomorrow';
+  return d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+};
+
+let pendingDelete = '';
+
+const REC_TABS = [['library', 'Library'], ['upcoming', 'Coming up'], ['series', 'Series']];
+
+function recLists() {
+  const st = state.dvr || {};
+  return {
+    library: st.recorded || [],
+    upcoming: st.upcoming || [],
+    series: (st.rules || []).filter((r) => r.kind === 'series'),
+  };
+}
+
+function renderRecordings() {
+  const v = $('#recordings');
+  const lists = recLists();
+  const tab = state.recTab || 'library';
+  const sel = state.recSelBy || (state.recSelBy = { library: 0, upcoming: 0, series: 0 });
+  for (const k of Object.keys(sel)) sel[k] = Math.min(sel[k], Math.max(0, lists[k].length - 1));
+
+  f(v, 'menu').innerHTML = REC_TABS.map(([k, label]) => `<button class="rm-item ${k === tab ? 'on' : ''}" data-tab="${k}"><span class="rm-label">${label}</span><span class="rm-count">${lists[k].length}</span></button>`).join('');
+  $$('.r-panel', v).forEach((p) => p.classList.toggle('on', p.dataset.panel === tab));
+
+  // Library: the selected recording above a grid of everything recorded.
+  const lib = lists.library;
+  const cur = lib[sel.library];
+  f(v, 'detail').innerHTML = cur ? `
+    <div>
+      <div class="rd-kicker">${dayLabel(cur.start)} ${clock(cur.start)}  |  ${esc(cur.channel)}  |  ${Math.round((Date.parse(cur.end) - Date.parse(cur.start)) / MIN)} min${cur.sizeBytes ? '  |  ' + sizeLabel(cur.sizeBytes) : ''}</div>
+      <div class="rd-title">${esc(cur.title)}</div>
+      <div class="rd-ep">${esc(cur.subtitle || '')}</div>
+      <p class="rd-desc">${esc(cur.status === 'failed' ? cur.detail || 'This recording failed' : cur.description || '')}</p>
+      <div class="rd-hint">${hints([['Enter', 'Enter', resumable(cur) ? `resumes at ${mmss(cur.position)}` : 'plays'], ...(resumable(cur) ? [['', 'Shift Enter', 'from the start']] : []), ['w', 'W', cur.watched ? 'unwatched' : 'watched'], ['', 'Delete', 'removes']])}</div>
+    </div>
+    <div class="rd-art" style="${cur.image ? `background-image:url('${esc(cur.image)}')` : ''}"></div>`
+    : '<div class="rd-empty">Nothing recorded yet. In the guide, press R to record a program, or Shift R for every episode.</div><div></div>';
+  f(v, 'library').innerHTML = lib.map((it, i) => `
+    <article class="r-card ${i === sel.library ? 'sel' : ''} ${it.status === 'failed' ? 'failed' : ''} ${it.watched ? 'watched' : ''}" data-i="${i}">
+      <div class="r-art" style="${it.image ? `background-image:url('${esc(it.image)}')` : ''}">${it.image ? '' : `<span>${esc(it.title)}</span>`}
+        ${resumable(it) ? `<div class="r-prog"><i style="width:${Math.min(100, (it.position / it.duration) * 100)}%"></i></div>` : ''}
+        ${it.watched ? '<b class="r-badge">Watched</b>' : ''}</div>
+      <div class="r-meta">
+        <div class="r-name">${esc(it.title)}</div>
+        <div class="r-sub">${esc(it.subtitle || '')}</div>
+        <div class="r-when">${dayLabel(it.start)}  |  ${esc(it.channel)}</div>
+      </div>
+    </article>`).join('');
+
+  f(v, 'upcoming').innerHTML = lists.upcoming.length ? lists.upcoming.map((it, i) => `
+    <li class="r-item ${it.status} ${i === sel.upcoming ? 'sel' : ''}" data-i="${i}">
+      <div class="r-time">${dayLabel(it.start)}<b>${clock(it.start)}</b></div>
+      <div class="r-what"><div class="r-name">${esc(it.title)}</div><div class="r-sub">${esc(it.channel)} ${esc(it.callSign ? it.callSign.replace(/(DT|LD|CD|LP|CA|D)\d*$/, '') : '')}${it.subtitle ? '  |  ' + esc(it.subtitle) : ''}</div>
+        ${it.status === 'recording' ? '<span class="chip live">Recording now</span>' : it.status === 'unavailable' ? '<span class="chip">Channel not available</span>' : ''}</div>
+      ${it.id ? `<button class="x" title="Don't record this" data-del="${esc(it.id)}">✕</button>` : '<span></span>'}
+    </li>`).join('') : '<li class="r-empty">Nothing scheduled.</li>';
+
+  f(v, 'rules').innerHTML = lists.series.length ? lists.series.map((r, i) => `
+    <li class="r-item ${i === sel.series ? 'sel' : ''}" data-i="${i}">
+      <div class="r-what"><div class="r-name">${esc(r.title)}</div><div class="r-sub">${esc(r.channel)}  |  ${r.newOnly ? 'New episodes' : 'Every episode'}  |  ${r.keep ? `Keep newest ${r.keep}` : 'Keep all'}</div></div>
+      <button class="x" title="Stop recording this series" data-rule="${esc(r.id)}">✕</button>
+    </li>`).join('') : '<li class="r-empty">No series recordings. In the guide, press Shift R on a show.</li>';
+  if (lists.series.length && !prompts.pad) f(v, 'rules').insertAdjacentHTML('beforeend', '<li class="r-hint">K changes how many to keep  |  N new episodes only  |  Delete stops the series</li>');
+}
+
+function wireRecordings() {
+  const v = $('#recordings');
+  f(v, 'menu').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-tab]');
+    if (!b) return;
+    state.recTab = b.dataset.tab;
+    renderRecordings();
+  });
+  v.addEventListener('click', async (e) => {
+    const del = e.target.closest('[data-del]');
+    const rule = e.target.closest('[data-rule]');
+    if (del || rule) {
+      try {
+        if (del) { await api().DeleteRecording(del.dataset.del); toast('Removed from the schedule'); }
+        if (rule) { await api().DeleteRule(rule.dataset.rule); toast('Series recording stopped'); }
+      } catch (err) {
+        toast(String(err && err.message ? err.message : err), 6000);
+      }
+      return loadDVR();
+    }
+    const item = e.target.closest('[data-i]');
+    if (item && state.recSelBy) {
+      state.recSelBy[state.recTab || 'library'] = Number(item.dataset.i);
+      renderRecordings();
+    }
+  });
+  f(v, 'library').addEventListener('dblclick', (e) => {
+    const card = e.target.closest('[data-i]');
+    if (card) {
+      const it = recLists().library[Number(card.dataset.i)];
+      playRecording(it, resumable(it) ? it.position : 0);
+    }
+  });
+}
+
+function recordingsKey(e) {
+  const tab = state.recTab || 'library';
+  const lists = recLists();
+  const list = lists[tab];
+  const sel = state.recSelBy || (state.recSelBy = { library: 0, upcoming: 0, series: 0 });
+  if (e.key === '[' || e.key === ']') {
+    const i = REC_TABS.findIndex(([k]) => k === tab);
+    state.recTab = REC_TABS[(i + (e.key === ']' ? 1 : REC_TABS.length - 1)) % REC_TABS.length][0];
+    return renderRecordings();
+  }
+  const cols = tab === 'library' ? Math.max(1, Math.round(f($('#recordings'), 'library').clientWidth / 280)) : 1;
+  if ((e.key === 'ArrowUp' && (!list.length || sel[tab] < cols)) || (e.key === 'ArrowLeft' && (tab !== 'library' || !sel[tab]))) {
+    e.preventDefault();
+    return openDock();
+  }
+  if (!list.length) return;
+  switch (e.key) {
+    case 'ArrowRight': if (tab === 'library') sel[tab] = Math.min(list.length - 1, sel[tab] + 1); break;
+    case 'ArrowLeft': if (tab === 'library') sel[tab] = Math.max(0, sel[tab] - 1); break;
+    case 'ArrowDown': sel[tab] = Math.min(list.length - 1, sel[tab] + cols); break;
+    case 'ArrowUp': sel[tab] = Math.max(0, sel[tab] - cols); break;
+    case 'Enter': {
+      e.preventDefault();
+      const it = list[sel[tab]];
+      if (tab === 'library') playRecording(it, !e.shiftKey && resumable(it) ? it.position : 0);
+      return;
+    }
+    case 'w': case 'W':
+      if (tab === 'library') {
+        const it = list[sel[tab]];
+        api().MarkWatched(it.id, !it.watched).then(loadDVR);
+      }
+      return;
+    case 'k': case 'K': case 'n': case 'N':
+      if (tab === 'series') {
+        const r = list[sel[tab]];
+        const steps = [0, 3, 5, 10];
+        const u = e.key.toLowerCase() === 'k'
+          ? { keep: steps[(steps.indexOf(r.keep || 0) + 1) % steps.length], newOnly: !!r.newOnly }
+          : { keep: r.keep || 0, newOnly: !r.newOnly };
+        api().UpdateRule(r.id, u).then(loadDVR).catch((err) => toast(String(err), 6000));
+      }
+      return;
+    case 'Delete': case 'Backspace': {
+      e.preventDefault();
+      const it = list[sel[tab]];
+      const id = it.id;
+      if (!id) return;
+      if (pendingDelete !== id) {
+        pendingDelete = id;
+        const what = tab === 'library' ? `delete ${it.title}` : tab === 'series' ? `stop recording ${it.title}` : `skip ${it.title}`;
+        toast(`Press Delete again to ${what}`);
+        setTimeout(() => { if (pendingDelete === id) pendingDelete = ''; }, 4000);
+        return;
+      }
+      pendingDelete = '';
+      const done = tab === 'series' ? api().DeleteRule(id) : api().DeleteRecording(id);
+      done.then(() => { toast('Done'); loadDVR(); }).catch((err) => toast(String(err), 6000));
+      return;
+    }
+    default: return;
+  }
+  e.preventDefault();
+  renderRecordings();
+  const el = $(`#recordings .r-panel.on [data-i="${sel[tab]}"]`);
+  if (el) el.scrollIntoView({ block: 'nearest' });
+}
+
+const resumable = (it) => !!it && !it.watched && it.position > 30 && it.duration > 0 && it.position < it.duration - 60;
+
+async function playRecording(it, from = 0) {
+  if (!it || it.status === 'failed') return toast('That recording failed and cannot be played');
+  const token = ++state.tuneToken;
+  state.recording = it;
+  showWX(false);
+  setView('tv');
+  stage.classList.add('tuning');
+  $('#nosignal').hidden = true;
+  showBanner();
+  try {
+    const pb = await api().PlayRecording(it.id, from);
+    if (token !== state.tuneToken) return;
+    state.recOffset = pb.offset || 0;
+    video.controls = true;
+    await play(pb, token);
+  } catch (e) {
+    if (token !== state.tuneToken) return;
+    showNoSignal({ number: 'REC', callSign: it.title, network: '' }, String(e && e.message ? e.message : e));
+  } finally {
+    if (token === state.tuneToken) setTimeout(() => stage.classList.remove('tuning'), 200);
+  }
+}
+
+// ---------- favorites and hidden channels ----------
+async function saveAppSettings(next) {
+  applyBoot(await api().SaveSettings(next));
+}
+
+async function toggleFavorite(ch) {
+  if (!ch) return;
+  const favs = new Set(state.settings.favorites || []);
+  const on = !favs.has(ch.key);
+  if (on) favs.add(ch.key); else favs.delete(ch.key);
+  await saveAppSettings({ ...state.settings, favorites: [...favs] });
+  toast(on ? `${ch.number} ${ch.network || displayCall(ch)} added to favorites` : `${ch.number} removed from favorites`);
+  if (state.view === 'guide') renderGuide();
+}
+
+async function hideChannel(ch) {
+  if (!ch) return;
+  const hidden = new Set(state.settings.hidden || []);
+  hidden.add(ch.key);
+  state.lastHidden = ch.key;
+  await saveAppSettings({ ...state.settings, hidden: [...hidden] });
+  buildLineup();
+  toast(`Hid ${ch.number} ${ch.network || displayCall(ch)}. Press U to undo.`, 5000);
+  if (state.view === 'guide') renderGuide();
+}
+
+async function unhide(keys) {
+  const hidden = new Set(state.settings.hidden || []);
+  for (const k of keys) hidden.delete(k);
+  await saveAppSettings({ ...state.settings, hidden: [...hidden] });
+  buildLineup();
+  renderAll();
+}
+
+const SHOPPING = /\b(qvc2?|hsn2?|shop ?lc|jewelry|jtv|tvdeals|deals|shopping)\b/i;
+
+// ---------- live rewind, captions and audio ----------
+function liveEdge() {
+  const r = video.seekable;
+  return r && r.length ? r.end(r.length - 1) : video.duration || 0;
+}
+
+// livePoint is where live TV plays from, and what counts as live: hls.js's
+// place a little behind the edge, where it has the video (at the edge
+// itself it has none yet, and WebKit drops back to the start), else the
+// edge.
+function livePoint() {
+  const h = state.hls;
+  if (h) {
+    const p = h.liveSyncPosition;
+    if (Number.isFinite(p) && p > 0) return Math.min(p, liveEdge());
+    if (Number.isFinite(h.targetLatency)) return Math.max(0, liveEdge() - h.targetLatency);
+  }
+  return liveEdge();
+}
+
+function skip(seconds) {
+  if (!video.src && !state.hls) return;
+  const r = video.seekable;
+  if (!r || !r.length) return;
+  const from = video.currentTime;
+  const t = Math.min(Math.max(from + seconds, r.start(0)), livePoint());
+  video.currentTime = t;
+  noteSkip(t - from, seconds);
+  showTimeshift();
+}
+
+function togglePause() {
+  if (video.paused) video.play().catch(() => {}); else video.pause();
+  showTimeshift();
+}
+
+function goLive() {
+  if (state.recording) return;
+  video.currentTime = livePoint();
+  video.play().catch(() => {});
+  flashPlace(true);
+  showTimeshift();
+}
+
+// behindLive is how far playback trails live: hls.js's live point, or for
+// the webview's own HLS the edge less the delay measured when playback
+// started.
+function behindLive() {
+  if (state.recording || !video.seekable || !video.seekable.length) return 0;
+  if (state.hls) return Math.max(0, livePoint() - video.currentTime);
+  return Math.max(0, liveEdge() - video.currentTime - (state.liveBaseline || 0));
+}
+
+const mmss = (sec) => {
+  sec = Math.max(0, Math.round(sec));
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = String(sec % 60).padStart(2, '0');
+  return h ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`;
+};
+
+// showTimeshift says in the banner's time line how far behind live the
+// picture is, or where in a recording.
+function showTimeshift() {
+  let text = '';
+  if (!video.hidden && (video.src || state.hls)) {
+    if (state.recording) {
+      text = `${video.paused ? 'Paused, ' : ''}${mmss((state.recOffset || 0) + video.currentTime)} of ${mmss(state.recording.duration || 0)}`;
+    } else {
+      const behind = behindLive();
+      if (video.paused) text = behind > 2 ? `Paused, ${mmss(behind)} behind live` : 'Paused';
+      else if (behind > 4) text = `${mmss(behind)} behind live`;
+    }
+  }
+  const el = f($('#banner'), 'shift');
+  if (el.textContent !== text) el.textContent = text;
+}
+
+// ---------- captions ----------
+// Captions follow the saved setting, except that programs whose sound
+// isn't English start with them on. C during such a program turns them
+// off or on for it alone, leaving the setting as it was.
+const ENGLISH = /^(en|eng|english)([-_].*)?$/i;
+const UNKNOWN = /^(|und|unknown|mul|mis|zxx|qaa)$/i;
+const foreignAudio = (p) => !!p && !!p.audioLang && !ENGLISH.test(p.audioLang) && !UNKNOWN.test(p.audioLang);
+
+function programOn() {
+  if (state.recording || !state.current) return null;
+  return airingAt(state.current, Date.now()) || null;
+}
+
+const programKey = (p) => `${state.current && state.current.key}|${p.start}`;
+
+function captionsWanted() {
+  const p = programOn();
+  if (foreignAudio(p)) {
+    const o = state.captionsFor;
+    return o && o.key === programKey(p) ? o.on : true;
+  }
+  return !!state.settings.captions;
+}
+
+// The app draws captions itself, the same on macOS and Linux, from the
+// stream's text track, which it keeps hidden from the webview: a custom
+// channel's WebVTT subtitles (timed word by word when YouTube's speech
+// recognition made them), else a broadcast's CEA-608 captions as hls.js or
+// WebKit decode them. They sit low on the picture, above the banner while
+// it shows, sized to the picture and the interface size: at most two
+// lines, as even as they'll go, broken where the source broke them when
+// that fits. A caption too long for two lines is paged, each page filling
+// the box in turn, and timed words appear as they're said. Pretext
+// (vendor/pretext) measures the words; canvas does until it has loaded,
+// or if it can't.
+const CAP_FAMILY = '"Schibsted", "Helvetica Neue", sans-serif';
+const CAP_HEIGHT = 0.046; // font size, of the picture's height at 100%
+const CAP_EMS = 21;       // the widest line, in ems: about 42 characters
+const cap = {
+  el: $('#captions'),
+  track: null,      // the text track drawn
+  timedTrack: false, // whether it times words
+  checked: 0,       // how many of its cues that's from
+  m: null,          // sizes: { size, max, bottom, pad, font, key }
+  key: '',          // the page drawn, at its size
+  page: null,
+  shown: -1,        // how many of its words show
+  spans: [],        // its word elements, timed pages only
+  bars: [],
+  logical: null,    // the track's cues, whole: { sig, cues }
+  timed: null,      // a timed track's words, paged
+  frozen: new Map(),// timed pages shown, as they were laid out
+  units: new Map(), // untimed captions, paged, by cue
+  raf: 0,
+  ready: false,     // the caption font has loaded
+};
+let pretext = null;
+import('./vendor/pretext/rich-inline.js')
+  .then((m) => { pretext = m; resetCaptionLayout(); })
+  .catch((e) => log('info', `captions measured with canvas: ${e}`));
+document.fonts.load(`500 32px ${CAP_FAMILY}`).catch(() => {}).then(() => { cap.ready = true; resetCaptionLayout(); });
+
+function captionTracks() {
+  return [...(video.textTracks || [])].filter((t) => t.kind === 'captions' || t.kind === 'subtitles');
+}
+
+// applyCaptions shows or hides captions as wanted, from the text subtitles
+// when there are some (a custom channel has those and the same words as
+// 608 in the picture), else the captions in the picture. It reports
+// whether the stream has any.
+function applyCaptions() {
+  const { tracks, pick, on } = captionPlan();
+  for (const t of tracks) {
+    const mode = on && t === pick ? 'hidden' : 'disabled';
+    if (t.mode !== mode) t.mode = mode;
+  }
+  // hls.js stops fetching subtitles nobody's reading.
+  if (!on && state.hls && state.hls.subtitleTrack !== -1) state.hls.subtitleTrack = -1;
+  setCaptionTrack(on ? pick : null);
+  return !!pick;
+}
+
+// captionPlan is which tracks there are, which one captions come from,
+// and whether they're wanted.
+function captionPlan() {
+  const tracks = captionTracks();
+  const pick = tracks.find((t) => t.kind === 'subtitles') || tracks[0] || null;
+  return { tracks, pick, on: !!state.settings && captionsWanted() };
+}
+
+// Only the app turns captions on: when a player or the webview changes a
+// track (picking one itself, or following a system caption setting), the
+// app sets them back as wanted.
+function keepCaptions() {
+  const { tracks, pick, on } = captionPlan();
+  if (tracks.some((t) => t.mode !== (on && t === pick ? 'hidden' : 'disabled'))) applyCaptions();
+}
+
+async function toggleCaptions() {
+  const p = programOn();
+  if (foreignAudio(p)) state.captionsFor = { key: programKey(p), on: !captionsWanted() };
+  else await saveAppSettings({ ...state.settings, captions: !state.settings.captions });
+  const found = applyCaptions();
+  toast(captionsWanted() ? (found ? 'Captions on' : 'Captions on (this program has none)') : 'Captions off', 1800);
+}
+
+function setCaptionTrack(t) {
+  if (t === cap.track) return;
+  cap.track = t;
+  cap.timedTrack = false;
+  cap.checked = 0;
+  cap.logical = null;
+  cap.timed = null;
+  cap.frozen.clear();
+  cap.units.clear();
+  drawCaption(null);
+  if (t && !cap.raf) cap.raf = requestAnimationFrame(captionFrame);
+}
+
+// resetCaptionLayout lays captions out again: the picture, the banner or
+// the font changed.
+function resetCaptionLayout() {
+  cap.m = null;
+  cap.key = '';
+}
+
+function captionFrame() {
+  cap.raf = 0;
+  if (!cap.track) return;
+  if (state.view === 'tv' && cap.ready) renderCaption(video.currentTime);
+  cap.raf = requestAnimationFrame(captionFrame);
+}
+
+// captionSizes fits captions to the picture within the stage, in CSS
+// pixels: the font a share of the picture's height, scaled with the
+// interface, and the lines' bottom a little above the picture's, or above
+// the banner or the weather crawl.
+function captionSizes() {
+  const w = stage.clientWidth;
+  const h = stage.clientHeight;
+  if (!w || !h) return null;
+  const ar = video.videoWidth && video.videoHeight ? video.videoWidth / video.videoHeight : 16 / 9;
+  const pw = Math.min(w, h * ar);
+  const ph = pw / ar;
+  // Larger with the interface, though only half as fast: at 150% they'd
+  // otherwise crowd the picture.
+  const z = 1 + (((state.settings && state.settings.scale) || autoScale()) / 100 - 1) / 2;
+  const size = Math.max(12, Math.round(ph * CAP_HEIGHT * z));
+  const max = Math.round(Math.min(pw * 0.88, size * CAP_EMS));
+  let bottom = (h - ph) / 2 + ph * 0.055;
+  const banner = $('#banner');
+  if (state.view === 'tv' && banner.classList.contains('show')) bottom = Math.max(bottom, h - banner.offsetTop + size * 0.45);
+  const crawl = $('#crawl');
+  if (crawl && document.body.classList.contains('has-crawl')) bottom = Math.max(bottom, crawl.offsetHeight + size * 0.45);
+  return { size, max, bottom: Math.round(bottom), pad: size * 0.3, font: `500 ${size}px ${CAP_FAMILY}`, key: `${size}/${max}` };
+}
+
+function renderCaption(t) {
+  if (!cap.m) {
+    cap.m = captionSizes();
+    if (!cap.m) return;
+    cap.el.style.fontSize = `${cap.m.size}px`;
+    cap.el.style.bottom = `${cap.m.bottom}px`;
+  }
+  const track = cap.track;
+  const n = track.cues ? track.cues.length : 0;
+  if (!cap.timedTrack && n !== cap.checked) {
+    cap.timedTrack = timesWords(track);
+    cap.checked = n;
+  }
+  const at = cap.timedTrack ? timedPage(track, t) : untimedPage(track, t);
+  drawCaption(at, t);
+}
+
+// ----- cue text -----
+const VTT_TIME = /^<(?:(\d+):)?(\d\d):(\d\d)\.(\d{3})>$/;
+const CUE_ENTITIES = { amp: '&', lt: '<', gt: '>', nbsp: ' ', quot: '"', apos: "'", lrm: '', rlm: '' };
+const decodeCue = (s) => s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (all, e) => {
+  if (e[0] !== '#') return CUE_ENTITIES[e.toLowerCase()] ?? all;
+  return String.fromCodePoint(e[1] === 'x' || e[1] === 'X' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10));
+}).replace(/¶/g, '♪'); // a music note, as captions made from broadcast ones misname it
+const parsedCues = new Map(); // by start and text
+
+function cueText(cue) {
+  if (typeof cue.text === 'string') return cue.text;
+  return cue.getCueAsHTML ? cue.getCueAsHTML().textContent : '';
+}
+
+// logicalCues is a track's cues as the stream sent them, by start. WebKit
+// splits a cue that shows alongside others into pieces with its text, one
+// for each stretch the set showing stays the same; they're joined again.
+function logicalCues(track) {
+  const list = track.cues;
+  const n = list ? list.length : 0;
+  const sig = n ? `${n}|${list[0].startTime}|${list[n - 1].startTime}` : '';
+  if (cap.logical && cap.logical.sig === sig) return cap.logical.cues;
+  const cues = [];
+  const open = new Map();
+  for (let i = 0; i < n; i++) {
+    const c = list[i];
+    const text = cueText(c);
+    const l = open.get(text);
+    if (l && c.startTime <= l.endTime + 0.05) {
+      l.endTime = Math.max(l.endTime, c.endTime);
+      continue;
+    }
+    const cue = { startTime: c.startTime, endTime: c.endTime, text, line: c.line };
+    open.set(text, cue);
+    cues.push(cue);
+  }
+  cap.logical = { sig, cues };
+  return cues;
+}
+
+// cueLines reads a cue into lines of words, each with when it's said:
+// the cue's start, or the WebVTT timestamp before it.
+function cueLines(cue) {
+  const id = `${cue.startTime}\n${cue.text}`;
+  let lines = parsedCues.get(id);
+  if (lines) {
+    for (const l of lines) for (const w of l) w.end = cue.endTime;
+    return lines;
+  }
+  if (parsedCues.size > 5000) parsedCues.clear();
+  lines = [];
+  for (const raw of cue.text.split(/\r?\n/)) {
+    let at = cue.startTime;
+    const words = [];
+    for (const part of raw.split(/(<[^>]*>)/)) {
+      if (part[0] === '<') {
+        const m = VTT_TIME.exec(part);
+        if (m) at = (+m[1] || 0) * 3600 + +m[2] * 60 + +m[3] + +m[4] / 1000;
+        continue;
+      }
+      for (const w of decodeCue(part).split(/\s+/)) {
+        if (w) words.push({ text: w, at, end: cue.endTime });
+      }
+    }
+    if (words.length) lines.push(words);
+  }
+  parsedCues.set(id, lines);
+  return lines;
+}
+
+// timesWords reports whether a track's captions time their words, as
+// speech recognition's do (though not every cue: a one-word line has no
+// time but its start).
+function timesWords(track) {
+  for (let i = 0; i < Math.min(track.cues.length, 40); i++) {
+    if (/<(\d+:)?\d\d:\d\d\.\d{3}>/.test(cueText(track.cues[i]))) return true;
+  }
+  return false;
+}
+
+// ----- measuring -----
+const capWidths = new Map(); // font and word: width
+let capCanvas = null;
+
+function canvasFont(font) {
+  if (!capCanvas) capCanvas = document.createElement('canvas').getContext('2d');
+  capCanvas.font = font;
+  return capCanvas;
+}
+
+// measureWords returns the width of each word in font.
+function measureWords(words, font) {
+  if (capWidths.size > 20000) capWidths.clear();
+  const out = new Array(words.length);
+  const todo = [];
+  words.forEach((w, i) => {
+    const v = capWidths.get(`${font}\n${w}`);
+    if (v === undefined) todo.push(i); else out[i] = v;
+  });
+  if (todo.length && pretext) {
+    const p = pretext.prepareRichInline(todo.map((i, k) => ({ text: (k ? ' ' : '') + words[i], font, break: 'never' })));
+    pretext.walkRichInlineLineRanges(p, 1e9, (range) => {
+      for (const fr of pretext.materializeRichInlineLineRange(p, range).fragments) out[todo[fr.itemIndex]] = fr.occupiedWidth;
+    });
+  }
+  for (const i of todo) {
+    if (out[i] === undefined) out[i] = canvasFont(font).measureText(words[i]).width;
+    capWidths.set(`${font}\n${words[i]}`, out[i]);
+  }
+  return out;
+}
+
+const spaceWidth = (font) => measureWords(['a\u00a0a', 'aa'], font).reduce((x, y) => x - y);
+
+// ----- laying out -----
+const SENTENCE_END = /[.!?…♪]["'”’)\]]*$/;
+const CLAUSE_END = /[,;:.!?…—]["'”’)\]]*$/;
+
+// pageWords splits words from..to into pages of at most two lines no
+// wider than max, each as full as it goes but ending a sentence where one
+// ends late in it, and the last not left with a word or two. A word
+// marked brk starts a line (a change of speaker).
+function pageWords(words, widths, space, max, from = 0, to = words.length) {
+  // fill is where a page from i ends when filled.
+  const fill = (i) => {
+    let line = 1;
+    let start = i;
+    let w = 0;
+    for (let j = i; j < to; j++) {
+      if (j > start && (words[j].brk || w + space + widths[j] > max)) {
+        if (line === 2) return j;
+        line = 2;
+        start = j;
+        w = widths[j];
+      } else {
+        w += (j > start ? space : 0) + widths[j];
+      }
+    }
+    return to;
+  };
+  const ranges = [];
+  for (let i = from; i < to;) {
+    let end = fill(i);
+    if (end < to) {
+      for (let k = end - 1; k > i + (end - i) / 2; k--) {
+        if (SENTENCE_END.test(words[k].text)) { end = k + 1; break; }
+      }
+    }
+    ranges.push([i, end]);
+    i = end;
+  }
+  const chars = (a, b) => { let n = 0; for (let i = a; i < b; i++) n += words[i].text.length + 1; return n; };
+  const n = ranges.length;
+  if (n > 1 && chars(...ranges[n - 1]) < 0.35 * chars(...ranges[n - 2])) {
+    // Even out the last two pages, splitting after punctuation if near.
+    const [a] = ranges[n - 2];
+    const b = ranges[n - 1][1];
+    let best = Infinity;
+    for (let k = a + 1; k < b; k++) {
+      if (fill(a) < k || fill(k) < b) continue;
+      const c = Math.abs(chars(a, k) - chars(k, b)) - (CLAUSE_END.test(words[k - 1].text) ? 8 : 0);
+      if (c < best) { best = c; ranges[n - 2] = [a, k]; ranges[n - 1] = [k, b]; }
+    }
+  }
+  return ranges.map(([a, b]) => balance(words, widths, space, max, a, b));
+}
+
+// balance puts words a..b on one line if they fit, else two of about
+// equal width, breaking after punctuation where it can, at a change of
+// speaker where there is one.
+function balance(words, widths, space, max, a, b) {
+  const sum = [0];
+  for (let i = a; i < b; i++) sum.push(sum[sum.length - 1] + widths[i] + space);
+  const width = (x, y) => sum[y - a] - sum[x - a] - space;
+  for (let k = a + 1; k < b; k++) {
+    if (words[k].brk) return { from: a, to: b, lines: [[a, k], [k, b]] };
+  }
+  if (width(a, b) <= max || b - a < 2) return { from: a, to: b, lines: [[a, b]] };
+  let best = Infinity;
+  let at = a + 1;
+  for (let k = a + 1; k < b; k++) {
+    const l = width(a, k);
+    const r = width(k, b);
+    if (l > max || r > max) continue;
+    const c = Math.abs(l - r) + (l > r ? space : 0) - (CLAUSE_END.test(words[k - 1].text) ? 3 * space : 0);
+    if (c < best) { best = c; at = k; }
+  }
+  return { from: a, to: b, lines: [[a, at], [at, b]] };
+}
+
+// speakerMark reports whether a word marks a change of speaker, as
+// speech recognition and broadcast captions do with ">>".
+const speakerMark = (w) => w.startsWith('>>');
+
+// ----- choosing what shows -----
+// cuesAt lists a track's cues showing at t, top row first.
+function cuesAt(track, t) {
+  const list = logicalCues(track);
+  let lo = 0;
+  let hi = list.length - 1;
+  let i = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (list[mid].startTime <= t) { i = mid; lo = mid + 1; } else hi = mid - 1;
+  }
+  const out = [];
+  for (let k = i; k >= 0 && k > i - 40; k--) if (list[k].endTime > t) out.push(list[k]);
+  const row = (c) => (typeof c.line === 'number' ? c.line : 0);
+  return out.sort((x, y) => row(x) - row(y) || x.startTime - y.startTime);
+}
+
+// untimedPage is what shows at t of captions without word times: the
+// cues showing, laid out together and paged over their time.
+function untimedPage(track, t) {
+  const cues = cuesAt(track, t);
+  if (!cues.length) return null;
+  const key = cues.map((c) => `${c.startTime}/${c.text}`).join('\n');
+  let u = cap.units.get(key);
+  if (!u || u.end !== Math.max(...cues.map((c) => c.endTime))) {
+    if (cap.units.size > 200) cap.units.clear();
+    const m = cap.m;
+    // Overlapping cues showing the same line show it once, oldest first.
+    const seen = new Set();
+    const lines = cues.flatMap(cueLines).filter((l) => {
+      const text = l.map((w) => w.text).join(' ');
+      return !seen.has(text) && seen.add(text);
+    });
+    const words = [];
+    for (const [i, l] of lines.entries()) {
+      for (const [k, w] of l.entries()) words.push({ ...w, brk: (k === 0 && i > 0 && /^[-–—]/.test(w.text)) || speakerMark(w.text) });
+    }
+    const widths = measureWords(words.map((w) => w.text), m.font);
+    const space = spaceWidth(m.font);
+    // Lines that fit stay as the source broke them.
+    let pages;
+    const lineWidth = (from, n) => widths.slice(from, from + n).reduce((s, x) => s + x, 0) + (n - 1) * space;
+    let from = 0;
+    if (lines.length <= 2 && lines.every((l) => { const ok = lineWidth(from, l.length) <= m.max; from += l.length; return ok; })) {
+      const cut = lines[0].length;
+      pages = [{ from: 0, to: words.length, lines: lines.length === 2 ? [[0, cut], [cut, words.length]] : [[0, words.length]] }];
+    } else {
+      pages = pageWords(words, widths, space, m.max);
+    }
+    // Pages share the cues' time out by length.
+    const start = Math.min(...cues.map((c) => c.startTime));
+    const end = Math.max(...cues.map((c) => c.endTime));
+    const chars = (p) => words.slice(p.from, p.to).reduce((s, w) => s + w.text.length + 1, 0);
+    const total = pages.reduce((s, p) => s + chars(p), 0);
+    let done = 0;
+    for (const [i, p] of pages.entries()) {
+      p.start = start + ((end - start) * done) / total;
+      done += chars(p);
+      p.end = i === pages.length - 1 ? end : start + ((end - start) * done) / total;
+      p.id = `${key}#${i}`;
+    }
+    u = { words, widths, space, pages, end };
+    cap.units.set(key, u);
+  }
+  const page = u.pages.find((p) => p.start <= t && t < p.end) || u.pages[u.pages.length - 1];
+  return { page, words: u.words, widths: u.widths, space: u.space };
+}
+
+// timedPage is what shows at t of captions timed word by word: the
+// track's words, in runs of speech split at pauses, paged; a page shows
+// from its first word until the next page's, its words as they're said.
+// Captions arrive a little ahead of the picture, so a page is laid out
+// with what's known then; once it shows it stays as it is (frozen), and
+// words that come later go on the pages after.
+const wordKey = (w) => `${w.at}\n${w.text}`;
+
+function timedPage(track, t) {
+  const m = cap.m;
+  const list = logicalCues(track);
+  if (!list.length) return null;
+  const sig = `${cap.logical.sig}|${m.key}`;
+  if (!cap.timed || cap.timed.sig !== sig) {
+    const all = [];
+    // A cue's last line is its own: the server's screens roll up, the
+    // line above repeating the cue before's, which other sources overlap.
+    for (const c of list) {
+      const lines = cueLines(c);
+      if (lines.length) all.push(...lines[lines.length - 1]);
+    }
+    all.sort((x, y) => x.at - y.at);
+    const words = [];
+    for (const w of all) {
+      const last = words[words.length - 1];
+      if (last && last.at === w.at && last.text === w.text) last.end = Math.max(last.end, w.end);
+      else words.push({ ...w, brk: speakerMark(w.text) });
+    }
+    const widths = measureWords(words.map((w) => w.text), m.font);
+    const space = spaceWidth(m.font);
+    const pages = [];
+    for (let a = 0; a < words.length;) {
+      let b = a + 1;
+      while (b < words.length && words[b].at <= words[b - 1].end + 0.25 && words[b].at - words[b - 1].at < 4) b++;
+      const run = [];
+      let i = a;
+      // Pages already shown, as they were.
+      for (let f = cap.frozen.get(wordKey(words[i])); f && i < b; f = i < b && cap.frozen.get(wordKey(words[i]))) {
+        let j = i;
+        while (j < b && wordKey(words[j]) !== f.last) j++;
+        if (j === b) break;
+        let k = -1;
+        for (let x = i + 1; x <= j; x++) if (f.brk && wordKey(words[x]) === f.brk) k = x;
+        run.push({ from: i, to: j + 1, lines: k > 0 ? [[i, k], [k, j + 1]] : [[i, j + 1]] });
+        i = j + 1;
+      }
+      if (i < b) run.push(...pageWords(words, widths, space, m.max, i, b));
+      for (const [k, p] of run.entries()) {
+        p.start = words[p.from].at;
+        let end = 0;
+        for (let x = p.from; x < p.to; x++) end = Math.max(end, words[x].end);
+        p.end = k + 1 < run.length ? words[run[k + 1].from].at : Math.max(end, p.start + 1);
+        p.id = `${wordKey(words[p.from])}/${p.to - p.from}`;
+        pages.push(p);
+      }
+      a = b;
+    }
+    cap.timed = { sig, words, widths, space, pages };
+  }
+  const { pages, words } = cap.timed;
+  let lo = 0;
+  let hi = pages.length - 1;
+  let i = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (pages[mid].start <= t) { i = mid; lo = mid + 1; } else hi = mid - 1;
+  }
+  if (i < 0 || t >= pages[i].end) return null;
+  const page = pages[i];
+  if (!cap.frozen.has(wordKey(words[page.from]))) {
+    if (cap.frozen.size > 400) cap.frozen.delete(cap.frozen.keys().next().value);
+    const [, second] = page.lines;
+    cap.frozen.set(wordKey(words[page.from]), { last: wordKey(words[page.to - 1]), brk: second ? wordKey(words[second[0]]) : '' });
+  }
+  return { page, words, widths: cap.timed.widths, space: cap.timed.space, timed: true };
+}
+
+// ----- drawing -----
+function drawCaption(at, t) {
+  const key = at ? `${at.page.id}@${cap.m.key}` : '';
+  if (key !== cap.key) {
+    cap.key = key;
+    cap.page = at;
+    cap.shown = -1;
+    cap.spans = [];
+    cap.bars = [];
+    cap.el.textContent = '';
+    if (!at) return;
+    for (const [a, b] of at.page.lines) {
+      const line = document.createElement('div');
+      line.className = 'cap-line';
+      const bar = document.createElement('span');
+      bar.className = at.timed ? 'cap-bar timed' : 'cap-bar';
+      if (at.timed) {
+        for (let i = a; i < b; i++) {
+          const s = document.createElement('span');
+          s.textContent = (i > a ? ' ' : '') + at.words[i].text;
+          bar.append(s);
+          cap.spans.push({ el: s, i, bar, a });
+        }
+        cap.bars.push({ bar, a, b });
+      } else {
+        bar.textContent = at.words.slice(a, b).map((w) => w.text).join(' ');
+      }
+      line.append(bar);
+      cap.el.append(line);
+    }
+  }
+  if (!at || !at.timed) return;
+  // Timed words show as they're said, with the bar behind them growing.
+  const { page, words, widths, space } = at;
+  let n = page.from;
+  while (n < page.to && words[n].at <= t) n++;
+  if (n === cap.shown) return;
+  cap.shown = n;
+  for (const s of cap.spans) s.el.classList.toggle('wait', s.i >= n);
+  for (const { bar, a, b } of cap.bars) {
+    let w = 0;
+    for (let i = a; i < Math.min(b, n); i++) w += widths[i] + (i > a ? space : 0);
+    bar.style.setProperty('--r', n > a ? `${Math.ceil(w + 2 * cap.m.pad + 2)}px` : '0px');
+  }
+}
+
+// A new stream: the last one's captions go at once, not when its tracks do.
+video.addEventListener('emptied', () => setCaptionTrack(null));
+if (window.ResizeObserver) new ResizeObserver(resetCaptionLayout).observe(stage);
+video.addEventListener('resize', resetCaptionLayout);
+new MutationObserver(resetCaptionLayout).observe($('#banner'), { attributes: true, attributeFilter: ['class'] });
+new MutationObserver(resetCaptionLayout).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+
+function audioTracks() {
+  if (state.hls) return state.hls.audioTracks.map((t, i) => ({ i, label: t.name, lang: t.lang, on: state.hls.audioTrack === i }));
+  const list = video.audioTracks;
+  if (!list) return [];
+  const out = [];
+  for (let i = 0; i < list.length; i++) out.push({ i, label: list[i].label, lang: list[i].language, on: list[i].enabled });
+  return out;
+}
+
+function selectAudio(i) {
+  if (state.hls) { state.hls.audioTrack = i; return; }
+  const list = video.audioTracks;
+  for (let j = 0; j < list.length; j++) list[j].enabled = j === i;
+}
+
+// applyAudio picks the preferred language when the stream offers it.
+function applyAudio() {
+  const want = state.settings.audioLang;
+  if (!want) return;
+  const t = audioTracks().find((x) => (x.lang || '').startsWith(want));
+  if (t && !t.on) selectAudio(t.i);
+}
+
+async function cycleAudio() {
+  const tracks = audioTracks();
+  if (tracks.length < 2) return toast('Only one audio track on this channel', 1800);
+  const cur = tracks.findIndex((t) => t.on);
+  const next = tracks[(cur + 1) % tracks.length];
+  selectAudio(next.i);
+  await saveAppSettings({ ...state.settings, audioLang: (next.lang || '').slice(0, 2) });
+  toast(`Audio: ${next.label || next.lang || `track ${next.i + 1}`}`, 1800);
+}
+
+// ---------- recording progress ----------
+let progressTimer = 0;
+function saveRecordingProgress() {
+  const it = state.recording;
+  if (!it || !it.id) return;
+  const pos = (state.recOffset || 0) + video.currentTime;
+  if (pos < 1) return;
+  it.position = pos;
+  api().SaveProgress(it.id, pos, it.duration || 0).catch((e) => log('warn', `progress: ${e}`));
+}
+
+video.addEventListener('timeupdate', () => {
+  if ($('#banner').classList.contains('show')) showTimeshift();
+  if (state.recording && Date.now() - progressTimer > 15000) {
+    progressTimer = Date.now();
+    saveRecordingProgress();
+  }
+});
+video.addEventListener('pause', () => { if (state.recording) saveRecordingProgress(); });
+video.addEventListener('play', () => updatePlaybackState());
+video.addEventListener('pause', () => updatePlaybackState());
+video.addEventListener('playing', () => {
+  if (!state.recording && state.liveBaseline == null) state.liveBaseline = Math.max(0, liveEdge() - video.currentTime);
+  applyCaptions();
+  applyAudio();
+});
+if (video.textTracks) {
+  video.textTracks.addEventListener('addtrack', applyCaptions);
+  video.textTracks.addEventListener('removetrack', applyCaptions);
+  video.textTracks.addEventListener('change', keepCaptions);
+}
+if (video.audioTracks) video.audioTracks.addEventListener('addtrack', applyAudio);
+
+// ---------- playback state ----------
+// A small badge at the picture's bottom right says what playback is doing,
+// on the TV view. It stays only while there's something to do about it:
+// paused (with how far behind live, or where in a recording), and
+// buffering (once a stream has played, after 300 ms of waiting). The rest
+// flashes and fades: a skip (the amount, adding up over quick presses) and
+// then where it left the picture; how far behind live on resuming, or on
+// the info key; "Live" on going back to live. Playing behind live, it's
+// gone: the banner says how far. It keeps above the banner and the weather
+// crawl, as the captions do.
+const PS_ICONS = {
+  pause: '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.6" height="12" rx="1"/><rect x="9.4" y="2" width="3.6" height="12" rx="1"/></svg>',
+  back: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8.2 3 1.5 8l6.7 5zM15 3 8.3 8 15 13z"/></svg>',
+  ahead: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7.8 3l6.7 5-6.7 5zM1 3l6.7 5L1 13z"/></svg>',
+  wait: '<i class="ps-spin"></i>',
+  live: '<i class="ps-dot"></i>',
+};
+const PS_SKIP_MS = 1500;  // a skip shows this long after the last press
+const PS_PLACE_MS = 2500; // then where it left the picture, this long
+const PS_WAIT_MS = 300;   // shorter waits for data go unmarked
+const ps = {
+  el: $('#pstate'), skip: 0, dir: 0, skipUntil: 0, skipTimer: 0, placeUntil: 0, placeLive: false, placeTimer: 0,
+  played: false, paused: false, waiting: false, waitTimer: 0, tick: 0, shown: '',
+};
+
+// noteSkip shows a skip of delta seconds (what playback moved, which is
+// less than asked at either end of what can be rewound), then where it
+// left the picture.
+function noteSkip(delta, asked) {
+  const now = Date.now();
+  ps.skip = now < ps.skipUntil && Math.sign(asked) === ps.dir ? ps.skip + delta : delta;
+  ps.dir = Math.sign(asked);
+  ps.skipUntil = now + PS_SKIP_MS;
+  clearTimeout(ps.skipTimer);
+  ps.skipTimer = setTimeout(renderPlayState, PS_SKIP_MS + 20);
+  flashPlace(ps.dir > 0, PS_SKIP_MS);
+}
+
+// flashPlace shows for a moment how far behind live the picture is, or
+// where in a recording; at live, "Live" when live is set.
+function flashPlace(live = false, after = 0) {
+  ps.placeUntil = Date.now() + after + PS_PLACE_MS;
+  ps.placeLive = live;
+  clearTimeout(ps.placeTimer);
+  ps.placeTimer = setTimeout(renderPlayState, after + PS_PLACE_MS + 20);
+  renderPlayState();
+}
+
+function skipLabel() {
+  const n = Math.round(ps.skip);
+  if (!n) return ps.dir > 0 && !state.recording ? 'Live' : ps.dir > 0 ? 'End' : 'Start';
+  const a = Math.abs(n);
+  return `${n < 0 ? '-' : '+'}${a < 100 ? `${a} s` : mmss(a)}`;
+}
+
+// placeText is where the picture is: how far behind live (when it's more
+// than the moment a pause or the stream's own delay accounts for), or the
+// position in a recording.
+function placeText(paused) {
+  if (state.recording) return `${mmss((state.recOffset || 0) + video.currentTime)} / ${mmss(state.recording.duration || 0)}`;
+  const behind = behindLive();
+  return behind > (paused ? 2 : 4) ? `-${mmss(behind)}` : '';
+}
+
+function renderPlayState() {
+  let kind = '';
+  let text = '';
+  const playing = !!(video.src || state.hls) && !video.hidden && $('#nosignal').hidden && !stage.classList.contains('tuning');
+  if (playing) {
+    const now = Date.now();
+    if (now < ps.skipUntil) {
+      kind = ps.dir < 0 ? 'back' : 'ahead';
+      text = skipLabel();
+    } else if (video.paused) {
+      kind = 'pause';
+      text = placeText(true);
+    } else if (ps.waiting) {
+      kind = 'wait';
+    } else if (now < ps.placeUntil) {
+      text = placeText(false);
+      if (text) kind = 'place';
+      else if (ps.placeLive && !state.recording) { kind = 'live'; text = 'Live'; }
+    }
+  }
+  // While paused the live edge moves on with no timeupdate to say so.
+  if (kind === 'pause' && !state.recording && !ps.tick) ps.tick = setInterval(renderPlayState, 1000);
+  if (kind !== 'pause' && ps.tick) { clearInterval(ps.tick); ps.tick = 0; }
+  const key = `${kind}|${text}`;
+  if (key === ps.shown) return;
+  ps.shown = key;
+  if (!kind) {
+    ps.el.classList.remove('show'); // fades out as it was
+    return;
+  }
+  ps.el.className = `show ps-${kind}`;
+  ps.el.innerHTML = `${PS_ICONS[kind] || ''}${text ? `<span>${esc(text)}</span>` : ''}`;
+}
+
+// placePlayState puts the badge at the picture's bottom right (inside any
+// bars around it), or above the banner or the crawl: captionSizes'
+// rule for the captions.
+function placePlayState() {
+  const w = stage.clientWidth;
+  const h = stage.clientHeight;
+  if (!w || !h) return;
+  const ar = video.videoWidth && video.videoHeight ? video.videoWidth / video.videoHeight : 16 / 9;
+  const pw = Math.min(w, h * ar);
+  const ph = pw / ar;
+  let bottom = (h - ph) / 2 + ph * 0.045;
+  const banner = $('#banner');
+  if (state.view === 'tv' && banner.classList.contains('show')) bottom = Math.max(bottom, h - banner.offsetTop + 14);
+  const crawl = $('#crawl');
+  if (crawl && document.body.classList.contains('has-crawl')) bottom = Math.max(bottom, crawl.offsetHeight + 14);
+  ps.el.style.bottom = `${Math.round(bottom)}px`;
+  ps.el.style.right = `${Math.round((w - pw) / 2 + pw * 0.025)}px`;
+}
+
+function startWaiting() {
+  if (!ps.played || ps.waitTimer || ps.waiting) return;
+  ps.waitTimer = setTimeout(() => {
+    ps.waitTimer = 0;
+    ps.waiting = true;
+    renderPlayState();
+  }, PS_WAIT_MS);
+}
+
+function stopWaiting() {
+  clearTimeout(ps.waitTimer);
+  ps.waitTimer = 0;
+  if (ps.waiting) ps.waiting = false;
+  renderPlayState();
+}
+
+video.addEventListener('waiting', startWaiting);
+video.addEventListener('stalled', startWaiting);
+for (const ev of ['canplay', 'pause', 'play', 'seeked']) video.addEventListener(ev, stopWaiting);
+video.addEventListener('playing', () => { ps.played = true; stopWaiting(); });
+// Resuming a paused stream says where it resumes.
+video.addEventListener('pause', () => { if (ps.played) ps.paused = true; });
+video.addEventListener('play', () => {
+  if (!ps.paused) return;
+  ps.paused = false;
+  flashPlace();
+});
+// A new stream: its first wait for data is the tune, which has its static.
+video.addEventListener('emptied', () => {
+  ps.played = false;
+  ps.paused = false;
+  ps.skipUntil = 0;
+  ps.placeUntil = 0;
+  stopWaiting();
+});
+video.addEventListener('timeupdate', renderPlayState);
+video.addEventListener('resize', placePlayState);
+if (window.ResizeObserver) new ResizeObserver(placePlayState).observe(stage);
+new MutationObserver(() => { placePlayState(); renderPlayState(); }).observe($('#banner'), { attributes: true, attributeFilter: ['class'] });
+new MutationObserver(() => { placePlayState(); renderPlayState(); }).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+new MutationObserver(renderPlayState).observe(stage, { attributes: true, attributeFilter: ['class'] });
+new MutationObserver(renderPlayState).observe($('#nosignal'), { attributes: true, attributeFilter: ['hidden'] });
+
+// ---------- media session ----------
+// What is on, for the system's media controls and keys: Now Playing on a
+// Mac, MPRIS on Linux (which WebKitGTK provides).
+const mediaSession = navigator.mediaSession;
+
+function wireMediaSession() {
+  if (!mediaSession) return;
+  const on = (action, fn) => {
+    try { mediaSession.setActionHandler(action, fn); } catch { /* not offered here */ }
+  };
+  on('play', () => { if (video.paused) togglePause(); });
+  on('pause', () => { if (!video.paused) togglePause(); });
+  on('nexttrack', () => step(1));
+  on('previoustrack', () => step(-1));
+  on('seekforward', () => skip(30));
+  on('seekbackward', () => skip(-10));
+}
+
+let mediaShown = '';
+function updateMediaSession() {
+  if (!mediaSession || !window.MediaMetadata) return;
+  const ch = state.current;
+  const it = state.recording;
+  let m = null;
+  if (it) {
+    m = { title: it.title, artist: 'Recording', album: it.subtitle || 'Airwaves', art: it.image };
+  } else if (ch && ch.weather) {
+    m = { title: 'Local Forecast', artist: `${ch.number} ${ch.name}`, album: 'Airwaves', art: ch.logo };
+  } else if (ch) {
+    const p = airingAt(ch, Date.now());
+    const name = ch.network || displayCall(ch);
+    m = { title: p ? p.title : name, artist: `${ch.number} ${name}`, album: (p && p.episodeTitle) || 'Airwaves', art: (p && p.image) || ch.logo };
+  }
+  const key = JSON.stringify(m);
+  if (key === mediaShown) return;
+  mediaShown = key;
+  mediaSession.metadata = m && new window.MediaMetadata({ title: m.title, artist: m.artist, album: m.album, artwork: m.art ? [{ src: m.art }] : [] });
+  updatePlaybackState();
+}
+
+function updatePlaybackState() {
+  if (!mediaSession) return;
+  const wx = state.current && state.current.weather && !state.recording;
+  mediaSession.playbackState = !state.current && !state.recording ? 'none' : wx || !video.paused ? 'playing' : 'paused';
+}
+
+// ---------- preview another ZIP code ----------
+async function startPreview(zip) {
+  if (!/^\d{5}$/.test(zip)) return toast('Enter a 5-digit ZIP code');
+  toast(`Estimating reception at ${zip}`, 30000);
+  try {
+    const rep = (await api().Preview(zip)).report;
+    const bySite = new Map();
+    const byFacility = new Map();
+    for (const st of rep.stations) {
+      if (!byFacility.has(st.facilityId)) byFacility.set(st.facilityId, st);
+      bySite.set(`${st.facilityId}:${st.rfChannel}`, st);
+    }
+    for (const c of rep.channels) c.key = `${c.number}|${c.callSign}`;
+    state.preview = { report: rep, bySite, byFacility, zip };
+    state.aSel = null;
+    renderAntenna();
+    toast(`Previewing ${rep.place.name}, ${rep.place.state}`, 2000);
+  } catch (e) {
+    toast(String(e && e.message ? e.message : e), 6000);
+  }
+}
+
+function endPreview() {
+  state.preview = null;
+  state.aSel = null;
+  renderAntenna();
+}
+
+function renderPreviewRail(rep) {
+  const a = $('#antenna');
+  const on = !!state.preview;
+  f(a, 'preview').hidden = on;
+  f(a, 'previewing').hidden = !on;
+  if (on) f(a, 'pvplace').innerHTML = `<dt>Preview</dt><dd>${esc(rep.place.name)}, ${esc(rep.place.state)}<small>ZIP ${esc(rep.place.zip)}</small></dd>`;
+}
+
+// receptionSummary is a shareable plain-text version of the reception view.
+function receptionSummary() {
+  const rep = rx().report;
+  const order = ['indoor', 'attic', 'rooftop'];
+  const best = (c) => order.find((p) => receivable(c.tier && c.tier[p]));
+  // One line per station: its main channel, deduplicated by number.
+  const mains = new Map();
+  for (const c of rep.channels) {
+    if (c.atsc3Only || (c.minor !== 1 && c.minor !== 0)) continue;
+    const prev = mains.get(c.number);
+    if (!prev || order.indexOf(best(c) ?? 'x') < order.indexOf(best(prev) ?? 'x')) mains.set(c.number, c);
+  }
+  const name = (c) => `${c.number} ${c.network || displayCall(c)}`;
+  const group = (p) => [...mains.values()].filter((c) => best(c) === p).map(name);
+  const lines = [`Over-the-air TV at ${rep.place.name}, ${rep.place.state} ${rep.place.zip}`, ''];
+  lines.push(`Channels by antenna: ${order.map((p) => `${p} ${rep.channels.filter((c) => receivable(c.tier && c.tier[p])).length}`).join(', ')}`);
+  const aim = aimOf([...rep.stations], 'rooftop');
+  if (aim) lines.push(`Point an outdoor antenna ${aim.deg.toFixed(0)}° ${compass(aim.deg)}`);
+  lines.push('');
+  for (const [p, label] of [['indoor', 'With an indoor antenna'], ['attic', 'Adds with an attic antenna'], ['rooftop', 'Adds with a rooftop antenna']]) {
+    const g = group(p);
+    if (g.length) lines.push(`${label}: ${g.join(', ')}`);
+  }
+  if ((rep.atsc3 || []).length) {
+    lines.push('', `NextGen TV (ATSC 3.0): ${rep.atsc3.map((h) => h.callSign).join(', ')}`);
+  }
+  lines.push('', 'Estimated from FCC transmitter data and terrain. Walls, trees and nearby buildings can cost more.');
+  return lines.join('\n');
+}
+
+// ---------- weather ----------
+// showWX puts the Airwaves Weather display on the stage: as the weather channel
+// (with its music), or as a silent preview on the weather page. The display
+// itself is always silent; the music plays here, so muting is instant.
+function showWX(on, preview = false) {
+  const frame = $('#wx');
+  frame.hidden = !on;
+  const src = `${state.boot.serverUrl}/weatherstar`;
+  if (on && frame.dataset.src !== src) {
+    frame.src = src;
+    frame.dataset.src = src;
+  }
+  if (!on && frame.dataset.src) {
+    frame.removeAttribute('src');
+    delete frame.dataset.src;
+  }
+  $('#video').hidden = on;
+  if (on) fitWX();
+  playWXMusic(on && !preview);
+}
+
+// fitWX scales the weather display to fill the stage. It is laid out for
+// 854x480 and scales itself to its window; the interface size scaled it
+// again, off centre. So its window is always 854x480 and the frame is
+// scaled here instead, at every stage size. Page zoom (Linux) leaves the
+// frame's window at 854x480; CSS zoom would shrink it, so the frame undoes
+// the root's CSS zoom and is sized in its own, unzoomed pixels.
+const WX_W = 854;
+const WX_H = 480;
+function fitWX() {
+  const z = parseFloat(document.documentElement.style.zoom) || 1;
+  const w = stage.clientWidth * z;
+  const h = stage.clientHeight * z;
+  if (!w || !h) return;
+  const s = Math.min(w / WX_W, h / WX_H);
+  const frame = $('#wx');
+  frame.style.zoom = z === 1 ? '' : String(1 / z);
+  frame.style.transform = `translate(${(w - WX_W * s) / 2}px, ${(h - WX_H * s) / 2}px) scale(${s})`;
+}
+if (window.ResizeObserver) new ResizeObserver(fitWX).observe(stage);
+
+const wxMusic = new Audio();
+wxMusic.volume = 0.6;
+wxMusic.addEventListener('ended', () => nextWXTrack());
+
+// playWXMusic starts or stops the weather channel's music: the server's
+// tracks, shuffled and looped.
+async function playWXMusic(on) {
+  state.wxMusicOn = on;
+  if (!on) return wxMusic.pause();
+  if (!state.wxTracks) {
+    try {
+      const r = await fetch(`${state.boot.serverUrl}/weatherstar/music`);
+      state.wxTracks = ((await r.json()).tracks || []).map((t) => (t.startsWith('/') ? state.boot.serverUrl + t : t));
+    } catch (e) {
+      log('warn', `weather music: ${e}`);
+      state.wxTracks = [];
+    }
+  }
+  if (!state.wxMusicOn || !state.wxTracks.length) return;
+  wxMusic.muted = !!state.userMuted;
+  if (!wxMusic.src) return nextWXTrack();
+  wxMusic.play().catch(() => {});
+}
+
+function nextWXTrack() {
+  const tracks = state.wxTracks || [];
+  if (!tracks.length || !state.wxMusicOn) return;
+  state.wxTrack = ((state.wxTrack ?? Math.floor(Math.random() * tracks.length)) + 1) % tracks.length;
+  wxMusic.src = tracks[state.wxTrack];
+  wxMusic.play().catch((e) => log('warn', `weather music: ${e}`));
+}
+
+async function loadWeather() {
+  try {
+    state.wx = await api().Weather();
+  } catch (e) {
+    log('warn', `weather: ${e}`);
+    return;
+  }
+  renderCrawl();
+  if (state.view === 'weather') renderWeather();
+  if (state.current && state.current.weather) renderBanner();
+}
+
+const deg = (v) => (v == null ? '--' : `${Math.round(v)}°`);
+const tclock = clock;
+
+function renderWXBanner(b, ch) {
+  const wx = state.wx || {};
+  const n = wx.now || {};
+  const [p0, p1] = wx.periods || [];
+  b.classList.remove('warn', 'detail');
+  f(b, 'num').textContent = ch.number;
+  f(b, 'num').classList.toggle('long', ch.number.length > 4);
+  f(b, 'call').textContent = displayCall(ch);
+  f(b, 'net').textContent = ch.network;
+  showChannelLogo(b, ch);
+  f(b, 'time').textContent = n.observed ? `Observed ${tclock(n.observed)}` : '';
+  f(b, 'chips').innerHTML = (wx.alerts || []).map((a) => `<span class="chip live">${esc(a.event)}</span>`).join('');
+  f(b, 'title').textContent = n.tempF != null ? `${deg(n.tempF)} ${n.description || ''}` : 'Local Forecast';
+  f(b, 'ep').textContent = p0 ? `${p0.name}: ${p0.short}, ${p0.isDay ? 'high' : 'low'} ${p0.tempF}°` : '';
+  f(b, 'progress').style.width = '0';
+  f(b, 'desc').textContent = p0 ? p0.detailed : '';
+  f(b, 'next').textContent = p1 ? `${p1.name}: ${p1.short}, ${p1.tempF}°` : '';
+  f(b, 'note').textContent = '';
+}
+
+// Watches and warnings crawl across live TV; advisories stay on the W page.
+function crawlAlerts() {
+  return ((state.wx && state.wx.alerts) || []).filter((a) => /warning|watch/i.test(a.event) || a.severity === 'Severe' || a.severity === 'Extreme');
+}
+
+function renderCrawl() {
+  const alerts = crawlAlerts();
+  const c = $('#crawl');
+  document.body.classList.toggle('has-crawl', alerts.length > 0);
+  if (!alerts.length) return;
+  c.classList.toggle('severe', alerts.some((a) => /warning/i.test(a.event)));
+  const text = alerts.map((a) => `${a.event.toUpperCase()}${a.ends ? ` until ${new Date(a.ends).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}` : ''}. ${a.headline || ''}`).join('     |     ');
+  const span = f(c, 'text');
+  if (span.textContent !== text) {
+    span.textContent = text;
+    // Speed scales with length: about 90 px a second.
+    span.style.animationDuration = `${Math.max(20, (text.length * 9 + window.innerWidth) / 90)}s`;
+  }
+}
+
+function renderWeather() {
+  const v = $('#weather');
+  const wx = state.wx;
+  if (!wx) {
+    f(v, 'now').innerHTML = '<dl class="rail-stats"><div><dt>Weather</dt><dd>Loading</dd></div></dl>';
+    return;
+  }
+  const n = wx.now || {};
+  const air = wx.air;
+  const aqiColor = air ? (air.aqi <= 50 ? 'var(--t-strong)' : air.aqi <= 100 ? '#e8d24a' : air.aqi <= 150 ? '#f08a24' : 'var(--red)') : '';
+  f(v, 'now').innerHTML = `
+    <div class="wx-temp">${deg(n.tempF)}</div>
+    <div class="wx-desc">${esc(n.description || '')}</div>
+    <dl class="rail-stats wx-facts">
+      ${n.feelsLikeF != null ? `<div><dt>Feels like</dt><dd>${deg(n.feelsLikeF)}</dd></div>` : ''}
+      <div><dt>Wind</dt><dd>${n.windMph != null ? `${esc(n.windDir)} ${Math.round(n.windMph)}<small>mph${n.gustMph ? `, gusts ${Math.round(n.gustMph)}` : ''}</small>` : '--'}</dd></div>
+      ${n.humidity != null ? `<div><dt>Humidity</dt><dd>${Math.round(n.humidity)}%<small>dew point ${deg(n.dewpointF)}</small></dd></div>` : ''}
+      ${air ? `<div><dt>Air quality</dt><dd style="color:${aqiColor}">${air.aqi}<small>${esc(air.category)}</small></dd></div>` : ''}
+      ${wx.sun ? `<div><dt>Sun</dt><dd class="wx-sun">${tclock(wx.sun.rise)}<small>sets ${tclock(wx.sun.set)}</small></dd></div>` : ''}
+    </dl>
+    <div class="wx-updated">${n.observed ? `Observed ${tclock(n.observed)}` : ''}</div>`;
+
+  f(v, 'alerts').innerHTML = (wx.alerts || []).map((a) => `
+    <article class="wx-alert ${/warning/i.test(a.event) ? 'severe' : ''}">
+      <div class="wx-alert-event">${esc(a.event)}</div>
+      <div class="wx-alert-when">${a.ends ? `Until ${new Date(a.ends).toLocaleString([], { weekday: 'long', hour: 'numeric', minute: '2-digit' })}` : ''}</div>
+      <p>${esc((a.description || a.headline || '').split('\n\n')[0])}</p>
+    </article>`).join('');
+
+  // Hourly: temperature line over precipitation bars, 24 hours.
+  const hours = (wx.hourly || []).slice(0, 24);
+  const svg = f(v, 'chart');
+  if (hours.length > 1) {
+    const W = 960; const H = 200; const pad = 24;
+    const temps = hours.map((h) => h.tempF);
+    const lo = Math.min(...temps) - 3; const hi = Math.max(...temps) + 3;
+    const x = (i) => (i / (hours.length - 1)) * W;
+    const y = (t) => pad + (1 - (t - lo) / (hi - lo)) * (H - pad * 2);
+    const bars = hours.map((h, i) => (h.precip ? `<rect class="wx-pop" x="${x(i) - 14}" width="28" y="${H - (h.precip / 100) * (H - pad)}" height="${(h.precip / 100) * (H - pad)}"/>` : '')).join('');
+    const night = hours.map((h, i) => (!h.isDay ? `<rect class="wx-night" x="${x(i) - W / hours.length / 2}" width="${W / hours.length + 1}" y="0" height="${H}"/>` : '')).join('');
+    const line = hours.map((h, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)} ${y(h.tempF).toFixed(1)}`).join(' ');
+    svg.innerHTML = `${night}${bars}<path class="wx-line" d="${line}"/>`;
+    f(v, 'hours').innerHTML = hours.map((h, i) => (i % 3 === 0 ? `<div style="left:${(i / (hours.length - 1)) * 100}%"><b>${h.tempF}°</b>${new Date(h.start).toLocaleTimeString([], { hour: 'numeric' })}${h.precip >= 20 ? `<em>${h.precip}%</em>` : ''}</div>` : '')).join('');
+  }
+
+  // 7-day: pair each day with the night after it.
+  const days = [];
+  for (const p of wx.periods || []) {
+    if (p.isDay || !days.length) days.push({ day: p.isDay ? p : null, night: p.isDay ? null : p });
+    else days[days.length - 1].night = p;
+  }
+  f(v, 'days').innerHTML = days.slice(0, 7).map(({ day, night }) => {
+    const main = day || night;
+    const name = day ? (day.name === 'This Afternoon' || day.name === 'Today' ? 'Today' : day.name.slice(0, 3)) : main.name;
+    return `<div class="wx-day">
+      <div class="wx-dname">${esc(name)}</div>
+      <div class="wx-hilo">${day ? `<b>${day.tempF}°</b>` : ''}${night ? `<span>${night.tempF}°</span>` : ''}</div>
+      <div class="wx-short">${esc(main.short)}</div>
+      ${Math.max(day ? day.precip : 0, night ? night.precip : 0) >= 20 ? `<div class="wx-precip">${Math.max(day ? day.precip : 0, night ? night.precip : 0)}%</div>` : ''}
+    </div>`;
+  }).join('');
+
+  const bust = Math.floor(Date.now() / (4 * MIN));
+  f(v, 'radar').src = `${state.boot.serverUrl}${wx.radar}?t=${bust}`;
+  f(v, 'satellite').src = `${state.boot.serverUrl}${wx.satellite}?t=${bust}`;
+}
+
+// wxPrograms is the weather channel's guide: hour-long "Local Forecast" blocks
+// carrying that hour's forecast, matching what airwavesd publishes in XMLTV.
+function wxPrograms() {
+  const wx = state.wx;
+  if (!wx) return [];
+  const ch = weatherChannel();
+  const genres = [...new Set(['weather', ...categoryGenres(ch && ch.category)])];
+  if (state.wxProgs && state.wxProgs.at === wx.updated && state.wxProgs.genres === genres.join()) return state.wxProgs.list;
+  const H = 3600_000;
+  const first = Math.floor((Date.now() - H) / H) * H;
+  const hourly = (wx.hourly || []).map((h) => ({ ...h, t: Date.parse(h.start) }));
+  const periods = (wx.periods || []).map((p) => ({ ...p, t: Date.parse(p.start) }));
+  const list = [];
+  for (let i = 0; i < 48; i++) {
+    const s = first + i * H;
+    const h = hourly.find((x) => x.t <= s && s < x.t + H);
+    const pi = periods.findIndex((p, j) => p.t <= s && s < (periods[j + 1] ? periods[j + 1].t : p.t + 12 * H));
+    const alert = (wx.alerts || []).find((a) => (!a.onset || Date.parse(a.onset) < s + H) && (!a.ends || Date.parse(a.ends) > s));
+    let sub = h ? `${h.tempF}° and ${h.short}` : '';
+    if (alert) sub = `${alert.event}. ${sub}`;
+    list.push({
+      start: new Date(s).toISOString(), end: new Date(s + H).toISOString(), _s: s, _e: s + H,
+      title: 'Local Forecast', episodeTitle: sub,
+      description: pi >= 0 ? `${periods[pi].name}: ${periods[pi].detailed}` : 'Current conditions, the local and extended forecast, and radar.',
+      genres,
+    });
+  }
+  state.wxProgs = { at: wx.updated, genres: genres.join(), list };
+  return list;
+}

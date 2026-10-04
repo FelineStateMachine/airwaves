@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Airwaves
+GenericName=Television
+Comment=Live over-the-air TV, the program guide and recordings
+Exec=airwaves
+Icon=dev.airwaves.Airwaves
+Terminal=false
+Categories=AudioVideo;Video;TV;Player;
+Keywords=tv;antenna;guide;dvr;ota;
+StartupWMClass=dev.airwaves.Airwaves

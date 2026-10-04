@@ -1,0 +1,70 @@
+# Airwaves without an antenna: the custom channels only (Jellyfin, YouTube,
+# folders of videos and the weather), for the Airwaves app and, if you like,
+# Jellyfin, Channels DVR and other HDHomeRun players. No tuner, Tvheadend or
+# antenna needed. Settings are in .env (copy .env.example); the steps are in
+# docs/self-hosting.md.
+#   docker compose up -d --build
+name: airwaves-standalone
+services:
+  airwavesd:
+    build:
+      context: ../..
+      dockerfile: deploy/standalone/Dockerfile
+    image: airwavesd:standalone
+    restart: unless-stopped
+    # An init process reaps Chromium's helper processes after the weather
+    # channel stops rendering.
+    init: true
+    # Must be able to write to DATA and CHANNELS.
+    user: ${PUID:-1000}:${PGID:-1000}
+    ports:
+      # The Airwaves app, the admin page (/admin/) and its MCP endpoint.
+      - ${BIND:-0.0.0.0}:${PORT:-8089}:8089
+      # The emulated HDHomeRun, when AIRWAVES_HDHR=on.
+      - ${BIND:-0.0.0.0}:${HDHR_PORT:-5004}:5004
+    environment:
+      TZ: ${TZ:-UTC}
+      AIRWAVES_ANTENNA: "off"
+      AIRWAVES_NAME: ${AIRWAVES_NAME:-Airwaves}
+      # Where the weather is for; nothing else needs a location.
+      AIRWAVES_ZIP: ${AIRWAVES_ZIP:-}
+      AIRWAVES_LAT: ${AIRWAVES_LAT:-}
+      AIRWAVES_LON: ${AIRWAVES_LON:-}
+      AIRWAVES_ADMIN_PASSWORD: ${AIRWAVES_ADMIN_PASSWORD:-}
+      AIRWAVES_TOKEN: ${AIRWAVES_TOKEN:-}
+      # The folders mounted below, as the admin page names them.
+      AIRWAVES_HOST_CHANNELS: ${CHANNELS:-./channels}
+      AIRWAVES_HOST_MUSIC: ${MUSIC:-./music}
+      AIRWAVES_HDHR: ${AIRWAVES_HDHR:-off}
+      AIRWAVES_HDHR_DISCOVERY: "off"
+      # The weather display below: the app opens it on WEATHERSTAR_PORT,
+      # airwavesd reaches it by its service name. While it isn't running
+      # (COMPOSE_PROFILES without "weather"), there's no weather channel.
+      AIRWAVES_WEATHERSTAR_PORT: ${WEATHERSTAR_PORT:-8090}
+      AIRWAVES_WEATHERSTAR_URL: http://weatherstar:8080
+    volumes:
+      # Settings, caches, the self-updating yt-dlp and backups.
+      - ${DATA:-./data}:/data
+      # A folder per channel; the admin page writes here too.
+      - ${CHANNELS:-./channels}:/channels
+      # MP3s for the weather channel's music (optional).
+      - ${MUSIC:-./music}:/music:ro
+    logging:
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  # Airwaves Weather: WeatherStar 4000+ (github.com/netbymatt/ws4kp, MIT)
+  # with Airwaves branding, behind the weather channel. On with
+  # COMPOSE_PROFILES=weather in .env.
+  weatherstar:
+    profiles: [weather]
+    build: ../weatherstar
+    image: airwaves-weatherstar:standalone
+    restart: unless-stopped
+    ports:
+      - ${BIND:-0.0.0.0}:${WEATHERSTAR_PORT:-8090}:8080
+    logging:
+      options:
+        max-size: 10m
+        max-file: "3"

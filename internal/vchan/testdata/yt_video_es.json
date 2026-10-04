@@ -1,0 +1,72 @@
+{
+ "id": "SpanishVid1",
+ "title": "Un video en español",
+ "duration": 593,
+ "timestamp": 1791036020,
+ "upload_date": "20261003",
+ "description": "Hola a todos.",
+ "live_status": "not_live",
+ "media_type": "video",
+ "channel": "The Library of Letourneau",
+ "channel_id": "UC_O58Rr2DOskJvs9bArpLkQ",
+ "format_id": "298+140",
+ "width": 1280,
+ "height": 720,
+ "vcodec": "avc1.4d4020",
+ "acodec": "mp4a.40.2",
+ "http_headers": null,
+ "requested_formats": [
+  {
+   "format_id": "298",
+   "ext": "mp4",
+   "protocol": "https",
+   "vcodec": "avc1.4d4020",
+   "acodec": "none",
+   "width": 1280,
+   "height": 720,
+   "fps": 60,
+   "http_headers": {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-us,en;q=0.5",
+    "Sec-Fetch-Mode": "navigate"
+   },
+   "url": "https://rr1---sn-test.googlevideo.com/videoplayback?itag=298&expire=0&sig=test"
+  },
+  {
+   "format_id": "140",
+   "ext": "m4a",
+   "protocol": "https",
+   "vcodec": "none",
+   "acodec": "mp4a.40.2",
+   "width": null,
+   "height": null,
+   "fps": null,
+   "http_headers": {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-us,en;q=0.5",
+    "Sec-Fetch-Mode": "navigate"
+   },
+   "url": "https://rr1---sn-test.googlevideo.com/videoplayback?itag=140&expire=0&sig=test",
+   "language": "es"
+  }
+ ],
+ "subtitles": {},
+ "automatic_captions": {
+  "es-orig": [
+   {
+    "ext": "vtt",
+    "url": "https://www.youtube.com/api/timedtext?v=SpanishVid1&lang=es&fmt=vtt",
+    "protocol": "https"
+   }
+  ],
+  "en": [
+   {
+    "ext": "vtt",
+    "url": "https://www.youtube.com/api/timedtext?v=SpanishVid1&lang=es&tlang=en&fmt=vtt",
+    "protocol": "https"
+   }
+  ]
+ }
+}

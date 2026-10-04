@@ -1,0 +1,73 @@
+# Airwaves server: Tvheadend owns the tuners and recordings, airwavesd
+# serves the guide, live TV and DVR to the desktop app.
+name: airwaves
+services:
+  tvheadend:
+    image: lscr.io/linuxserver/tvheadend:latest
+    container_name: airwaves-tvheadend
+    restart: unless-stopped
+    # Host networking lets Tvheadend find HDHomeRun tuners by LAN broadcast.
+    network_mode: host
+    environment:
+      PUID: "1000"
+      PGID: "100"
+      TZ: ${TZ:?set TZ in .env, like America/Chicago}
+      # Access control is off, so listen on 127.0.0.1 only: reachable from
+      # this host (admin UI via `ssh -L 9981:127.0.0.1:9981`) and airwavesd.
+      RUN_OPTS: --noacl --bindaddr 127.0.0.1
+    volumes:
+      - ./tvheadend/config:/config
+      - ${RECORDINGS:-./recordings}:/recordings
+
+  airwavesd:
+    build: ./airwavesd
+    image: airwavesd:local
+    container_name: airwaves-server
+    restart: unless-stopped
+    # An init process reaps Chromium's helper processes after the weather
+    # channel stops rendering.
+    init: true
+    network_mode: host
+    depends_on:
+      - tvheadend
+    environment:
+      TZ: ${TZ:?set TZ in .env, like America/Chicago}
+      AIRWAVES_TVHEADEND: http://127.0.0.1:9981
+      # Listen on the tailnet address only (set in .env by deploy.sh).
+      AIRWAVES_LISTEN: ${AIRWAVES_BIND:-127.0.0.1}:8089
+      AIRWAVES_NAME: ${AIRWAVES_NAME:-airwaves}
+      # Where the antenna is, for its lineup and listings (required). A
+      # precise LAT/LON beats the ZIP centroid for reception.
+      AIRWAVES_ZIP: ${AIRWAVES_ZIP:-}
+      AIRWAVES_LAT: ${AIRWAVES_LAT:-}
+      AIRWAVES_LON: ${AIRWAVES_LON:-}
+      AIRWAVES_TOKEN: ${AIRWAVES_TOKEN:-}
+      # The folders mounted below, as the admin page names them.
+      AIRWAVES_HOST_CHANNELS: ${CHANNELS:-./channels}
+      AIRWAVES_HOST_MUSIC: ${MUSIC:-./music}
+      AIRWAVES_WEATHERSTAR_PORT: "8090"
+      # The emulated HDHomeRun for Channels DVR, Jellyfin, VLC... (LAN port
+      # opened by the host firewall; discovery on UDP 65001).
+      AIRWAVES_HDHR_LISTEN: ":5004"
+      # Even custom channels' sound out to this level in LUFS as it
+      # streams (-24 is broadcast TV's), or off.
+      AIRWAVES_LOUDNESS: ${AIRWAVES_LOUDNESS:-off}
+    volumes:
+      - ./data:/data
+      - ${MUSIC:-./music}:/music:ro
+      # Writable: the admin page saves channel settings here, and YouTube
+      # channels keep their schedules here.
+      - ${CHANNELS:-./channels}:/channels
+
+  # Airwaves Weather: WeatherStar 4000+ (github.com/netbymatt/ws4kp, MIT)
+  # with our branding, for the WX channel. airwavesd redirects /weatherstar
+  # here with the server's location.
+  weatherstar:
+    build: ./weatherstar
+    image: airwaves-weatherstar:local
+    container_name: airwaves-weatherstar
+    restart: unless-stopped
+    ports:
+      - ${AIRWAVES_BIND:-127.0.0.1}:8090:8080
+      # For the weather channel renderer in airwavesd.
+      - 127.0.0.1:8090:8080

@@ -1,0 +1,87 @@
+{
+ "id": "UC_O58Rr2DOskJvs9bArpLkQ",
+ "channel": "The Library of Letourneau",
+ "channel_id": "UC_O58Rr2DOskJvs9bArpLkQ",
+ "title": "The Library of Letourneau - Videos",
+ "uploader_id": "@TheLibraryofLetourneau",
+ "_type": "playlist",
+ "entries": [
+  {
+   "_type": "url",
+   "ie_key": "Youtube",
+   "id": "9KaMhx-S0jo",
+   "url": "https://www.youtube.com/watch?v=9KaMhx-S0jo",
+   "title": "Streamers go to Jupiter to get more STUPIDER",
+   "duration": 594,
+   "view_count": 34000,
+   "timestamp": null,
+   "live_status": null
+  },
+  {
+   "_type": "url",
+   "ie_key": "Youtube",
+   "id": "D0PHjmJUG0w",
+   "url": "https://www.youtube.com/watch?v=D0PHjmJUG0w",
+   "title": "modern day seneca - Bits and Banter [09/30/2026]",
+   "duration": 4313,
+   "view_count": 13000,
+   "timestamp": null,
+   "live_status": null
+  },
+  {
+   "_type": "url",
+   "ie_key": "Youtube",
+   "id": "PremiereXyz",
+   "url": "https://www.youtube.com/watch?v=PremiereXyz",
+   "title": "Premiering soon",
+   "duration": null,
+   "view_count": null,
+   "timestamp": null,
+   "live_status": "is_upcoming"
+  },
+  {
+   "_type": "url",
+   "ie_key": "Youtube",
+   "id": "aNauO_0Y9RA",
+   "url": "https://www.youtube.com/watch?v=aNauO_0Y9RA",
+   "title": "Northernlion fixes Kevin O'Leary's data center problem",
+   "duration": 622,
+   "view_count": 29000,
+   "timestamp": null,
+   "live_status": null
+  },
+  {
+   "_type": "url",
+   "ie_key": "Youtube",
+   "id": "velAP60VACY",
+   "url": "https://www.youtube.com/watch?v=velAP60VACY",
+   "title": "What will your Heavenly body look like?",
+   "duration": 781,
+   "view_count": 32000,
+   "timestamp": null,
+   "live_status": null
+  },
+  {
+   "_type": "url",
+   "ie_key": "Youtube",
+   "id": "8JE8devZIZQ",
+   "url": "https://www.youtube.com/watch?v=8JE8devZIZQ",
+   "title": "The Trumpet Guy's Defense",
+   "duration": 1236,
+   "view_count": 108000,
+   "timestamp": null,
+   "live_status": null
+  },
+  {
+   "_type": "url",
+   "ie_key": "Youtube",
+   "id": "uUNKsYaCyXg",
+   "url": "https://www.youtube.com/watch?v=uUNKsYaCyXg",
+   "title": "Northernlion GenAI test_1",
+   "duration": 174,
+   "view_count": 62000,
+   "timestamp": null,
+   "live_status": null
+  }
+ ]
+}

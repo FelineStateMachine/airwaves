@@ -1,0 +1,19 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "Airwaves",
+  "outputfilename": "Airwaves",
+  "frontend:install": "",
+  "frontend:build": "",
+  "frontend:dev:watcher": "",
+  "frontend:dev:serverUrl": "",
+  "wailsjsdir": "",
+  "author": {
+    "name": "FelineStateMachine"
+  },
+  "info": {
+    "companyName": "Airwaves",
+    "productName": "Airwaves",
+    "productVersion": "0.1.0",
+    "comments": "Over-the-air TV and guide"
+  }
+}

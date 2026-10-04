@@ -1,0 +1,42 @@
+{
+ "id": "UC3tNpTOHsTnkmbwztCs30sA",
+ "channel": "Northernlion",
+ "channel_id": "UC3tNpTOHsTnkmbwztCs30sA",
+ "title": "Northernlion - Videos",
+ "channel_follower_count": 1390000,
+ "description": "Subscribe for new videos of AAA and indie games every single day!",
+ "uploader_id": "@Northernlion",
+ "uploader_url": "https://www.youtube.com/@Northernlion",
+ "channel_url": "https://www.youtube.com/channel/UC3tNpTOHsTnkmbwztCs30sA",
+ "_type": "playlist",
+ "thumbnails": [
+  {
+   "url": "https://yt3.googleusercontent.com/Xw0Y2pUxhzKWUNm0DZCISuEkfZt1SD-TORX-fQ0RiVsP1WLRbC8NEvBJOVT8ONK7VRW6kmMP9g=w1060-fcrop64=1,00005a57ffffa5a8-k-c0xffffffff-no-nd-rj",
+   "height": 175,
+   "width": 1060,
+   "preference": -10,
+   "id": "0",
+   "resolution": "1060x175"
+  },
+  {
+   "url": "https://yt3.googleusercontent.com/ytc/AIdro_mZSSRynYDl-MtAWGJNtmT9jCjFc4MWUPo5_5gGaErnfA=s900-c-k-c0x00ffffff-no-rj",
+   "height": 900,
+   "width": 900,
+   "id": "7",
+   "resolution": "900x900"
+  },
+  {
+   "url": "https://yt3.googleusercontent.com/ytc/AIdro_mZSSRynYDl-MtAWGJNtmT9jCjFc4MWUPo5_5gGaErnfA=s0",
+   "id": "avatar_uncropped",
+   "preference": 1
+  }
+ ],
+ "entries": [
+  {
+   "_type": "url",
+   "id": "_e0EhEeRj-Y",
+   "title": "Putting the \"mult\" in multicast (Batomon Showdown)",
+   "duration": 2534
+  }
+ ]
+}

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <link rel="icon" href="data:,">
+  <title>Airwaves channels</title>
+  <link rel="preload" href="fonts/big-shoulders-display-800.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="fonts/ibm-plex-mono-500.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="admin.css">
+  <script src="admin.js" defer></script>
+  <script src="webmcp.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to the editor</a>
+  <div class="app">
+    <aside class="side" aria-label="Channels and account">
+      <header class="side-head">
+        <span class="mark">Airwaves</span>
+        <span class="side-sub">Channels</span>
+      </header>
+      <section id="account" class="acct" aria-label="Jellyfin account"></section>
+      <section id="bk-side" class="bk-side" aria-label="Backups"></section>
+      <nav id="channels" class="chlist" aria-label="Channels">
+        <p class="side-msg">Loading channels</p>
+      </nav>
+    </aside>
+    <main id="main" class="main" tabindex="-1">
+      <div class="empty"><p class="empty-line">Loading</p></div>
+    </main>
+  </div>
+
+  <dialog id="dlg" aria-labelledby="dlg-title" aria-describedby="dlg-body">
+    <form method="dialog">
+      <h2 id="dlg-title"></h2>
+      <p id="dlg-body"></p>
+      <div class="dlg-actions">
+        <button class="btn ghost" value="cancel" id="dlg-cancel">Cancel</button>
+        <button class="btn" value="ok" id="dlg-ok">OK</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

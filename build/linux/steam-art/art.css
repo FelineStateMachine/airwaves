@@ -1,0 +1,78 @@
+/* Shared look for the Steam library art: the app's tokens and fonts. */
+@font-face { font-family: "Shoulders"; src: url(../../../frontend/dist/fonts/big-shoulders-display-600.woff2) format("woff2"); font-weight: 600; }
+@font-face { font-family: "Shoulders"; src: url(../../../frontend/dist/fonts/big-shoulders-display-800.woff2) format("woff2"); font-weight: 800; }
+@font-face { font-family: "Plex Mono"; src: url(../../../frontend/dist/fonts/ibm-plex-mono-400.woff2) format("woff2"); font-weight: 400; }
+@font-face { font-family: "Plex Mono"; src: url(../../../frontend/dist/fonts/ibm-plex-mono-500.woff2) format("woff2"); font-weight: 500; }
+
+:root {
+  --ink: #07080a;
+  --ink-2: #0d0f12;
+  --ink-3: #15181d;
+  --ink-4: #1d2128;
+  --line: rgba(237, 230, 214, .08);
+  --paper: #ede6d6;
+  --muted: #908a7c;
+  --faint: #5d5850;
+  --amber: #ffb224;
+  --amber-2: #c98714;
+  --f-display: "Shoulders", "Impact", sans-serif;
+  --f-mono: "Plex Mono", "Menlo", monospace;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body { background: var(--ink); color: var(--paper); -webkit-font-smoothing: antialiased; }
+
+.art { position: relative; overflow: hidden; background: var(--ink); }
+
+/* The wordmark, as on the app's boot screen. */
+.mark {
+  font: 800 100px/.8 var(--f-display);
+  text-transform: uppercase; letter-spacing: .01em;
+  color: var(--paper); white-space: nowrap;
+}
+.tag {
+  font: 500 14px var(--f-mono); letter-spacing: .2em; text-transform: uppercase;
+  color: var(--amber); white-space: nowrap;
+}
+
+/* Guide grid motif, built by art.js. Sizes scale with --u (1 = the app's 58px row). */
+.guide { position: absolute; --u: 1; }
+.guide .ticks { position: absolute; left: 0; right: 0; top: 0; height: calc(34px * var(--u)); border-bottom: 1px solid var(--line); }
+.guide .ticks span {
+  position: absolute; top: 0; bottom: 0; display: flex; align-items: center;
+  padding-left: calc(10px * var(--u)); border-left: 1px solid var(--line);
+  font: 400 calc(12px * var(--u)) var(--f-mono); color: var(--faint);
+}
+.guide .row { position: absolute; left: 0; right: 0; border-bottom: 1px solid var(--line); }
+.guide .ch {
+  position: absolute; top: 0; bottom: 0; left: 0;
+  display: flex; align-items: center; padding-left: calc(26px * var(--u));
+  font: 600 calc(28px * var(--u))/1 var(--f-display); color: var(--faint);
+}
+.guide .row.cur .ch { color: var(--amber); }
+.guide .cell {
+  position: absolute; top: calc(4px * var(--u)); bottom: calc(4px * var(--u));
+  background: var(--ink-3); border-radius: calc(2px * var(--u));
+}
+.guide .cell.past { opacity: .45; }
+.guide .cell.now { background: #1b1e24; box-shadow: inset calc(2px * var(--u)) 0 0 var(--amber-2); }
+.guide .cell.sel { background: var(--amber); box-shadow: none; opacity: 1; }
+.guide .now-line {
+  position: absolute; top: 0; bottom: 0; width: calc(2px * var(--u)); margin-left: calc(-1px * var(--u));
+  background: var(--amber); box-shadow: 0 0 calc(14px * var(--u)) rgba(255, 178, 36, .45);
+}
+.guide .now-line::before {
+  content: ""; position: absolute; top: 0; left: calc(-5px * var(--u));
+  border: calc(6px * var(--u)) solid transparent; border-top: calc(8px * var(--u)) solid var(--amber);
+  border-bottom: 0;
+}
+
+/* Film grain and faint scanlines, as over the app's chrome. */
+.grain::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 50;
+  background:
+    repeating-linear-gradient(0deg, rgba(255,255,255,.018) 0 1px, transparent 1px 3px),
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)' opacity='.55'/></svg>");
+  opacity: .07; mix-blend-mode: overlay;
+}

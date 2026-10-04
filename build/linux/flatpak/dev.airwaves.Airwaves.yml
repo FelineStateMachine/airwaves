@@ -1,0 +1,64 @@
+# Airwaves desktop app as a Flatpak. Built by scripts/flatpak.sh. By hand,
+# from the repo root (the source), with the build dirs outside it:
+#   flatpak-builder --user --install-deps-from=flathub --force-clean \
+#     --state-dir=/tmp/aw/state --repo=/tmp/aw/repo /tmp/aw/build \
+#     build/linux/flatpak/dev.airwaves.Airwaves.yml
+# The GNOME runtime ships GTK 3 and webkit2gtk-4.1, which Wails v2 links
+# against (hence the webkit2_41 tag). Video goes hls.js -> WebKitGTK MSE ->
+# GStreamer, so H.264/AAC decoding needs the runtime's codecs-extra
+# extension (org.freedesktop.Platform.codecs-extra//26.08-extra); on Intel
+# GPUs flatpak also pulls org.freedesktop.Platform.VAAPI.Intel, which
+# GStreamer's vah264dec uses for hardware decode.
+app-id: dev.airwaves.Airwaves
+runtime: org.gnome.Platform
+runtime-version: '51'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.golang
+command: airwaves
+finish-args:
+  - --share=network
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --socket=pulseaudio
+  - --device=dri
+  # Game controllers: WebKitGTK's Gamepad API reads /dev/input through
+  # libmanette (Flatpak 1.15.6 or later).
+  - --device=input
+modules:
+  - name: airwaves
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/golang/bin
+      # Modules (and a newer Go toolchain, if go.mod wants one) come from
+      # the network at build time.
+      build-args:
+        - --share=network
+      # -ldflags "-s -w" already strips it.
+      no-debuginfo: true
+      env:
+        GOTOOLCHAIN: auto
+        GOPATH: /run/build/airwaves/.gopath
+        GOCACHE: /run/build/airwaves/.gocache
+        GOFLAGS: -modcacherw
+        CGO_ENABLED: '1'
+    build-commands:
+      - go version
+      - go build -tags desktop,production,webkit2_41 -trimpath -ldflags "-s -w" -o airwaves .
+      - install -Dm755 airwaves /app/bin/airwaves
+      - install -Dm644 build/linux/flatpak/dev.airwaves.Airwaves.desktop /app/share/applications/dev.airwaves.Airwaves.desktop
+      - install -Dm644 build/linux/flatpak/dev.airwaves.Airwaves.metainfo.xml /app/share/metainfo/dev.airwaves.Airwaves.metainfo.xml
+      # build/appicon.png is 1024px; hicolor tops out at 512. (GStreamer,
+      # not gdk-pixbuf: its glycin loaders need a portal the build lacks.)
+      - >-
+        for s in 128 256 512; do
+        gst-launch-1.0 -q filesrc location=build/appicon.png ! pngdec ! videoscale method=lanczos
+        ! video/x-raw,width=$s,height=$s ! pngenc ! filesink location=icon-$s.png &&
+        install -Dm644 icon-$s.png /app/share/icons/hicolor/${s}x${s}/apps/dev.airwaves.Airwaves.png || exit 1;
+        done
+      - chmod -R u+w /run/build/airwaves/.gopath
+    sources:
+      # The repo root: scripts/flatpak.sh unpacks the committed HEAD there.
+      - type: dir
+        path: ../../..

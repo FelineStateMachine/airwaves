@@ -1,0 +1,31 @@
+<!doctype html>
+<!-- Portrait capsule, 600x900: the library grid tile. -->
+<meta charset="utf-8">
+<link rel="stylesheet" href="art.css">
+<style>
+  #art { width: 600px; height: 900px; }
+  #art::before { /* a warm haze where the guide meets the wordmark */
+    content: ""; position: absolute; inset: 0;
+    background: radial-gradient(70% 38% at 62% 74%, rgba(255, 178, 36, .07), transparent 70%);
+  }
+  .copy { position: absolute; left: 46px; top: 84px; }
+  .mark { font-size: 200px; line-height: .92; }
+  .tag { font-size: 17px; margin-top: 30px; }
+  .guide {
+    left: 0; right: 0; top: 530px; bottom: 0;
+    -webkit-mask-image: linear-gradient(to bottom, transparent, #000 22%, #000 62%, transparent);
+  }
+</style>
+<div class="art grain" id="art">
+  <div class="guide" id="g"></div>
+  <div class="copy">
+    <div class="mark">Air<br>waves</div>
+    <div class="tag">Live TV and guide</div>
+  </div>
+</div>
+<script type="module">
+  import { guide, ready } from "./art.js";
+  await ready();
+  guide(document.getElementById("g"), { u: 1.25, chw: 96, slot: 150, now: 1.45, first: 1, cur: 2, sel: false, seed: 11 });
+  document.body.dataset.ready = "1";
+</script>

@@ -1,0 +1,93 @@
+{
+ "id": "boiler room",
+ "_type": "playlist",
+ "entries": [
+  {
+   "_type": "url",
+   "url": "https://www.youtube.com/channel/UCGBpxWJr9FNOcFYA5GkKrMg",
+   "id": "UCGBpxWJr9FNOcFYA5GkKrMg",
+   "ie_key": "YoutubeTab",
+   "channel": "Boiler Room",
+   "uploader": "Boiler Room",
+   "channel_id": "UCGBpxWJr9FNOcFYA5GkKrMg",
+   "channel_url": "https://www.youtube.com/channel/UCGBpxWJr9FNOcFYA5GkKrMg",
+   "title": "Boiler Room",
+   "uploader_id": "@boilerroom",
+   "uploader_url": "https://www.youtube.com/@boilerroom",
+   "channel_follower_count": 5250000,
+   "thumbnails": [
+    {
+     "url": "//yt3.ggpht.com/_VRBq3twWhR8Phd6a1eU0qfarQKGnH8r-gAdsbMhDt9Qva0eVdpDrXLYhcg31tEVqmnzfW-O=s88-c-k-c0x00ffffff-no-rj-mo",
+     "height": 88,
+     "width": 88
+    },
+    {
+     "url": "//yt3.ggpht.com/_VRBq3twWhR8Phd6a1eU0qfarQKGnH8r-gAdsbMhDt9Qva0eVdpDrXLYhcg31tEVqmnzfW-O=s176-c-k-c0x00ffffff-no-rj-mo",
+     "height": 176,
+     "width": 176
+    }
+   ],
+   "playlist_count": null,
+   "description": "Connecting club culture to the wider world, on screen and irl through parties, film and video.",
+   "channel_is_verified": true
+  },
+  {
+   "_type": "url",
+   "url": "https://www.youtube.com/channel/UC6mNzjcMJoXcXhIvJvyZI2Q",
+   "id": "UC6mNzjcMJoXcXhIvJvyZI2Q",
+   "ie_key": "YoutubeTab",
+   "channel": "BoilerRoom",
+   "uploader": "BoilerRoom",
+   "channel_id": "UC6mNzjcMJoXcXhIvJvyZI2Q",
+   "channel_url": "https://www.youtube.com/channel/UC6mNzjcMJoXcXhIvJvyZI2Q",
+   "title": "BoilerRoom",
+   "uploader_id": "@BoilerRoom.Israel",
+   "uploader_url": "https://www.youtube.com/@BoilerRoom.Israel",
+   "channel_follower_count": 4280,
+   "thumbnails": [
+    {
+     "url": "//yt3.ggpht.com/t2V6pQi4ekc2YN2i_C0IxzG6M3ygu1NLW_61DHp7GwIiqvCDDQH-SdEZ5_yOTRUCxr0-RwpiYW8=s88-c-k-c0x00ffffff-no-rj-mo",
+     "height": 88,
+     "width": 88
+    },
+    {
+     "url": "//yt3.ggpht.com/t2V6pQi4ekc2YN2i_C0IxzG6M3ygu1NLW_61DHp7GwIiqvCDDQH-SdEZ5_yOTRUCxr0-RwpiYW8=s176-c-k-c0x00ffffff-no-rj-mo",
+     "height": 176,
+     "width": 176
+    }
+   ],
+   "playlist_count": null,
+   "description": "ברוכים הבאים ל-Boiler Room – הבית של סוחרי העל בשוק ההון! בערוץ שלנו תמצאו תוכן מקצועי, פרקטי וממוקד שייקח אתכם לשלב הבא במסחר ...",
+   "channel_is_verified": null
+  },
+  {
+   "_type": "url",
+   "url": "https://www.youtube.com/channel/UC2xwUq87Wp7fvJp5Ic2uWCg",
+   "id": "UC2xwUq87Wp7fvJp5Ic2uWCg",
+   "ie_key": "YoutubeTab",
+   "channel": "Boiler Room - Topic",
+   "uploader": "Boiler Room - Topic",
+   "channel_id": "UC2xwUq87Wp7fvJp5Ic2uWCg",
+   "channel_url": "https://www.youtube.com/channel/UC2xwUq87Wp7fvJp5Ic2uWCg",
+   "title": "Boiler Room - Topic",
+   "uploader_id": null,
+   "uploader_url": null,
+   "channel_follower_count": 431,
+   "thumbnails": [
+    {
+     "url": "//yt3.ggpht.com/SIlJw-vyYU6-xL40m7h3fM2BsyfILE9Eiv5AjSVkxyKodRUfpk7K-nhQzUwamzZVrOkdYUCJ=s88-c-k-c0x00ffffff-no-rj-mo",
+     "height": 88,
+     "width": 88
+    },
+    {
+     "url": "//yt3.ggpht.com/SIlJw-vyYU6-xL40m7h3fM2BsyfILE9Eiv5AjSVkxyKodRUfpk7K-nhQzUwamzZVrOkdYUCJ=s176-c-k-c0x00ffffff-no-rj-mo",
+     "height": 176,
+     "width": 176
+    }
+   ],
+   "playlist_count": 24,
+   "description": "Boiler Room is an American nu metal band from New York City. The band formed in 1996, releasing two studio albums and one ...",
+   "channel_is_verified": null
+  }
+ ]
+}

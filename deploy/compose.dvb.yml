@@ -1,0 +1,5 @@
+# Added by up.sh when a tuner is plugged in (/dev/dvb exists).
+services:
+  tvheadend:
+    devices:
+      - /dev/dvb:/dev/dvb
