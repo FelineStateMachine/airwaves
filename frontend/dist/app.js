@@ -1479,7 +1479,12 @@ function dockKey(e) {
       e.preventDefault();
       return true;
     }
-    case 'Escape': case 'ArrowDown': closeDock(); e.preventDefault(); return true;
+    case 'ArrowDown':
+      // In the guide the filters sit just below the dock.
+      if (state.view === 'guide') { closeDock(false); guideZone('filters'); } else closeDock();
+      e.preventDefault();
+      return true;
+    case 'Escape': closeDock(); e.preventDefault(); return true;
     default: closeDock(); return false;
   }
   e.preventDefault();
@@ -1885,12 +1890,10 @@ function guideKey(e) {
   const list = guideChannels();
   const sel = selectedProgram(list);
   switch (e.key) {
-    // Down from the last row wraps to the first; Up from the first goes to
-    // the filters. The dock is Left from the earliest program.
-    case 'ArrowUp':
-      if (state.gRow <= 0) { e.preventDefault(); return guideZone('filters'); }
-      state.gRow -= 1;
-      break;
+    // Up and Down wrap round the channels, so the last ones are a press
+    // away. The dock is Left from the earliest program, and the filters
+    // Down from the dock.
+    case 'ArrowUp': state.gRow = list.length ? (state.gRow - 1 + list.length) % list.length : 0; break;
     case 'ArrowDown': state.gRow = list.length ? (state.gRow + 1) % list.length : 0; break;
     case 'PageUp': state.gRow = state.gRow === 0 ? list.length - 1 : Math.max(0, state.gRow - 8); break;
     case 'PageDown': state.gRow = state.gRow === list.length - 1 ? 0 : Math.min(list.length - 1, state.gRow + 8); break;
@@ -2111,7 +2114,7 @@ function renderGuide() {
 
 // guideStatusHints names the guide's keys beside its filters.
 function guideStatusHints() {
-  if (androidTV && !prompts.pad) return 'Up from the top row for filters';
+  if (androidTV && !prompts.pad) return 'Filters: Left to the top bar, then Down';
   return hints([['i', 'I', 'more'], ['f', 'F', 'favorite'], ['h', 'H', 'hide'], ['[', '[ ]', 'filter']]);
 }
 
