@@ -255,9 +255,9 @@ func (c *Client) Frontends(ctx context.Context) ([]Frontend, error) {
 	var walk func(uuid string, depth int) error
 	walk = func(uuid string, depth int) error {
 		var nodes []struct {
-			UUID string `json:"uuid"`
-			Text string `json:"text"`
-			Leaf bool   `json:"leaf"`
+			UUID string   `json:"uuid"`
+			Text string   `json:"text"`
+			Leaf flexBool `json:"leaf"`
 		}
 		if err := c.get(ctx, "/api/hardware/tree", url.Values{"uuid": {uuid}}, &nodes); err != nil {
 			return err
@@ -270,7 +270,7 @@ func (c *Client) Frontends(ctx context.Context) ([]Frontend, error) {
 			if strings.Contains(class, "_frontend_atsc") {
 				out = append(out, Frontend{UUID: n.UUID, Class: class, Name: n.Text})
 			}
-			if !n.Leaf && depth < 3 {
+			if !bool(n.Leaf) && depth < 3 {
 				if err := walk(n.UUID, depth+1); err != nil {
 					return err
 				}
@@ -279,6 +279,22 @@ func (c *Client) Frontends(ctx context.Context) ([]Frontend, error) {
 		return nil
 	}
 	return out, walk("root", 0)
+}
+
+// flexBool is a JSON boolean that Tvheadend sometimes writes as 0 or 1
+// (the hardware tree's "leaf").
+type flexBool bool
+
+func (b *flexBool) UnmarshalJSON(raw []byte) error {
+	switch string(raw) {
+	case "true", "1":
+		*b = true
+	case "false", "0", "null":
+		*b = false
+	default:
+		return fmt.Errorf("%s is not a boolean", raw)
+	}
+	return nil
 }
 
 func (c *Client) class(ctx context.Context, uuid string) (string, error) {
