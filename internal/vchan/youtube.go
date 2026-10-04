@@ -59,21 +59,15 @@ type YouTube struct {
 	busy     bool                  // a refresh is running
 	tried    map[string]time.Time  // failed listings, by URL
 	feedDown map[string]string     // failing feeds by URL: how they're stood in for
-	resolved map[string]ytResolved // found ahead, by video ID
+	resolved map[string]ytResolved // found, by video ID (see ytahead.go)
 	ahead    map[string]*ytAhead   // being found ahead
+	missed   map[string]time.Time  // failed to be found ahead, by video ID
+	touched  time.Time             // when the channel was last tended
+	warming  bool                  // finding what's on ahead (see warm)
+	closed   bool                  // no longer in the library
 	logged   string                // the last save error logged
 	now      func() time.Time
 	record   recordFile
-}
-
-type ytResolved struct {
-	info ytInfo
-	at   time.Time
-}
-
-type ytAhead struct {
-	started bool          // asking yt-dlp, rather than waiting to
-	done    chan struct{} // closed at the end
 }
 
 const (
@@ -251,11 +245,16 @@ func (y *YouTube) tend() {
 		y.busy = true
 		go y.refresh()
 	}
+	y.touched = time.Now()
+	if ytWarm && !y.warming && !y.closed {
+		y.warming = true
+		go y.warm()
+	}
 }
 
 func (y *YouTube) load() {
 	y.loaded = true
-	y.tried, y.resolved, y.ahead = map[string]time.Time{}, map[string]ytResolved{}, map[string]*ytAhead{}
+	y.tried, y.resolved, y.ahead, y.missed = map[string]time.Time{}, map[string]ytResolved{}, map[string]*ytAhead{}, map[string]time.Time{}
 	y.feedDown = map[string]string{}
 	cat, err := readYtCatalog(filepath.Join(y.Dir, ytCatalogFile))
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -721,8 +720,7 @@ func (y *YouTube) cue() cueFunc {
 			}
 			switch {
 			case left <= time.Second && next.ID != "":
-				// Done: ffmpeg reads the first half second of input
-				// at once, so videos end a little early.
+				// Done, to a frame or so.
 				on, tries = next, 0
 			case left < 15*time.Second || tries >= 2:
 				return item{Slate: true, Frames: max(framesIn(left), 1)}, 0, nil
@@ -733,8 +731,10 @@ func (y *YouTube) cue() cueFunc {
 		} else {
 			tries = 0
 		}
+		// A video opened again is found again: its addresses may be why
+		// it stopped.
 		last, played = on, now
-		return y.item(on), max(framesIn(now.Sub(on.Start)), 0), nil
+		return y.item(on, tries > 0), max(framesIn(now.Sub(on.Start)), 0), nil
 	}
 }
 
@@ -758,11 +758,13 @@ func (y *YouTube) after(a ytAiring) ytAiring {
 	return next
 }
 
-func (y *YouTube) item(a ytAiring) item {
+// item is an airing to play. fresh finds its video's addresses anew
+// rather than using any found before.
+func (y *YouTube) item(a ytAiring, fresh bool) item {
 	return item{
 		Path: a.ID, Frames: framesIn(a.End.Sub(a.Start)), Audio: true, Title: a.Title,
 		Open: func(ctx context.Context, offset time.Duration) (opened, error) {
-			return y.open(ctx, a, offset)
+			return y.open(ctx, a, offset, fresh)
 		},
 		Level: y.level(a.ID),
 	}
@@ -770,9 +772,10 @@ func (y *YouTube) item(a ytAiring) item {
 
 // open finds where to stream an airing's video from, and its English
 // captions, and starts finding the next one's shortly before it's due.
-func (y *YouTube) open(ctx context.Context, a ytAiring, offset time.Duration) (opened, error) {
+func (y *YouTube) open(ctx context.Context, a ytAiring, offset time.Duration, fresh bool) (opened, error) {
 	began := time.Now()
-	info, err := y.resolve(ctx, a.ID)
+	r, err := y.resolve(ctx, a.ID, fresh)
+	info := r.info
 	y.mu.Lock()
 	if err != nil {
 		if v := y.videos[a.ID]; v != nil && gone(err) {
@@ -792,12 +795,8 @@ func (y *YouTube) open(ctx context.Context, a ytAiring, offset time.Duration) (o
 		go y.prefetch(ctx, next)
 	}
 	in := info.inputs()
-	o := opened{AudioLang: info.audioLang()}
+	o := opened{AudioLang: info.audioLang(), Captions: r.caps}
 	o.Args, o.Audio = ytInputArgs(in, offset, httpChunks(y.FFmpeg))
-	if sub, ok := info.captions(); ok {
-		client := y.tool().client()
-		o.Captions = newCaptions(a.ID, func(ctx context.Context) ([]byte, error) { return ytCaptions(ctx, client, sub) })
-	}
 	log.Printf("%s: on air %s %s in (format %s, %dp, found in %s)", y.label(), a.ID, offset.Round(time.Second),
 		info.FormatID, in[0].Height, time.Since(began).Round(100*time.Millisecond))
 	return o, nil
@@ -858,87 +857,6 @@ func ytGet(ctx context.Context, client *http.Client, address string) ([]byte, er
 	return io.ReadAll(io.LimitReader(resp.Body, 16<<20))
 }
 
-// resolve finds where to stream a video from, using what was found ahead
-// of time, or waiting for it when that's under way. The addresses expire
-// after some hours.
-func (y *YouTube) resolve(ctx context.Context, id string) (ytInfo, error) {
-	y.mu.Lock()
-	f := y.ahead[id]
-	busy := f != nil && f.started
-	y.mu.Unlock()
-	if busy {
-		select {
-		case <-f.done:
-		case <-ctx.Done():
-			return ytInfo{}, ctx.Err()
-		}
-	}
-	y.mu.Lock()
-	r, ok := y.resolved[id]
-	delete(y.resolved, id)
-	height := y.cfg.MaxHeight
-	y.mu.Unlock()
-	if ok && time.Since(r.at) < time.Hour {
-		return r.info, nil
-	}
-	return y.fetch(ctx, id, height)
-}
-
-// fetch asks yt-dlp where to stream a video from.
-func (y *YouTube) fetch(ctx context.Context, id string, height int) (ytInfo, error) {
-	ctx, cancel := context.WithTimeout(ctx, ytResolveTime)
-	defer cancel()
-	raw, err := y.tool().run(ctx, "-J", "--no-playlist", "-f", ytFormatSpec(height), ytWatchURL(id))
-	if err != nil {
-		return ytInfo{}, err
-	}
-	info, err := parseYtInfo(raw)
-	if err == nil && len(info.inputs()) == 0 {
-		err = errors.New("yt-dlp found no stream")
-	}
-	return info, err
-}
-
-// prefetch resolves an airing's video a minute before it starts, so the
-// change from one video to the next is quick.
-func (y *YouTube) prefetch(ctx context.Context, a ytAiring) {
-	y.mu.Lock()
-	if y.ahead[a.ID] != nil {
-		y.mu.Unlock()
-		return
-	}
-	f := &ytAhead{done: make(chan struct{})}
-	y.ahead[a.ID] = f
-	height := y.cfg.MaxHeight
-	y.mu.Unlock()
-	defer func() {
-		y.mu.Lock()
-		delete(y.ahead, a.ID)
-		y.mu.Unlock()
-		close(f.done)
-	}()
-	select {
-	case <-ctx.Done():
-		return
-	case <-time.After(time.Until(a.Start.Add(-time.Minute))):
-	}
-	y.mu.Lock()
-	f.started = true
-	y.mu.Unlock()
-	info, err := y.fetch(ctx, a.ID, height)
-	if err != nil {
-		return // open tries again, and says why
-	}
-	y.mu.Lock()
-	for id, r := range y.resolved {
-		if time.Since(r.at) > time.Hour {
-			delete(y.resolved, id)
-		}
-	}
-	y.resolved[a.ID] = ytResolved{info, time.Now()}
-	y.mu.Unlock()
-}
-
 // ytFormatSpec picks H.264 picture up to height and AAC sound, English
 // sound of a video dubbed in several languages, else the best single file
 // up to height.
@@ -946,8 +864,8 @@ func ytFormatSpec(height int) string {
 	return fmt.Sprintf("bv*[height<=%[1]d][vcodec^=avc1]+ba[ext=m4a][language^=en]/bv*[height<=%[1]d][vcodec^=avc1]+ba[ext=m4a]/b[height<=%[1]d]", height)
 }
 
-// ytInputArgs are ffmpeg's inputs for a resolved video, played in real
-// time from offset in: picture first, with yt-dlp's headers, reconnecting
+// ytInputArgs are ffmpeg's inputs for a resolved video, played from
+// offset in: picture first, with yt-dlp's headers, reconnecting
 // when a connection drops. A stream that fails for good stops ffmpeg
 // (-xerror) rather than ending the video early, so it can be reopened.
 // chunked fetches in 10 MB ranges as yt-dlp does, which YouTube serves
@@ -970,7 +888,7 @@ func ytInputArgs(fs []ytFormat, offset time.Duration, chunked bool) (args []stri
 		if offset > 0 {
 			args = append(args, "-ss", strconv.FormatFloat(offset.Seconds(), 'f', 3, 64))
 		}
-		args = append(args, "-re", "-i", f.URL)
+		args = append(args, "-i", f.URL)
 		if audio == "" && f.ACodec != "none" && f.ACodec != "" {
 			audio = fmt.Sprintf("%d:a:0", i)
 		}

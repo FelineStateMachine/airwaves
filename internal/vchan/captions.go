@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"airwaves/internal/cc"
+	"airwaves/internal/phase"
 )
 
 // Videos' English captions reach viewers as CEA-608 closed captions in the
@@ -218,6 +219,7 @@ func subtitle(ctx context.Context, ffmpeg string, it item, skip int64, s *span, 
 	wait, cancel := context.WithTimeout(ctx, captionsWait)
 	_, _ = it.Captions.get(wait)
 	cancel()
+	phase.Step(ctx, "captions")
 	if cues, ok := it.Captions.ready(); ok {
 		out.captions.set(s, cc.Shift(cues, -offset))
 		return ""

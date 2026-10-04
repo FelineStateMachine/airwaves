@@ -254,7 +254,8 @@ func BenchmarkLeveler(b *testing.B) {
 
 // TestLevelingInTheStream plays two clips 12 dB apart through the engine,
 // twice: the first time each is metered and remembered, so the second
-// time both start at the target, and the stream keeps time across them.
+// time both start at the target, and the stream keeps time across them,
+// its lead ahead.
 func TestLevelingInTheStream(t *testing.T) {
 	ffmpeg, err := exec.LookPath("ffmpeg")
 	if err != nil {
@@ -298,8 +299,8 @@ func TestLevelingInTheStream(t *testing.T) {
 			t.Fatal(err)
 		}
 		probe, _ := exec.Command(ffprobe, "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", ts).Output()
-		if d, _ := strconv.ParseFloat(strings.TrimSpace(string(probe)), 64); d < 9 || d > 11.5 {
-			t.Errorf("%s: played %.1fs in 10.5s", name, d)
+		if d, _ := strconv.ParseFloat(strings.TrimSpace(string(probe)), 64); d < 10.5+lead.Seconds()-2.5 || d > 10.5+lead.Seconds()+0.5 {
+			t.Errorf("%s: played %.1fs in 10.5s with a %v lead", name, d, lead)
 		}
 		return ts
 	}

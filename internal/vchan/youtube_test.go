@@ -130,7 +130,7 @@ func TestYtInfoInputs(t *testing.T) {
 		t.Errorf("audio %q, %d inputs: %q", audio, countInputs(args), args)
 	}
 	joined := strings.Join(args, " ")
-	for _, want := range []string{"-ss 90.000 -re -i https://rr1---sn-test.googlevideo.com/videoplayback?itag=298",
+	for _, want := range []string{"-ss 90.000 -i https://rr1---sn-test.googlevideo.com/videoplayback?itag=298",
 		"-request_size 10485760", "User-Agent: Mozilla/5.0", "\r\n"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("args lack %q:\n%s", want, joined)
@@ -469,8 +469,9 @@ func TestYouTubeGuide(t *testing.T) {
 // TestOpenFailureKeepsTheSchedule plays three two-second items whose
 // sources open per play: the first fails to open after a while, the second
 // opens separate picture and sound inputs, the third fails at once. Slates
-// fill the failures' time, so the second starts on schedule, and the
-// stream is a single H.264 and AAC stream as long as the time it ran.
+// fill the failures' time, so each item is cued on schedule by the
+// stream's clock, and the stream is a single H.264 and AAC stream as long
+// as the time it ran and its lead.
 func TestOpenFailureKeepsTheSchedule(t *testing.T) {
 	ffmpeg, err := exec.LookPath("ffmpeg")
 	if err != nil {
@@ -491,26 +492,26 @@ func TestOpenFailureKeepsTheSchedule(t *testing.T) {
 			t.Fatalf("make %s: %v: %s", out, err, b)
 		}
 	}
-	var openedAt time.Duration
-	var start time.Time
+	var cuedAt []time.Duration // by the stream's clock
 	items := []item{
 		{Path: "fails-slowly", Frames: 2 * loopFPS, Open: func(ctx context.Context, _ time.Duration) (opened, error) {
 			time.Sleep(400 * time.Millisecond)
 			return opened{}, errors.New("yt-dlp: Sign in to confirm you're not a bot")
 		}},
 		{Path: "plays", Frames: 2 * loopFPS, Open: func(ctx context.Context, _ time.Duration) (opened, error) {
-			openedAt = time.Since(start)
-			return opened{Args: []string{"-re", "-i", picture, "-re", "-i", sound}, Audio: "1:a:0"}, nil
+			return opened{Args: []string{"-i", picture, "-i", sound}, Audio: "1:a:0"}, nil
 		}},
 		{Path: "fails", Frames: 2 * loopFPS, Open: func(ctx context.Context, _ time.Duration) (opened, error) {
 			return opened{}, errors.New("no stream")
 		}},
 	}
 	n := 0
+	var start time.Time
 	cue := func(now time.Time, _ bool) (item, int64, error) {
 		if n == 0 {
 			start = now
 		}
+		cuedAt = append(cuedAt, now.Sub(start))
 		if n == len(items) {
 			return item{Slate: true, Frames: 10 * loopFPS}, 0, nil
 		}
@@ -523,10 +524,15 @@ func TestOpenFailureKeepsTheSchedule(t *testing.T) {
 	if err := playCues(ctx, &out, ffmpeg, "test", cue); err != nil {
 		t.Fatal(err)
 	}
-	// ffmpeg reads the first half second of each input at once (-re's
-	// initial burst), so items end up to that much early.
-	if openedAt < 1400*time.Millisecond || openedAt > 2400*time.Millisecond {
-		t.Errorf("the second item opened %v in, want two seconds", openedAt)
+	// The time the first spent failing to open is the stream's lead's: it
+	// played nothing.
+	for i, want := range []time.Duration{0, 2 * time.Second, 4 * time.Second, 6 * time.Second} {
+		if i >= len(cuedAt) {
+			t.Fatalf("cued %d times, want %d", len(cuedAt), len(items)+1)
+		}
+		if d := cuedAt[i] - want; d < -time.Second/loopFPS || d > time.Second/loopFPS {
+			t.Errorf("item %d cued %v in, want %v", i, cuedAt[i], want)
+		}
 	}
 	ts := filepath.Join(dir, "out.ts")
 	if err := os.WriteFile(ts, out.Bytes(), 0o644); err != nil {
@@ -539,9 +545,10 @@ func TestOpenFailureKeepsTheSchedule(t *testing.T) {
 	got := string(probe)
 	if i := strings.Index(got, "duration="); i < 0 {
 		t.Errorf("no duration:\n%s", got)
-	} else if d, _ := strconv.ParseFloat(strings.TrimSpace(got[i+len("duration="):]), 64); d < 4 || d > 6 {
-		// Less the time spent opening, while nothing plays.
-		t.Errorf("played %.2fs in 5.5s", d)
+	} else if d, _ := strconv.ParseFloat(strings.TrimSpace(got[i+len("duration="):]), 64); d < 5.5+lead.Seconds()-2.5 || d > 5.5+lead.Seconds()+0.5 {
+		// Its lead ahead of the clock, less the time it took to start and
+		// what the encoder held when it stopped.
+		t.Errorf("played %.2fs in 5.5s with a %v lead", d, lead)
 	}
 	for _, want := range []string{"codec_name=h264|width=1280|height=720", "codec_name=aac"} {
 		if !strings.Contains(got, want) {

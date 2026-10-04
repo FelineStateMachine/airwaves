@@ -19,6 +19,7 @@ import (
 	"unicode/utf8"
 
 	"airwaves/internal/cc"
+	"airwaves/internal/phase"
 )
 
 // item is one video in a looping channel.
@@ -34,8 +35,9 @@ type item struct {
 	Episode     string
 	Image       string
 	// Input, when set, returns ffmpeg input options (ending "-i <url>") that
-	// play the video in real time from offset in, for sources that seek on
-	// their side. Otherwise Path is read with a local seek.
+	// play the video from offset in, for sources that seek on their side.
+	// Otherwise Path is read with a local seek. The stream's pace is set
+	// as it goes to the encoder (see pacer), not by the input.
 	Input func(offset time.Duration) []string
 	// AudioStream is the sound's stream specifier in Path's or Input's
 	// streams; "0:a:0" when empty.
@@ -61,8 +63,7 @@ type item struct {
 // opened is how to play an item found when it opens.
 type opened struct {
 	// Args are ffmpeg input options for one or more inputs (picture first,
-	// each ending "-i <url>") that play in real time from the offset asked
-	// for.
+	// each ending "-i <url>") that play from the offset asked for.
 	Args []string
 	// Audio is the sound's stream specifier ("1:a:0"), empty for silence.
 	Audio string
@@ -76,6 +77,11 @@ const (
 	loopHeight = 720
 	loopFPS    = 30
 	sampleRate = 48000
+	// lead is how far ahead of real time a stream starts: its first
+	// seconds are decoded and encoded as fast as they can be, so a viewer
+	// tuning in waits for none of them, and after that the stream keeps
+	// that far ahead of the clock (see pacer).
+	lead = 6 * time.Second
 	// maxPrograms bounds a guide request on a channel of very short videos.
 	maxPrograms = 2000
 )
@@ -393,8 +399,11 @@ func playCues(ctx context.Context, w io.Writer, ffmpeg, label string, cue cueFun
 		close(encDone)
 		cancel() // the viewer left, or the encoder failed
 	}()
-	out.video = newFeed(encVideo.w, 512, frameBytes) // up to 32 MB, under a second
-	out.audio = newFeed(encAudio.w, 128, 4)
+	// The picture sets the pace: the decoders run as fast as it lets them,
+	// sound and all.
+	out.video = newFeed(encVideo.w, 512, frameBytes, &pacer{per: loopFPS, lead: lead, quit: ctx.Done()}) // up to 32 MB, under a second
+	out.audio = newFeed(encAudio.w, 128, 4, nil)
+	out.video.first = func() { phase.Step(ctx, "decoding") }
 	finish := func() {
 		// Ending the feeds ends the encoder.
 		out.video.close()
@@ -403,12 +412,23 @@ func playCues(ctx context.Context, w io.Writer, ffmpeg, label string, cue cueFun
 	}
 	defer finish()
 
+	// What comes next is cued at the stream's own clock: where it was last
+	// cued, plus the frames since. It runs ahead of the clock on the wall
+	// by up to lead, which so holds from one video to the next; a stream
+	// that fell behind is cued at the wall's.
+	var at time.Time
+	var cued int64 // frames when last cued
 	ok := true
 	for ctx.Err() == nil {
-		it, skip, err := cue(time.Now(), ok)
+		now := time.Now()
+		if s := at.Add(frameDuration(out.video.units - cued)); !at.IsZero() && s.After(now) {
+			now = s
+		}
+		it, skip, err := cue(now, ok)
 		if err != nil {
 			return err
 		}
+		at, cued = now, out.video.units
 		ok = decode(ctx, ffmpeg, label, it, skip, out)
 	}
 	finish()
@@ -459,21 +479,65 @@ type feed struct {
 	units  int64        // from the decoders that have finished
 	bytes  atomic.Int64 // fed so far
 	closed sync.Once
+	first  func() // called as the first unit arrives, when set
 }
 
-func newFeed(dst *os.File, chunks, unit int) *feed {
+// newFeed starts a feed to dst. With pace set, units go to dst no faster
+// than pace allows; otherwise as soon as they arrive.
+func newFeed(dst *os.File, chunks, unit int, pace *pacer) *feed {
 	f := &feed{buf: make(chan []byte, chunks), unit: unit}
 	go func() {
 		defer dst.Close()
 		failed := false
+		var sent int64
 		for b := range f.buf {
+			if !failed && pace != nil {
+				failed = !pace.wait(sent / int64(unit))
+			}
 			if !failed {
 				_, err := dst.Write(b)
 				failed = err != nil
 			}
+			sent += int64(len(b))
 		}
 	}()
 	return f
+}
+
+// pacer holds a feed to real time, but for a lead: unit n goes out lead
+// before n/per seconds after the first did. Units that come late go out
+// at once, so a stream that falls behind (a slow start, a network
+// stall) catches up as fast as its decoder can.
+type pacer struct {
+	per   int64 // units a second
+	lead  time.Duration
+	quit  <-chan struct{}
+	start time.Time
+	timer *time.Timer
+}
+
+// wait waits until unit n is due, and reports false if quit came first.
+func (p *pacer) wait(n int64) bool {
+	now := time.Now()
+	if p.start.IsZero() {
+		p.start = now
+	}
+	due := p.start.Add(time.Duration(n/p.per)*time.Second + time.Duration(n%p.per)*time.Second/time.Duration(p.per) - p.lead)
+	d := due.Sub(now)
+	if d <= 0 {
+		return true
+	}
+	if p.timer == nil {
+		p.timer = time.NewTimer(d)
+	} else {
+		p.timer.Reset(d)
+	}
+	select {
+	case <-p.timer.C:
+		return true
+	case <-p.quit:
+		return false
+	}
 }
 
 // source returns a pipe for a decoder to write to, and done, which waits
@@ -494,6 +558,9 @@ func (f *feed) source(process func([]byte)) (w *os.File, done func() int64, err 
 			b := make([]byte, relayChunk)
 			k, err := io.ReadFull(r, b)
 			if k > 0 {
+				if n == 0 && f.first != nil {
+					f.first()
+				}
 				if process != nil {
 					process(b[:k-k%f.unit])
 				}
@@ -562,7 +629,7 @@ func encodeArgs() []string {
 	}
 }
 
-// decodeArgs plays one video in real time from skip frames in, as raw
+// decodeArgs plays one video from skip frames in, as raw
 // picture (fd 3) and sound (fd 4): letterboxed to 720p at 30 fps, and padded
 // or trimmed to exactly the frames the schedule gives it, so picture and
 // sound stay in step from one video to the next.
@@ -580,7 +647,7 @@ func (it item) inputs(skip int64) (input []string, audio string) {
 		if skip > 0 {
 			input = append(input, "-ss", strconv.FormatFloat(float64(skip)/loopFPS, 'f', 3, 64))
 		}
-		input = append(input, "-re", "-i", it.Path)
+		input = append(input, "-i", it.Path)
 	}
 	if !it.Audio {
 		return input, ""
@@ -639,18 +706,21 @@ func decode(ctx context.Context, ffmpeg, label string, it item, skip int64, out 
 		// Opened sources are logged by Path, an ID: their addresses are
 		// long and may carry credentials.
 		name = it.Path
-		began := time.Now()
 		o, err := it.Open(ctx, frameDuration(skip))
 		if err != nil {
 			if ctx.Err() != nil {
 				return true
 			}
 			log.Printf("%s: %s: %v", label, name, err)
-			if left := it.Frames - skip - framesIn(time.Since(began)); left > 0 {
+			phase.Step(ctx, "open failed")
+			// All of it: the time spent opening played nothing, so the
+			// stream's clock didn't move (see playCues).
+			if left := it.Frames - skip; left > 0 {
 				decode(ctx, ffmpeg, label, item{Slate: true, Title: standBy, Frames: left}, 0, out)
 			}
 			return false
 		}
+		phase.Step(ctx, "opened")
 		input, sound = o.Args, o.Audio
 		it.AudioLang, it.Captions = o.AudioLang, o.Captions
 	default:
@@ -726,7 +796,7 @@ func slateArgs(ffmpeg, caption string, frames int64) []string {
 		}
 		src += fmt.Sprintf(",drawtext=text='%s':fontcolor=0x8c939f:fontsize=%d:x=(w-tw)/2:y=(h-th)/2", text, size)
 	}
-	return decodeInputs([]string{"-re", "-f", "lavfi", "-i", src}, "", frames, "")
+	return decodeInputs([]string{"-f", "lavfi", "-i", src}, "", frames, "")
 }
 
 // slateText is a caption as drawtext's quoted text: letters, digits and

@@ -92,7 +92,7 @@ func TestFeedCountsWholeFrames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := newFeed(w, 4, 10)
+	f := newFeed(w, 4, 10, nil)
 	got := make(chan []byte)
 	go func() {
 		b, _ := readAll(r)

@@ -36,6 +36,7 @@ type YtDlp struct {
 	checked  time.Time // the last install or update check
 	updating bool
 	jobs     sync.Mutex // one catalog job at a time, across channels
+	ahead    sync.Mutex // one video found ahead of time at a time, likewise
 }
 
 const (

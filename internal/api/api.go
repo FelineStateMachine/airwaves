@@ -15,8 +15,10 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"airwaves/internal/dvr"
+	"airwaves/internal/phase"
 	"airwaves/internal/reception"
 	"airwaves/internal/service"
 	"airwaves/internal/stream"
@@ -92,6 +94,15 @@ type clientReq struct {
 	From   float64 `json:"from,omitempty"`
 }
 
+// metricsReq is a channel change as the app timed it.
+type metricsReq struct {
+	Number string `json:"number"`
+	// Kind is the channel's: "antenna", "folder", "jellyfin", "youtube"
+	// or "weather".
+	Kind         string  `json:"kind"`
+	FirstFrameMS float64 `json:"firstFrameMs"`
+}
+
 type progressReq struct {
 	ID       string  `json:"id"`
 	Position float64 `json:"position"`
@@ -154,6 +165,19 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 		reply(w)(struct{}{}, b.Stop(r.Context(), req.Client))
+	})
+	// The app reports how long its channel changes took, from the key
+	// press to the first frame playing, for the admin page.
+	mux.HandleFunc("POST /api/metrics", func(w http.ResponseWriter, r *http.Request) {
+		var req metricsReq
+		if !decode(w, r, &req) {
+			return
+		}
+		phase.Tunes.Add(req.Kind, phase.FirstFrame, time.Duration(req.FirstFrameMS*float64(time.Millisecond)))
+		reply(w)(struct{}{}, nil)
+	})
+	mux.HandleFunc("GET /api/metrics", func(w http.ResponseWriter, r *http.Request) {
+		reply(w)(phase.Tunes.Summaries(), nil)
 	})
 	mux.HandleFunc("GET /api/dvr", func(w http.ResponseWriter, r *http.Request) {
 		reply(w)(b.DVR(r.Context()))

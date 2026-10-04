@@ -447,7 +447,7 @@ func jellyfinItem(c *jellyfin.Client, v jellyfin.Video, mbps float64) (item, boo
 	return it, true
 }
 
-// jellyfinInput reads a video from the server in real time: the original
+// jellyfinInput reads a video from the server: the original
 // file, seeking here, or with a bitrate cap the server's transcode, which
 // it seeks in. The token goes in a header, never the URL, so it stays out
 // of logs.
@@ -462,9 +462,9 @@ func jellyfinInput(c *jellyfin.Client, v jellyfin.Video, mbps float64) func(time
 			if offset > 0 {
 				args = append(args, "-ss", strconv.FormatFloat(offset.Seconds(), 'f', 3, 64))
 			}
-			return append(args, "-re", "-i", c.FileURL(v))
+			return append(args, "-i", c.FileURL(v))
 		}
 		t := jellyfin.Transcode{Bitrate: int(mbps * 1e6), MaxWidth: loopWidth, MaxHeight: loopHeight}
-		return append(args, "-re", "-i", c.TranscodeURL(v, offset, t))
+		return append(args, "-i", c.TranscodeURL(v, offset, t))
 	}
 }

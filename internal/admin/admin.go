@@ -34,6 +34,7 @@ import (
 
 	"airwaves/internal/guide"
 	"airwaves/internal/jellyfin"
+	"airwaves/internal/phase"
 	"airwaves/internal/vchan"
 )
 
@@ -123,6 +124,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /admin/api/youtube/search", s.searchYouTube)
 	mux.HandleFunc("GET /admin/api/youtube/channel", s.lookupYouTube)
 	mux.HandleFunc("GET /admin/api/youtube/playlist", s.lookupPlaylist)
+	mux.HandleFunc("GET /admin/api/tunes", getTunes)
 	s.addBackupRoutes(mux)
 	// Changes through the API, the agent tools' included, are backed up.
 	api := s.watch(mux)
@@ -1090,6 +1092,13 @@ func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 		return false
 	}
 	return true
+}
+
+// getTunes reports how long channel changes took lately, by kind of
+// channel: the server's time to a ready stream, and the app's from the key
+// press to the picture, as apps report it (POST /api/metrics).
+func getTunes(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, map[string]any{"tunes": phase.Tunes.Summaries()})
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

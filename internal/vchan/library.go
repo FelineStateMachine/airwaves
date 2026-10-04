@@ -61,6 +61,14 @@ const youtubeConfig = "youtube.json"
 
 var numbered = regexp.MustCompile(`^(\d+[.-]\d+)\s+(.+)$`)
 
+// closeChannel stops what a channel that left the library does in the
+// background.
+func closeChannel(c Channel) {
+	if y, ok := c.(*YouTube); ok {
+		y.close()
+	}
+}
+
 // Channels returns the folder channels that have something to play, by
 // number.
 func (l *Library) Channels() []Channel {
@@ -151,6 +159,9 @@ func (l *Library) scan() []Entry {
 		}
 		c, ok := l.channels[fd.path]
 		if !ok || c.sig != sig {
+			if ok {
+				closeChannel(c.Channel)
+			}
 			c = libraryChannel{sig: sig}
 			if strings.Contains(sig, "\x00jellyfin\x00") {
 				j := &Jellyfin{Num: fd.number, Title: fd.name, Config: cfg, FFmpeg: l.FFmpeg, Loudness: l.Loudness}
@@ -174,8 +185,9 @@ func (l *Library) scan() []Entry {
 		keep[fd.path] = true
 		list = append(list, Entry{Folder: filepath.Base(fd.path), Channel: c.Channel})
 	}
-	for p := range l.channels {
+	for p, c := range l.channels {
 		if !keep[p] {
+			closeChannel(c.Channel)
 			delete(l.channels, p)
 		}
 	}

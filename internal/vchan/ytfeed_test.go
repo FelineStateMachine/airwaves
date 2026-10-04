@@ -22,13 +22,18 @@ func TestMain(m *testing.M) {
 	if os.Getenv("AIRWAVES_FAKE_YTDLP") != "" {
 		os.Exit(fakeYtDlp(os.Args[1:]))
 	}
+	// Channels find videos ahead only in the tests of that, so the rest
+	// see only the yt-dlp runs they cause.
+	ytWarm = false
 	os.Exit(m.Run())
 }
 
 // fakeYtDlp answers yt-dlp's command line, noting each run's arguments in
 // the file AIRWAVES_FAKE_YTDLP names. A channel tab's newest uploads are a
 // new 15-minute upload, "fresh000001", then the channel's v000 to v013;
-// any video's details give it 15 minutes, but a "Premiere…" is upcoming.
+// any video's details give it 15 minutes, and with a format asked for, an
+// address that expires in six hours and English captions, but a
+// "Premiere…" is upcoming.
 // A playlist is testdata/yt_playlist.json, with AIRWAVES_FAKE_PLAYLIST's
 // videos added to the end when set.
 func fakeYtDlp(args []string) int {
@@ -57,6 +62,11 @@ func fakeYtDlp(args []string) int {
 			"description": "Details of " + id, "live_status": "not_live", "media_type": "video"}
 		if strings.HasPrefix(id, "Premiere") {
 			out = map[string]any{"id": id, "title": "Looked up " + id, "live_status": "is_upcoming", "media_type": "video"}
+		} else if slices.Contains(args, "-f") {
+			// Where to stream it from, for six hours, and its captions.
+			out.(map[string]any)["url"] = fmt.Sprintf("https://example.com/%s.mp4?expire=%d", id, now+6*3600)
+			out.(map[string]any)["vcodec"], out.(map[string]any)["acodec"] = "avc1.4d401f", "mp4a.40.2"
+			out.(map[string]any)["automatic_captions"] = map[string]any{"en": []map[string]any{{"ext": "json3", "url": "https://example.com/captions/" + id}}}
 		}
 	case strings.Contains(u, "playlist?list="):
 		var p map[string]any
@@ -77,16 +87,23 @@ func fakeYtDlp(args []string) int {
 	return 0
 }
 
-// feedStub serves a channel's feed, or fails with HTTP 404 while down.
+// feedStub serves a channel's feed, or fails with HTTP 404 while down,
+// and captions, counting them.
 type feedStub struct {
-	mu   sync.Mutex
-	down bool
-	feed []byte
+	mu       sync.Mutex
+	down     bool
+	feed     []byte
+	captions int
 }
 
 func (f *feedStub) RoundTrip(r *http.Request) (*http.Response, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if strings.HasPrefix(r.URL.String(), "https://example.com/captions/") {
+		f.captions++
+		caps := `{"events":[{"tStartMs":1000,"dDurationMs":2000,"segs":[{"utf8":"Hello"}]}]}`
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(caps)), Request: r}, nil
+	}
 	if f.down || !strings.HasPrefix(r.URL.String(), "https://www.youtube.com/feeds/videos.xml?channel_id=UCa") {
 		return &http.Response{StatusCode: http.StatusNotFound, Body: io.NopCloser(strings.NewReader("")), Request: r}, nil
 	}

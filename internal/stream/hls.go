@@ -4,6 +4,7 @@
 package stream
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -12,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -22,6 +24,7 @@ import (
 	"sync"
 	"time"
 
+	"airwaves/internal/phase"
 	"airwaves/internal/tuner"
 )
 
@@ -40,6 +43,9 @@ type Playback struct {
 	// Offset is where a recording's playback starts, in seconds, so the
 	// player can show positions in the whole recording.
 	Offset float64 `json:"offset,omitempty"`
+	// Timing lists when each step of starting the stream happened, from
+	// the tune call (see phase).
+	Timing []phase.Mark `json:"timing,omitempty"`
 }
 
 // Server owns the ffmpeg sessions and serves their files under /live/.
@@ -112,16 +118,32 @@ func (s *Server) FFprobe() string { return filepath.Join(filepath.Dir(s.ffmpeg),
 // the same client overlap (fast channel surfing) the last one wins and
 // earlier ones fail; no ffmpeg process outlives its replacement.
 func (s *Server) Start(ctx context.Context, client string, in tuner.Input) (*Playback, error) {
+	// The steps are timed from the tune call when its context has a timer.
+	t := phase.FromContext(ctx)
+	if t == nil {
+		t = phase.New("stream", "")
+	}
 	// Stop first so a network tuner frees its tuner before the next tune.
-	s.Stop(client)
+	if s.stop(client) {
+		t.Mark("previous stopped")
+	}
 
 	id := newID()
 	dir := filepath.Join(s.root, id)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
-	runCtx, cancel := context.WithCancel(context.Background())
-	cmd := exec.CommandContext(runCtx, s.ffmpeg, ffmpegArgs(in, dir)...)
+	runCtx, cancel := context.WithCancel(phase.NewContext(context.Background(), t))
+	// ffmpeg reports its progress on fd 3, which tells when it has
+	// encoded its first frame.
+	progress, progressW, err := os.Pipe()
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	args := append([]string{"-progress", "pipe:3", "-stats_period", "0.1"}, ffmpegArgs(in, dir)...)
+	cmd := exec.CommandContext(runCtx, s.ffmpeg, args...)
+	cmd.ExtraFiles = []*os.File{progressW}
 	sess := &session{
 		id: id, client: client, dir: dir, started: time.Now(),
 		cancel: cancel, done: make(chan struct{}), stderr: &tail{max: 4096},
@@ -129,20 +151,27 @@ func (s *Server) Start(ctx context.Context, client string, in tuner.Input) (*Pla
 	cmd.Stderr = sess.stderr
 	var source io.WriteCloser
 	if in.Source != nil {
-		var err error
 		if source, err = cmd.StdinPipe(); err != nil {
+			progress.Close()
+			progressW.Close()
 			cancel()
 			return nil, err
 		}
 	}
-	if err := cmd.Start(); err != nil {
+	err = cmd.Start()
+	progressW.Close()
+	if err != nil {
+		progress.Close()
 		cancel()
 		return nil, fmt.Errorf("start ffmpeg: %w", err)
 	}
+	t.Mark("ffmpeg started")
+	go watchProgress(progress, func() { t.Mark("first frame") })
 	if source != nil {
 		go func() {
 			defer source.Close()
-			if err := in.Source(runCtx, source); err != nil && runCtx.Err() == nil {
+			w := &firstWrite{w: source, mark: func() { t.Mark("first data") }}
+			if err := in.Source(runCtx, w); err != nil && runCtx.Err() == nil {
 				fmt.Fprintf(sess.stderr, "%v\n", err)
 			}
 		}()
@@ -176,43 +205,64 @@ func (s *Server) Start(ctx context.Context, client string, in tuner.Input) (*Pla
 		x.stop()
 	}
 
-	if err := waitReady(ctx, sess, playlists(in)); err != nil {
+	if err := waitReady(ctx, sess, playlists(in), t); err != nil {
 		s.mu.Lock()
 		if s.sessions[client] == sess {
 			delete(s.sessions, client)
 		}
 		s.mu.Unlock()
 		sess.stop()
+		log.Printf("%s failed after %.1fs: %s", t.Label, t.Since().Seconds(), t)
 		return nil, err
 	}
 	if err := os.WriteFile(filepath.Join(dir, "master.m3u8"), []byte(masterPlaylist(in)), 0o644); err != nil {
 		s.Stop(client)
 		return nil, err
 	}
-	pb := &Playback{ID: id, Path: "/live/" + id + "/master.m3u8", Note: in.Note, Offset: in.Offset}
+	t.Mark("ready")
+	pb := &Playback{ID: id, Path: "/live/" + id + "/master.m3u8", Note: in.Note, Offset: in.Offset, Timing: t.Marks()}
 	if s.ln != nil {
 		pb.URL = "http://" + s.ln.Addr().String() + pb.Path
 	}
+	log.Printf("%s: %s", t.Label, t)
+	phase.Tunes.Add(t.Kind, phase.Ready, t.Since())
 	return pb, nil
 }
 
-// waitReady blocks until every media playlist lists two segments.
-func waitReady(ctx context.Context, sess *session, lists []string) error {
+// firstWrite marks the first write to w.
+type firstWrite struct {
+	w    io.Writer
+	once sync.Once
+	mark func()
+}
+
+func (f *firstWrite) Write(p []byte) (int, error) {
+	f.once.Do(f.mark)
+	return f.w.Write(p)
+}
+
+// waitReady blocks until every media playlist lists two segments, marking
+// on t when the first segment is done.
+func waitReady(ctx context.Context, sess *session, lists []string, t *phase.Timer) error {
 	ctx, cancel := context.WithTimeout(ctx, 25*time.Second)
 	defer cancel()
-	t := time.NewTicker(150 * time.Millisecond)
-	defer t.Stop()
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("stream did not start in time: %s", sess.stderr.String())
 		case <-sess.done:
 			return fmt.Errorf("ffmpeg exited: %s", sess.stderr.String())
-		case <-t.C:
+		case <-tick.C:
 			ready := 0
-			for _, name := range lists {
+			for i, name := range lists {
 				b, err := os.ReadFile(filepath.Join(sess.dir, name))
-				if err == nil && bytes.Count(b, []byte("#EXTINF")) >= 2 {
+				n := bytes.Count(b, []byte("#EXTINF"))
+				if err == nil && i == 0 && n >= 1 {
+					t.Mark("first segment")
+				}
+				if err == nil && n >= 2 {
 					ready++
 				}
 			}
@@ -221,6 +271,24 @@ func waitReady(ctx context.Context, sess *session, lists []string) error {
 			}
 		}
 	}
+}
+
+// watchProgress reads ffmpeg's progress reports until it exits, calling
+// encoded once the first frame is out.
+func watchProgress(r io.ReadCloser, encoded func()) {
+	defer r.Close()
+	sc := bufio.NewScanner(r)
+	done := false
+	for sc.Scan() {
+		if n, ok := strings.CutPrefix(sc.Text(), "frame="); ok && !done {
+			if frames, _ := strconv.Atoi(strings.TrimSpace(n)); frames > 0 {
+				encoded()
+				done = true
+			}
+		}
+	}
+	// ffmpeg must never wait on a report nobody reads.
+	_, _ = io.Copy(io.Discard, r)
 }
 
 // liveWindow is how far back a viewer can pause or rewind live TV.
@@ -259,6 +327,7 @@ func subtitled(in tuner.Input) bool { return in.Subtitles != nil && !in.VOD }
 // stream by libx264.
 func ffmpegArgs(in tuner.Input, dir string) []string {
 	args := []string{"-hide_banner", "-loglevel", "error", "-nostdin"}
+	args = append(args, probeArgs(in)...)
 	args = append(args, in.Args...)
 	args = append(args, "-map", in.Video)
 	for _, a := range in.Audio {
@@ -302,6 +371,21 @@ func ffmpegArgs(in tuner.Input, dir string) []string {
 		"-hls_segment_filename", filepath.Join(dir, "seg_%v_%05d.ts"),
 		filepath.Join(dir, "stream_%v.m3u8"),
 	)
+}
+
+// probeArgs keep ffmpeg's first look at a live input short. Before it
+// starts, ffmpeg reads an MPEG-TS input for as long as it may analyze it
+// (5 seconds by default) even once it knows every stream, and for a live
+// input that is as long a wait. Half a second finds a broadcast's audio
+// tracks and a custom channel's picture and sound. A broadcast's picture
+// size may only come with its first full frame, later, which ffmpeg takes
+// in stride. A recording is read as fast as it can be, so it keeps the
+// default.
+func probeArgs(in tuner.Input) []string {
+	if in.VOD {
+		return nil
+	}
+	return []string{"-probesize", "2000000", "-analyzeduration", "500000"}
 }
 
 // masterPlaylist describes the session's streams to the player: the video,
@@ -375,7 +459,10 @@ func TrackName(a tuner.AudioTrack, i int) (name, lang string) {
 }
 
 // Stop ends client's stream and removes its files.
-func (s *Server) Stop(client string) {
+func (s *Server) Stop(client string) { s.stop(client) }
+
+// stop ends client's stream, reporting whether it had one.
+func (s *Server) stop(client string) bool {
 	s.mu.Lock()
 	sess := s.sessions[client]
 	delete(s.sessions, client)
@@ -383,6 +470,7 @@ func (s *Server) Stop(client string) {
 	if sess != nil {
 		sess.stop()
 	}
+	return sess != nil
 }
 
 func (sess *session) stop() {

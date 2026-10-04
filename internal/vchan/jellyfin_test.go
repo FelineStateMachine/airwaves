@@ -300,7 +300,9 @@ func TestJellyfinInput(t *testing.T) {
 		args := decodeArgs(it, 90*loopFPS) // 90 s in
 		in := at(args, "-i")
 		h := at(args, "-headers")
-		if in < 1 || args[in-1] != "-re" || h < 0 || h > in {
+		// Not read in real time: the stream is paced on its way to the
+		// encoder.
+		if in < 1 || slices.Contains(args, "-re") || h < 0 || h > in {
 			t.Fatalf("maxBitrate %v: args %q", mbps, args)
 		}
 		if hdr := args[h+1]; !strings.HasPrefix(hdr, "Authorization: MediaBrowser ") || !strings.Contains(hdr, `Token="session-1"`) || !strings.HasSuffix(hdr, "\r\n") {

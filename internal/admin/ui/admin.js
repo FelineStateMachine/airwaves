@@ -3589,6 +3589,35 @@
 
   loadBackups();
 
+  // ---------- Channel changes ----------
+  // How long tuning in took lately, by kind of channel: the server's time to a ready stream,
+  // and the app's from the key press to the picture, as the apps report it.
+  const TUNE_KINDS = { antenna: 'Antenna', folder: 'Folders', jellyfin: 'Jellyfin', youtube: 'YouTube', weather: 'Weather' };
+  async function loadTunes() {
+    let rows = null;
+    try {
+      const r = await api('GET', '/tunes');
+      rows = Array.isArray(r && r.tunes) ? r.tunes : [];
+    } catch { /* kept as it was */ }
+    if (rows) renderTunes(rows);
+    setTimeout(loadTunes, document.hidden ? 300000 : 60000);
+  }
+  function renderTunes(rows) {
+    const box = $('#tune-side');
+    if (!box) return;
+    const by = {};
+    for (const r of rows) (by[r.kind] = by[r.kind] || {})[r.measure] = r;
+    const kinds = Object.keys(TUNE_KINDS).filter((k) => by[k]);
+    box.hidden = !kinds.length;
+    const cell = (r) => h('td', { title: r ? `${r.count} lately, the slowest ${r.max.toFixed(1)} s` : null }, r ? `${r.p50.toFixed(1)} / ${r.p90.toFixed(1)}` : '-');
+    box.replaceChildren(
+      h('div', { class: 'tune-head' }, h('b', null, 'Channel changes'), h('span', { text: 'median / 90%, s' })),
+      h('table', { class: 'tune-table' },
+        h('thead', null, h('tr', null, h('td', null), h('th', { scope: 'col' }, 'Server'), h('th', { scope: 'col' }, 'App'))),
+        h('tbody', null, kinds.map((k) => h('tr', null, h('th', { scope: 'row' }, TUNE_KINDS[k]), cell(by[k].ready), cell(by[k]['first frame']))))));
+  }
+  loadTunes();
+
   // ---------- Global keys ----------
   // The skip link would otherwise change the hash, which the router reads as a channel.
   $('.skip').addEventListener('click', (e) => {

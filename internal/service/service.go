@@ -31,6 +31,7 @@ import (
 	"airwaves/internal/geo"
 	"airwaves/internal/guide"
 	"airwaves/internal/lineup"
+	"airwaves/internal/phase"
 	"airwaves/internal/signal"
 	"airwaves/internal/store"
 	"airwaves/internal/stream"
@@ -830,6 +831,7 @@ func (s *Service) Tune(ctx context.Context, client, number string) (*stream.Play
 		return nil, s.streamErr
 	}
 	if v := s.customChannel(number); v != nil {
+		ctx = phase.NewContext(ctx, phase.New("tune "+number+" ("+vchan.KindOf(v)+")", vchan.KindOf(v)))
 		// The app gets subtitles as text, a WebVTT track it shows itself,
 		// turning it on for programs not in English, so none are burned in.
 		var script *cc.Script
@@ -844,6 +846,7 @@ func (s *Service) Tune(ctx context.Context, client, number string) (*stream.Play
 		return s.streams.Start(ctx, client, in)
 	}
 	if s.tvhTuner != nil {
+		ctx = phase.NewContext(ctx, phase.New("tune "+number+" (antenna)", "antenna"))
 		var pb *stream.Playback
 		err := s.tuneAntenna(ctx, client, number, func(ctx context.Context, in tuner.Input) error {
 			var err error
