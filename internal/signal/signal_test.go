@@ -23,13 +23,13 @@ func TestFromInput(t *testing.T) {
 		t.Fatal(err)
 	}
 	at := time.Date(2026, 10, 4, 18, 0, 0, 0, time.UTC)
-	r := FromInput(body.Entries[0], at, Active)
+	r := FromInput(body.Entries[0], nil, at, Active)
 	if !r.Lock || *r.StrengthPct != 85 || *r.QualityPct != 83 || r.StrengthDBm != nil || r.SNRdB != nil ||
 		r.BER != nil || r.UNC != nil || r.Source != Active || !r.At.Equal(at) {
 		t.Errorf("reading = %+v", r)
 	}
 	raw, _ := json.Marshal(r)
-	for _, want := range []string{`"lock":true`, `"strengthPct":85`, `"qualityPct":83`, `"snrDb":null`, `"strengthDbm":null`, `"ber":null`, `"unc":null`} {
+	for _, want := range []string{`"lock":true`, `"strengthPct":85`, `"qualityPct":83`, `"snrDb":null`, `"strengthDbm":null`, `"ber":null`, `"unc":null`, `"errorsPerSec":null`} {
 		if !strings.Contains(string(raw), want) {
 			t.Errorf("JSON lacks %s: %s", want, raw)
 		}
@@ -37,14 +37,94 @@ func TestFromInput(t *testing.T) {
 
 	// A tuner reporting decibels, counting bits and blocks, with no lock.
 	r = FromInput(tvh.InputStatus{Signal: -48250, SignalScale: tvh.ScaleDecibel, SNR: 21400, SNRScale: tvh.ScaleDecibel,
-		ECBit: 3, TCBit: 1000, ECBlock: 7, TCBlock: 500}, at, Sweep)
+		ECBit: 3, TCBit: 1000, ECBlock: 7, TCBlock: 500}, nil, at, Sweep)
 	if r.Lock || *r.StrengthDBm != -48.3 || *r.SNRdB != 21.4 || r.StrengthPct != nil || r.QualityPct != nil || *r.BER != 0.003 || *r.UNC != 7 {
 		t.Errorf("decibel reading = %+v", r)
 	}
 	// Nothing reported: nothing claimed.
-	r = FromInput(tvh.InputStatus{}, at, Sweep)
+	r = FromInput(tvh.InputStatus{}, nil, at, Sweep)
 	if r.StrengthPct != nil || r.StrengthDBm != nil || r.QualityPct != nil || r.SNRdB != nil || r.UNC != nil || r.Lock {
 		t.Errorf("empty reading = %+v", r)
+	}
+}
+
+// TestFromInputMeasuring reads two tuners measuring, as a real Tvheadend
+// reported them: RF 31 locked (its subscription "Running", though its
+// input sends little), RF 7 not (strength, but no quality, no data, and
+// its subscription "Testing"). Idle inputs say nothing.
+func TestFromInputMeasuring(t *testing.T) {
+	var ins struct {
+		Entries []tvh.InputStatus `json:"entries"`
+	}
+	var subs struct {
+		Entries []tvh.Subscription `json:"entries"`
+	}
+	if err := json.Unmarshal(tvhtest.Raw(t, "status_inputs_measuring.json"), &ins); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(tvhtest.Raw(t, "status_subscriptions_measuring.json"), &subs); err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 10, 4, 18, 0, 0, 0, time.UTC)
+	rf7, rf31 := ins.Entries[0], ins.Entries[1]
+	rf31.BPS = 0 // as it reads, now and then
+	r := FromInput(rf31, subs.Entries, at, Sweep)
+	if !r.Lock || *r.StrengthPct != 84 || *r.QualityPct != 67 {
+		t.Errorf("RF 31 = %+v", r)
+	}
+	r = FromInput(rf7, subs.Entries, at, Sweep)
+	if r.Lock || *r.StrengthPct != 81 || *r.QualityPct != 0 {
+		t.Errorf("RF 7 = %+v", r)
+	}
+	// Data seems to arrive on RF 7 for a moment (the last tuning's rate),
+	// but its subscription is still "Testing": no lock.
+	rf7.BPS = 210560
+	if r := FromInput(rf7, subs.Entries, at, Sweep); r.Lock {
+		t.Errorf("RF 7 with a stale rate = %+v", r)
+	}
+	// Without a subscription listed, the rate decides.
+	if r := FromInput(rf31, nil, at, Sweep); r.Lock {
+		t.Errorf("RF 31 without subscriptions or data = %+v", r)
+	}
+	rf31.BPS = 157920
+	if r := FromInput(rf31, nil, at, Sweep); !r.Lock {
+		t.Errorf("RF 31 without subscriptions, with data = %+v", r)
+	}
+	// A marginal multiplex losing its lock for a moment: its subscription
+	// still "Running", the HDHomeRun's quality none.
+	gone := rf31
+	gone.SNR = 0
+	if r := FromInput(gone, subs.Entries, at, Sweep); r.Lock || *r.QualityPct != 0 {
+		t.Errorf("RF 31 between locks = %+v", r)
+	}
+	// A marginal multiplex: transport and continuity errors climbing.
+	later := rf31
+	later.TE, later.CC = rf31.TE+60, rf31.CC+30
+	r = FromInput(later, subs.Entries, at, Sweep)
+	if r.SetErrors(rf31, later, 2); r.ErrorsPerSec == nil || *r.ErrorsPerSec != 45 {
+		t.Errorf("errors = %v", r.ErrorsPerSec)
+	}
+	if r := FromInput(rf31, subs.Entries, at, Sweep); r.ErrorsPerSec != nil {
+		t.Errorf("first reading errors = %v", *r.ErrorsPerSec)
+	}
+	r.SetErrors(rf7, rf31, 2) // another tuning: no rate
+	if r.ErrorsPerSec != nil {
+		t.Errorf("errors across tunings = %v", *r.ErrorsPerSec)
+	}
+
+	var idle struct {
+		Entries []tvh.InputStatus `json:"entries"`
+	}
+	if err := json.Unmarshal(tvhtest.Raw(t, "status_inputs_idle.json"), &idle); err != nil {
+		t.Fatal(err)
+	}
+	for _, in := range idle.Entries {
+		if _, _, ok := in.Mux(); ok || in.InUse() {
+			t.Errorf("idle input %+v", in)
+		}
+		if r := FromInput(in, nil, at, Active); r.Lock || r.StrengthPct != nil || r.QualityPct != nil {
+			t.Errorf("idle reading %+v", r)
+		}
 	}
 }
 

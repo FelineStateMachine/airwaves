@@ -5,12 +5,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"airwaves/internal/fcc"
@@ -30,10 +30,11 @@ type measureTiming struct {
 	// sample is how often the inputs are read while tuners are in use.
 	sample time.Duration
 	// appear is how long the sweep waits for its tuner to show the
-	// multiplex, settle how long it then waits before reading, and
-	// interval the time between its readings, readings of them.
-	appear, settle, interval time.Duration
-	readings                 int
+	// multiplex, acquire how long it then gives the tuner to lock, settle
+	// how long it waits after a lock before reading, and interval the time
+	// between its readings, readings of them (one without a lock).
+	appear, acquire, settle, interval time.Duration
+	readings                          int
 	// idleWait is how long the sweep waits for an idle tuner before it
 	// gives up.
 	idleWait time.Duration
@@ -44,9 +45,13 @@ type measureTiming struct {
 
 var defaultTiming = measureTiming{
 	sample: 10 * time.Second,
-	appear: 6 * time.Second, settle: 1500 * time.Millisecond, interval: time.Second, readings: 3,
+	// An HDHomeRun locks to a good signal in a second or two, to a weak
+	// one in three or four; its quality reads 0 for its first second on a
+	// multiplex. So about 5 s for an RF channel with a lock, 7 s for one
+	// without.
+	appear: 5 * time.Second, acquire: 6 * time.Second, settle: time.Second, interval: time.Second, readings: 3,
 	idleWait: 30 * time.Second,
-	poll:     time.Second, noLock: 10 * time.Second,
+	poll:     500 * time.Millisecond, noLock: 10 * time.Second,
 }
 
 // SweepStatus is how Measure now is going, or went.
@@ -55,7 +60,10 @@ type SweepStatus struct {
 	StartedAt  *time.Time `json:"startedAt"`
 	FinishedAt *time.Time `json:"finishedAt"`
 	// Total is how many RF channels it measures, Done how many it has.
+	// The first Found of them are those Tvheadend's scan found, measured
+	// first; the rest are those a licensed station nearby uses.
 	Total int `json:"total"`
+	Found int `json:"found"`
 	Done  int `json:"done"`
 	// RF is the RF channel being measured now.
 	RF int `json:"rf,omitempty"`
@@ -65,35 +73,98 @@ type SweepStatus struct {
 
 // ---------- inputs ----------
 
-// inputsNow returns the tuned inputs, as read in the last few seconds;
-// ok is false when Tvheadend can't be read.
-func (s *Service) inputsNow() ([]tvh.InputStatus, bool) {
+// tunerStatus is what Tvheadend says of its inputs at one moment: every
+// input, tuned or idle, and the subscriptions using them.
+type tunerStatus struct {
+	inputs []tvh.InputStatus
+	subs   []tvh.Subscription
+}
+
+// busy counts the inputs something subscribes to.
+func (t tunerStatus) busy() int {
+	seen := map[string]bool{}
+	for _, in := range t.inputs {
+		if in.InUse() {
+			seen[in.Input] = true
+		}
+	}
+	return len(seen)
+}
+
+// on finds an input in use on the antenna multiplex named mux.
+func (t tunerStatus) on(mux string) *tvh.InputStatus {
+	for i := range t.inputs {
+		if name, net, ok := t.inputs[i].Mux(); ok && name == mux && net == tvh.ATSCNetwork && t.inputs[i].InUse() {
+			return &t.inputs[i]
+		}
+	}
+	return nil
+}
+
+// input finds an input by name.
+func (t tunerStatus) input(name string) *tvh.InputStatus {
+	for i := range t.inputs {
+		if t.inputs[i].Input == name {
+			return &t.inputs[i]
+		}
+	}
+	return nil
+}
+
+// reading is what in measures now.
+func (t tunerStatus) reading(in tvh.InputStatus, at time.Time, source string) signal.Reading {
+	return signal.FromInput(in, t.subs, at, source)
+}
+
+// ownScansOnly reports whether everything using the inputs is Tvheadend's
+// own scanning (weights below a user's).
+func (t tunerStatus) ownScansOnly() bool {
+	own := false
+	for _, in := range t.inputs {
+		if in.InUse() {
+			if in.Weight >= sweepWeight {
+				return false
+			}
+			own = true
+		}
+	}
+	return own
+}
+
+// statusNow returns the inputs and subscriptions as read in the last few
+// seconds; ok is false when Tvheadend can't be read.
+func (s *Service) statusNow() (tunerStatus, bool) {
 	if s.opt.Tvheadend == nil {
-		return nil, false
+		return tunerStatus{}, false
 	}
 	s.mu.Lock()
-	ins, at := s.inputs, s.inputsAt
+	st, at := s.status, s.statusAt
 	s.mu.Unlock()
 	if !at.IsZero() && time.Since(at) < 5*time.Second {
-		return ins, true
+		return st, true
 	}
 	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
 	defer cancel()
-	ins, err := s.readInputs(ctx)
-	return ins, err == nil
+	st, err := s.readStatus(ctx)
+	return st, err == nil
 }
 
-// readInputs reads the tuned inputs from Tvheadend and keeps them for
-// inputsNow.
-func (s *Service) readInputs(ctx context.Context) ([]tvh.InputStatus, error) {
+// readStatus reads the inputs and subscriptions from Tvheadend, and keeps
+// them for statusNow.
+func (s *Service) readStatus(ctx context.Context) (tunerStatus, error) {
 	ins, err := s.opt.Tvheadend.Inputs(ctx)
 	if err != nil {
-		return nil, err
+		return tunerStatus{}, err
 	}
+	subs, err := s.opt.Tvheadend.Subscriptions(ctx)
+	if err != nil {
+		return tunerStatus{}, err
+	}
+	st := tunerStatus{inputs: ins, subs: subs}
 	s.mu.Lock()
-	s.inputs, s.inputsAt = ins, time.Now()
+	s.status, s.statusAt = st, time.Now()
 	s.mu.Unlock()
-	return ins, nil
+	return st, nil
 }
 
 // antennaMuxes maps the antenna network's multiplexes by name.
@@ -114,7 +185,7 @@ func (s *Service) antennaMuxes(ctx context.Context) (map[string]tvh.Mux, error) 
 // Tvheadend's guide scan. An input just tuned isn't read yet, as it may
 // not have locked; the sweep reads its own.
 func (s *Service) sampleInputs(ctx context.Context) {
-	ins, err := s.readInputs(ctx)
+	st, err := s.readStatus(ctx)
 	if err != nil {
 		return
 	}
@@ -123,25 +194,28 @@ func (s *Service) sampleInputs(ctx context.Context) {
 		return
 	}
 	s.mu.Lock()
-	prev := s.lastStreams
+	prev, prevAt := s.lastSample, s.lastSampleAt
 	sweeping := s.sweepMux
 	s.mu.Unlock()
 	now := time.Now()
-	seen := map[string]string{}
-	for _, in := range ins {
+	seen := map[string]tvh.InputStatus{}
+	for _, in := range st.inputs {
 		name, net, ok := in.Mux()
-		if !ok || net != tvh.ATSCNetwork || in.Subs == 0 {
+		if !ok || net != tvh.ATSCNetwork || !in.InUse() {
 			continue
 		}
-		seen[in.Input] = in.Stream
+		seen[in.Input] = in
 		m, ok := muxes[name]
-		if !ok || prev[in.Input] != in.Stream || name == sweeping {
+		was, stable := prev[in.Input]
+		if !ok || !stable || was.Stream != in.Stream || name == sweeping {
 			continue
 		}
-		s.signals.Record(m.FrequencyHz, signal.RF(m.FrequencyHz), signal.FromInput(in, now, signal.Active))
+		r := st.reading(in, now, signal.Active)
+		r.SetErrors(was, in, now.Sub(prevAt).Seconds())
+		s.signals.Record(m.FrequencyHz, signal.RF(m.FrequencyHz), r)
 	}
 	s.mu.Lock()
-	s.lastStreams = seen
+	s.lastSample, s.lastSampleAt = seen, now
 	s.mu.Unlock()
 }
 
@@ -237,39 +311,52 @@ func (s *Service) setSweep(f func(*SweepStatus)) {
 	s.mu.Unlock()
 }
 
-// sweepTargets lists the antenna multiplexes worth measuring, by RF:
-// those with services, and those a licensed station within the report's
-// radius broadcasts on. It also names a channel on each, for servers that
-// won't stream a whole multiplex.
-func (s *Service) sweepTargets(ctx context.Context) ([]tvh.Mux, map[string]string, error) {
+// sweepTargets lists the antenna multiplexes worth measuring: first those
+// Tvheadend's scan found (by RF), then those a licensed station within the
+// report's radius broadcasts on (nearest station first); found is how
+// many of them are of the first kind. It also names a channel on each
+// found one, for servers that won't stream a whole multiplex.
+func (s *Service) sweepTargets(ctx context.Context) (muxes []tvh.Mux, found int, channelOn map[string]string, err error) {
 	s.tvhTuner.Invalidate()
 	l, err := s.tvhTuner.Lineup(ctx)
 	if err != nil {
-		return nil, nil, err
+		return nil, 0, nil, err
 	}
 	s.mu.Lock()
 	rep := s.report
 	s.mu.Unlock()
-	licensed := map[int]bool{}
+	nearest := map[int]float64{} // km to the nearest licensed station, by RF
 	if rep != nil {
 		for _, st := range rep.Stations {
-			licensed[st.RFChannel] = true
+			if d, ok := nearest[st.RFChannel]; !ok || st.DistanceKm < d {
+				nearest[st.RFChannel] = st.DistanceKm
+			}
 		}
 	}
-	channelOn := map[string]string{}
+	channelOn = map[string]string{}
 	for _, c := range l.Channels {
 		if _, m, ok := l.Source(c); ok && c.Enabled && channelOn[m.UUID] == "" {
 			channelOn[m.UUID] = c.UUID
 		}
 	}
-	var out []tvh.Mux
+	var scanned, licensed []tvh.Mux
 	for _, m := range l.NetworkMuxes(tvh.ATSCNetwork) {
-		if bool(m.Enabled) && m.FrequencyHz > 0 && (m.NumSvc > 0 || licensed[signal.RF(m.FrequencyHz)]) {
-			out = append(out, m)
+		if !bool(m.Enabled) || m.FrequencyHz <= 0 {
+			continue
+		}
+		_, near := nearest[signal.RF(m.FrequencyHz)]
+		switch {
+		case m.NumSvc > 0 || m.ScanResult == tvh.ScanOK || m.ScanResult == tvh.ScanPartial:
+			scanned = append(scanned, m)
+		case near:
+			licensed = append(licensed, m)
 		}
 	}
-	slices.SortFunc(out, func(a, b tvh.Mux) int { return cmp.Compare(a.FrequencyHz, b.FrequencyHz) })
-	return out, channelOn, nil
+	slices.SortFunc(scanned, func(a, b tvh.Mux) int { return cmp.Compare(a.FrequencyHz, b.FrequencyHz) })
+	slices.SortFunc(licensed, func(a, b tvh.Mux) int {
+		return cmp.Or(cmp.Compare(nearest[signal.RF(a.FrequencyHz)], nearest[signal.RF(b.FrequencyHz)]), cmp.Compare(a.FrequencyHz, b.FrequencyHz))
+	})
+	return append(scanned, licensed...), len(scanned), channelOn, nil
 }
 
 func (s *Service) runSweep(ctx context.Context, tuners int) {
@@ -287,14 +374,15 @@ func (s *Service) runSweep(ctx context.Context, tuners int) {
 		s.sweepMux = ""
 		s.sweep.Running, s.sweep.FinishedAt, s.sweep.RF, s.sweep.Note = false, &now, 0, note
 		s.mu.Unlock()
+		log.Printf("measuring done: %+v", s.sweepStatus())
 	}()
-	muxes, channelOn, err := s.sweepTargets(ctx)
+	muxes, found, channelOn, err := s.sweepTargets(ctx)
 	if err != nil {
 		note = "Tvheadend is not reachable: " + err.Error()
 		return
 	}
-	s.setSweep(func(st *SweepStatus) { st.Total = len(muxes) })
-	log.Printf("measuring %d RF channels", len(muxes))
+	s.setSweep(func(st *SweepStatus) { st.Total, st.Found = len(muxes), found })
+	log.Printf("measuring %d RF channels, the %d found first", len(muxes), found)
 	for _, m := range muxes {
 		if ctx.Err() != nil {
 			note = "stopped: the server is shutting down"
@@ -302,16 +390,18 @@ func (s *Service) runSweep(ctx context.Context, tuners int) {
 		}
 		rf := signal.RF(m.FrequencyHz)
 		s.setSweep(func(st *SweepStatus) { st.RF = rf })
-		ins, err := s.readInputs(ctx)
-		if on := onMux(ins, m.Name); err == nil && on != nil {
-			// A tuner is on it already (a viewer, a recording): read that
-			// rather than take another.
-			s.signals.Record(m.FrequencyHz, rf, signal.FromInput(*on, time.Now(), signal.Sweep))
+		st, err := s.readStatus(ctx)
+		if on := st.on(m.Name); err == nil && on != nil {
+			// A tuner is on it already (a viewer, a recording): read that,
+			// once it has locked, rather than take another.
+			if r := st.reading(*on, time.Now(), signal.Sweep); r.Lock {
+				s.signals.Record(m.FrequencyHz, rf, r)
+			}
 			s.setSweep(func(st *SweepStatus) { st.Done++ })
 			continue
 		}
-		if ins, ok := s.waitIdle(ctx, tuners); !ok {
-			note = fmt.Sprintf("stopped at RF %d: %s", rf, noTunerFree(ins))
+		if st, ok := s.waitIdle(ctx, tuners); !ok {
+			note = fmt.Sprintf("stopped at RF %d: %s", rf, noTunerFree(st))
 			return
 		}
 		err = s.measureMux(ctx, m, channelOn[m.UUID])
@@ -321,7 +411,7 @@ func (s *Service) runSweep(ctx context.Context, tuners int) {
 			note = fmt.Sprintf("stopped at RF %d: %v", rf, err)
 			return
 		case errors.As(err, &se) && se.Status == http.StatusServiceUnavailable:
-			note = fmt.Sprintf("stopped at RF %d: %s", rf, noTunerFree(nil))
+			note = fmt.Sprintf("stopped at RF %d: %s", rf, noTunerFree(tunerStatus{}))
 			return
 		case errors.As(err, &se):
 			skipped++
@@ -330,30 +420,19 @@ func (s *Service) runSweep(ctx context.Context, tuners int) {
 		}
 		s.setSweep(func(st *SweepStatus) { st.Done++ })
 	}
-	log.Printf("measured %d RF channels", len(muxes))
 }
 
-// onMux finds an input tuned to the antenna multiplex named mux.
-func onMux(ins []tvh.InputStatus, mux string) *tvh.InputStatus {
-	for i := range ins {
-		if name, net, ok := ins[i].Mux(); ok && name == mux && net == tvh.ATSCNetwork {
-			return &ins[i]
-		}
-	}
-	return nil
-}
-
-// waitIdle waits up to timing.idleWait for a tuner nobody uses, and
-// returns the inputs in use then; ok is false when none came free.
-func (s *Service) waitIdle(ctx context.Context, tuners int) ([]tvh.InputStatus, bool) {
+// waitIdle waits up to timing.idleWait for a tuner nobody subscribes to,
+// and returns the status then; ok is false when none came free.
+func (s *Service) waitIdle(ctx context.Context, tuners int) (tunerStatus, bool) {
 	deadline := time.Now().Add(s.timing.idleWait)
 	for {
-		ins, err := s.readInputs(ctx)
-		if err == nil && busyTuners(ins) < tuners {
-			return ins, true
+		st, err := s.readStatus(ctx)
+		if err == nil && st.busy() < tuners {
+			return st, true
 		}
 		if time.Now().After(deadline) || sleep(ctx, s.timing.poll) != nil {
-			return ins, false
+			return st, false
 		}
 	}
 }
@@ -361,24 +440,11 @@ func (s *Service) waitIdle(ctx context.Context, tuners int) ([]tvh.InputStatus, 
 // noTunerFree says why the sweep found no tuner: in use by viewers or
 // recordings, which it leaves alone, or by Tvheadend's own guide or
 // channel scans (weights below a user's), which end on their own.
-func noTunerFree(ins []tvh.InputStatus) string {
-	own := len(ins) > 0
-	for _, in := range ins {
-		own = own && in.Weight < sweepWeight
-	}
-	if own {
+func noTunerFree(st tunerStatus) string {
+	if st.ownScansOnly() {
 		return "every tuner is busy with Tvheadend's own guide or channel scan; try again in a few minutes"
 	}
 	return "no tuner was free (they're left to viewers and recordings)"
-}
-
-// busyTuners counts the inputs in use.
-func busyTuners(ins []tvh.InputStatus) int {
-	seen := map[string]bool{}
-	for _, in := range ins {
-		seen[in.Input] = true
-	}
-	return len(seen)
 }
 
 func sleep(ctx context.Context, d time.Duration) error {
@@ -393,7 +459,8 @@ func sleep(ctx context.Context, d time.Duration) error {
 }
 
 // measureMux subscribes to a multiplex at the sweep's weight, waits for a
-// tuner to take it, and records timing.readings readings of it. A
+// tuner to take it, and records timing.readings readings of it: with a
+// lock, or without one, with whatever strength the tuner measures. A
 // subscription Tvheadend refuses (a server that won't stream whole
 // multiplexes) is retried on channelUUID, a channel of the multiplex,
 // when it has one.
@@ -405,7 +472,9 @@ func (s *Service) measureMux(ctx context.Context, m tvh.Mux, channelUUID string)
 	s.mu.Unlock()
 	rf := signal.RF(m.FrequencyHz)
 
-	var received atomic.Int64
+	// Tvheadend answers a multiplex it can't lock with no headers at all,
+	// so this waits on its own while the tuner is read; what comes is
+	// drained, so the stream keeps flowing.
 	opened := make(chan error, 1)
 	go func() {
 		body, err := s.opt.Tvheadend.OpenMux(ctx, m.UUID, sweepWeight)
@@ -418,14 +487,7 @@ func (s *Service) measureMux(ctx context.Context, m tvh.Mux, channelUUID string)
 			return
 		}
 		defer body.Close()
-		buf := make([]byte, 32*1024)
-		for {
-			n, err := body.Read(buf)
-			received.Add(int64(n))
-			if err != nil {
-				return
-			}
-		}
+		_, _ = io.Copy(io.Discard, body)
 	}()
 
 	// Wait for a tuner to show the multiplex.
@@ -439,8 +501,8 @@ func (s *Service) measureMux(ctx context.Context, m tvh.Mux, channelUUID string)
 			}
 		default:
 		}
-		if ins, err := s.readInputs(ctx); err == nil {
-			if on := onMux(ins, m.Name); on != nil {
+		if st, err := s.readStatus(ctx); err == nil {
+			if on := st.on(m.Name); on != nil {
 				input = on.Input
 				break
 			}
@@ -452,27 +514,64 @@ func (s *Service) measureMux(ctx context.Context, m tvh.Mux, channelUUID string)
 			return err
 		}
 	}
+	// Give the tuner time to lock: a weak signal can take seconds. What it
+	// measures meanwhile, past its first second on the multiplex (which
+	// reads what it measured before, or nothing), is the reading when it
+	// doesn't lock.
+	locked := false
+	var tried *signal.Reading
+	start := time.Now()
+	for !locked && time.Since(start) < s.timing.acquire {
+		if err := sleep(ctx, s.timing.poll); err != nil {
+			return err
+		}
+		st, err := s.readStatus(ctx)
+		if err != nil {
+			continue
+		}
+		on := st.on(m.Name)
+		if on == nil {
+			if in := st.input(input); in != nil && in.InUse() {
+				return errTakenOver
+			}
+			break // Tvheadend gave up on it
+		}
+		input = on.Input
+		r := st.reading(*on, time.Now(), signal.Sweep)
+		locked = r.Lock
+		if !locked && time.Since(start) >= s.timing.settle {
+			tried = &r
+		}
+	}
+	if !locked {
+		if tried == nil {
+			return fmt.Errorf("RF %d: the tuner left it before a reading", rf)
+		}
+		s.signals.Record(m.FrequencyHz, rf, *tried)
+		return nil
+	}
 	if err := sleep(ctx, s.timing.settle); err != nil {
 		return err
 	}
-	for i := range s.timing.readings {
+	readings := s.timing.readings
+	var prev *tvh.InputStatus
+	var prevAt time.Time
+	for i := range readings {
 		if i > 0 {
 			if err := sleep(ctx, s.timing.interval); err != nil {
 				return err
 			}
 		}
-		ins, err := s.readInputs(ctx)
+		st, err := s.readStatus(ctx)
 		if err != nil {
 			return err
 		}
-		on := onMux(ins, m.Name)
+		on := st.on(m.Name)
 		if on == nil {
-			for _, in := range ins {
-				if in.Input == input {
-					// Its tuner is on another multiplex now: someone
-					// else's subscription took it over.
-					return errTakenOver
-				}
+			if in := st.input(input); in != nil && in.InUse() {
+				// Its tuner is on another multiplex now: someone else's
+				// subscription took it over.
+				return errTakenOver
 			}
 			// Tvheadend let the multiplex go (or is between
 			// subscriptions): there's nothing to read, and nothing is
@@ -482,8 +581,12 @@ func (s *Service) measureMux(ctx context.Context, m tvh.Mux, channelUUID string)
 		// Tvheadend may move a subscription that can't lock to another
 		// tuner; follow it there.
 		input = on.Input
-		r := signal.FromInput(*on, time.Now(), signal.Sweep)
-		r.Lock = r.Lock || received.Load() > 0
+		now := time.Now()
+		r := st.reading(*on, now, signal.Sweep)
+		if prev != nil {
+			r.SetErrors(*prev, *on, now.Sub(prevAt).Seconds())
+		}
+		prev, prevAt = on, now
 		s.signals.Record(m.FrequencyHz, rf, r)
 	}
 	return nil
@@ -519,14 +622,14 @@ func (s *Service) watchTune(ctx context.Context, cancel context.CancelCauseFunc,
 			if sleep(ctx, s.timing.poll) != nil {
 				return
 			}
-			ins, err := s.readInputs(ctx)
+			st, err := s.readStatus(ctx)
 			if err != nil {
 				continue
 			}
-			on := onMux(ins, mux.Name)
+			on := st.on(mux.Name)
 			w.mu.Lock()
 			if on == nil {
-				w.busy = w.busy || tuners > 0 && busyTuners(ins) >= tuners
+				w.busy = w.busy || tuners > 0 && st.busy() >= tuners
 				w.mu.Unlock()
 				continue
 			}
@@ -534,7 +637,7 @@ func (s *Service) watchTune(ctx context.Context, cancel context.CancelCauseFunc,
 			if w.since.IsZero() {
 				w.since = now
 			}
-			r := signal.FromInput(*on, now, signal.Active)
+			r := st.reading(*on, now, signal.Active)
 			w.reading, w.last = &r, now
 			w.mu.Unlock()
 			switch {

@@ -34,10 +34,14 @@ const Network = "Airwaves antenna"
 
 // Signal is how a fake tuner receives a multiplex.
 type Signal struct {
+	// Lock is whether the tuner locks to it, which takes it a status read:
+	// its subscription is "Testing" at first, then "Running".
 	Lock bool
 	// Strength and Quality are percentages, reported on Tvheadend's
 	// relative scale as an HDHomeRun's are.
 	Strength, Quality float64
+	// Errors is how many transport errors each status read finds more.
+	Errors int
 }
 
 // Server is a fake Tvheadend.
@@ -48,9 +52,8 @@ type Server struct {
 	grids    map[string][]map[string]any // by grid: "channel", "mux", "service", "network"
 	tree     map[string][]map[string]any // hardware tree by parent UUID
 	classes  map[string]string
-	inputs   []map[string]any // inputs busy with something else
-	subs     []map[string]any
-	signals  map[string]Signal // by multiplex name
+	busy     map[string]*stream // inputs busy with something else, by name
+	signals  map[string]Signal  // by multiplex name
 	open     map[int]*stream
 	nextID   int
 	requests []string
@@ -70,6 +73,8 @@ type stream struct {
 	input  string
 	mux    string
 	weight int
+	title  string
+	polls  int // input status reads since it tuned
 	done   chan struct{}
 	once   sync.Once
 }
@@ -84,7 +89,7 @@ func New(t testing.TB) *Server {
 	t.Helper()
 	s := &Server{
 		grids: map[string][]map[string]any{}, tree: map[string][]map[string]any{}, classes: map[string]string{},
-		signals: map[string]Signal{}, open: map[int]*stream{}, Tuners: 2,
+		signals: map[string]Signal{}, open: map[int]*stream{}, busy: map[string]*stream{}, Tuners: 2,
 	}
 	for grid, file := range map[string]string{"channel": "channel_grid.json", "mux": "mux_grid.json", "service": "service_grid.json", "network": "network_grid.json"} {
 		var body struct {
@@ -167,19 +172,23 @@ func (s *Server) SetSignal(mux string, sig Signal) {
 }
 
 // Busy has an input tuned to a multiplex for something other than
-// Airwaves' measuring: a viewer, a recording or a guide scan, at weight.
+// Airwaves' measuring: a viewer or a recording, or with a weight below 10
+// Tvheadend's guide scan.
 func (s *Server) Busy(input, mux string, weight int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.inputs = slices.DeleteFunc(s.inputs, func(in map[string]any) bool { return in["input"] == input })
-	s.inputs = append(s.inputs, s.inputStatus(input, mux, weight))
+	title := "HTTP"
+	if weight < 10 {
+		title = "epggrab"
+	}
+	s.busy[input] = &stream{input: input, mux: mux, weight: weight, title: title, polls: 5}
 }
 
 // Free ends what Busy started on an input.
 func (s *Server) Free(input string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.inputs = slices.DeleteFunc(s.inputs, func(in map[string]any) bool { return in["input"] == input })
+	delete(s.busy, input)
 }
 
 // TakeOver has a viewer take every tuner a measuring stream holds, as a
@@ -253,19 +262,57 @@ func (s *Server) Opened() ([]string, int) {
 	return slices.Clone(s.streams), s.maxOpen
 }
 
-// inputStatus is an input's status on a multiplex, as /api/status/inputs
-// writes it. The caller holds mu.
-func (s *Server) inputStatus(input, mux string, weight int) map[string]any {
-	sig := s.signals[mux]
-	bps := 0
-	if sig.Lock {
-		bps = 231616
+// tuned lists what the inputs are tuned to, by input. The caller holds
+// mu.
+func (s *Server) tuned() map[string]*stream {
+	out := maps.Clone(s.busy)
+	for _, st := range s.open {
+		out[st.input] = st
+	}
+	return out
+}
+
+// inputStatus is an input's status, as /api/status/inputs writes it: idle,
+// with no stream; or on a multiplex, where a lock shows as data arriving
+// (though the rate reads 0 now and then, as a real one's does with little
+// to send) and the quality reads 0 for the first read after tuning. The
+// caller holds mu.
+func (s *Server) inputStatus(input string, st *stream) map[string]any {
+	uuid := "fe-" + strings.Fields(input)[3]
+	if st == nil {
+		return map[string]any{
+			"uuid": uuid, "input": input, "subs": 0, "weight": 0, "signal": 0, "signal_scale": 0, "snr": 0, "snr_scale": 0,
+			"ber": 0, "unc": 0, "bps": 0, "te": 43638, "cc": 39293, "ec_bit": 0, "tc_bit": 0, "ec_block": 0, "tc_block": 0,
+		}
+	}
+	st.polls++
+	sig := s.signals[st.mux]
+	bps, snr := 0, int(sig.Quality*655.35)
+	if sig.Lock && st.polls%3 != 0 {
+		bps = 157920
+	}
+	if st.polls == 1 {
+		snr = 0
 	}
 	return map[string]any{
-		"uuid": fmt.Sprintf("mmi-%s-%s", strings.Fields(input)[3], mux), "input": input, "stream": mux + " in " + Network,
-		"subs": 1, "weight": weight, "pids": []int{0},
-		"signal": int(sig.Strength * 655.35), "signal_scale": 1, "snr": int(sig.Quality * 655.35), "snr_scale": 1,
-		"ber": 0, "unc": 0, "bps": bps, "te": 0, "cc": 0, "ec_bit": 0, "tc_bit": 0, "ec_block": 0, "tc_block": 0,
+		"uuid": fmt.Sprintf("mmi-%s-%s", strings.Fields(input)[3], st.mux), "input": input, "stream": st.mux + " in " + Network,
+		"subs": 1, "weight": st.weight, "pids": []int{0},
+		"signal": int(sig.Strength * 655.35), "signal_scale": 1, "snr": snr, "snr_scale": 1,
+		"ber": 0, "unc": 0, "bps": bps, "te": st.polls * sig.Errors, "cc": 0, "ec_bit": 0, "tc_bit": 0, "ec_block": 0, "tc_block": 0,
+	}
+}
+
+// subscription is what /api/status/subscriptions writes for a stream:
+// "Running" once data arrives, "Testing" while none does. The caller holds
+// mu.
+func (s *Server) subscription(id int, st *stream) map[string]any {
+	state := "Testing"
+	if s.signals[st.mux].Lock && st.polls >= 2 {
+		state = "Running"
+	}
+	return map[string]any{
+		"id": id, "start": 1791134354, "errors": 0, "state": state, "title": st.title,
+		"service": st.input + "/" + Network + "/" + st.mux + "/Raw PID Subscription", "in": 0, "out": 0, "total_in": 0, "total_out": 0,
 	}
 }
 
@@ -291,15 +338,21 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		s.writeGrid(w, "network")
 	case path == "/api/status/inputs":
 		s.mu.Lock()
-		list := slices.Clone(s.inputs)
-		for _, st := range s.open {
-			list = append(list, s.inputStatus(st.input, st.mux, st.weight))
+		var list []map[string]any
+		tuned := s.tuned()
+		for _, name := range []string{Tuner0, Tuner1}[:min(s.Tuners, 2)] {
+			list = append(list, s.inputStatus(name, tuned[name]))
 		}
 		s.mu.Unlock()
 		writeJSON(w, map[string]any{"entries": list, "totalCount": len(list)})
 	case path == "/api/status/subscriptions":
 		s.mu.Lock()
-		list := slices.Clone(s.subs)
+		list := []map[string]any{}
+		for i, name := range []string{Tuner0, Tuner1} {
+			if st := s.tuned()[name]; st != nil {
+				list = append(list, s.subscription(500+i, st))
+			}
+		}
 		s.mu.Unlock()
 		writeJSON(w, map[string]any{"entries": list, "totalCount": len(list)})
 	case path == "/api/hardware/tree":
@@ -450,11 +503,8 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request, mux string) {
 	weight, _ := strconv.Atoi(r.URL.Query().Get("weight"))
 	s.mu.Lock()
 	used := map[string]bool{}
-	for _, in := range s.inputs {
-		used[in["input"].(string)] = true
-	}
-	for _, st := range s.open {
-		used[st.input] = true
+	for name := range s.tuned() {
+		used[name] = true
 	}
 	input := ""
 	for _, name := range []string{Tuner0, Tuner1}[:min(s.Tuners, 2)] {
@@ -468,7 +518,7 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request, mux string) {
 		http.Error(w, "No input source available", http.StatusServiceUnavailable)
 		return
 	}
-	st := &stream{input: input, mux: mux, weight: weight, done: make(chan struct{})}
+	st := &stream{input: input, mux: mux, weight: weight, title: "HTTP", done: make(chan struct{})}
 	s.nextID++
 	id := s.nextID
 	s.open[id] = st
@@ -488,6 +538,14 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request, mux string) {
 		s.mu.Unlock()
 	}()
 
+	// Without a lock Tvheadend sends nothing, headers included.
+	if !lock {
+		select {
+		case <-r.Context().Done():
+		case <-st.done:
+		}
+		return
+	}
 	w.Header().Set("Content-Type", "video/mp2t")
 	w.WriteHeader(http.StatusOK)
 	w.(http.Flusher).Flush()
@@ -502,12 +560,10 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request, mux string) {
 		case <-st.done:
 			return
 		case <-tick.C:
-			if lock {
-				if _, err := w.Write(packet); err != nil {
-					return
-				}
-				w.(http.Flusher).Flush()
+			if _, err := w.Write(packet); err != nil {
+				return
 			}
+			w.(http.Flusher).Flush()
 		}
 	}
 }

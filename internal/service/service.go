@@ -224,13 +224,14 @@ type Service struct {
 	fes      []tvh.Frontend
 	fesAt    time.Time
 	fesKnown bool
-	// inputs are the tuned inputs as of inputsAt; lastStreams what each
-	// was tuned to at the last sample.
-	inputs      []tvh.InputStatus
-	inputsAt    time.Time
-	lastStreams map[string]string
-	sweep       SweepStatus
-	sweepMux    string // the multiplex the sweep is on
+	// status is the inputs and subscriptions as of statusAt; lastSample
+	// the inputs at the last sample, and when.
+	status       tunerStatus
+	statusAt     time.Time
+	lastSample   map[string]tvh.InputStatus
+	lastSampleAt time.Time
+	sweep        SweepStatus
+	sweepMux     string // the multiplex the sweep is on
 }
 
 // New builds a Service. Streaming failures (no ffmpeg) are reported by

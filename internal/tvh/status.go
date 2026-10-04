@@ -10,13 +10,14 @@ import (
 	"strings"
 )
 
-// InputStatus is a tuner input that is tuned now, as /api/status/inputs
-// reports it. Idle inputs aren't listed there.
+// InputStatus is a tuner input as /api/status/inputs reports it. Tvheadend
+// 4.3 lists idle inputs too, with no Stream, no subscriptions and weight 0.
 type InputStatus struct {
 	UUID string `json:"uuid"`
 	// Input is the input's name, as Frontend.Name has it.
 	Input string `json:"input"`
-	// Stream is what the input is tuned to: "605MHz in Airwaves antenna".
+	// Stream is what the input is tuned to: "605MHz in Airwaves antenna";
+	// empty while idle.
 	Stream string `json:"stream"`
 	Subs   int    `json:"subs"`
 	Weight int    `json:"weight"`
@@ -29,7 +30,9 @@ type InputStatus struct {
 	BER int64 `json:"ber"`
 	UNC int64 `json:"unc"`
 	// BPS is the data rate the input receives, in bits per second: above
-	// zero only while the tuner holds a lock.
+	// zero only while the tuner holds a lock, though a locked input with
+	// little to send (a guide scan, a measurement) can read 0 for seconds
+	// at a time.
 	BPS int64 `json:"bps"`
 	// TE and CC count transport and continuity errors in what arrived.
 	TE int64 `json:"te"`
@@ -52,6 +55,11 @@ const (
 	ScaleRelative Scale = 1 // 0 to 65535 for 0 to 100%
 	ScaleDecibel  Scale = 2 // thousandths of a dB (dBm for strength)
 )
+
+// InUse reports whether something subscribes to the input. An idle input,
+// or one Tvheadend keeps tuned for a moment after its last subscription
+// ended, can be had by any subscription.
+func (in InputStatus) InUse() bool { return in.Subs > 0 }
 
 // Mux names the multiplex and network the input is tuned to, from Stream;
 // ok is false for an input that isn't on a multiplex.
@@ -77,13 +85,27 @@ func (c *Client) Inputs(ctx context.Context) ([]InputStatus, error) {
 // Subscription is something using a tuner (or another source) now: a
 // viewer, a recording, or Tvheadend's own guide and channel scans.
 type Subscription struct {
-	ID      int64  `json:"id"`
-	Start   int64  `json:"start"`
-	State   string `json:"state"`   // "Running", "Testing", "Bad"...
-	Title   string `json:"title"`   // "epggrab", "DVR: ...", the HTTP client
+	ID    int64 `json:"id"`
+	Start int64 `json:"start"`
+	// State is "Testing" while Tvheadend waits for data (a tuner that
+	// can't lock stays there), "Running" once data arrives, "Bad" when
+	// the service failed.
+	State   string `json:"state"`
+	Title   string `json:"title"`   // "epggrab", "DVR: ...", "HTTP"
 	Service string `json:"service"` // "<input>/<network>/<mux>/<service>"
 	Errors  int    `json:"errors"`
+	// TotalIn counts the bytes it has received.
+	TotalIn int64 `json:"total_in"`
 }
+
+// On reports whether the subscription is to the multiplex mux of network
+// on input.
+func (s Subscription) On(input, network, mux string) bool {
+	return strings.HasPrefix(s.Service, input+"/"+network+"/"+mux+"/")
+}
+
+// Running reports whether data has arrived for it: the tuner locked.
+func (s Subscription) Running() bool { return s.State == "Running" }
 
 // Subscriptions lists what is using Tvheadend's inputs now.
 func (c *Client) Subscriptions(ctx context.Context) ([]Subscription, error) {

@@ -37,28 +37,35 @@ func TestMatch(t *testing.T) {
 	if want := []string{"2.1", "6.1", "9.4", "9.7", "14.1", "20.1", "20.2", "31.1", "88.1"}; !slices.Equal(numbers, want) {
 		t.Fatalf("channels %v, want %v", numbers, want)
 	}
-	check := func(number, call, base, tx, via, guideID string, rf int) {
+	// The call sign shown is the station's, the same for its subchannels;
+	// the listings' own ("KUSADT4") is kept apart.
+	check := func(number, call, guideCall, tx, via, guideID string, rf int) {
 		t.Helper()
 		c := by[number]
-		if c.CallSign != call || c.BaseCall != base || c.Transmitter != tx || c.Via != via || c.GuideID != guideID || c.RF != rf {
+		if c.CallSign != call || c.BaseCall != call || c.GuideCallSign != guideCall || c.Transmitter != tx || c.Via != via || c.GuideID != guideID || c.RF != rf {
 			t.Errorf("%s = %+v", number, c)
 		}
 	}
 	// From the listings, on its own transmitter (not the nearer
 	// low-power one on the same RF channel).
-	check("20.1", "KTVDDT", "KTVD", "KTVD", "", "g20", 31)
+	check("20.1", "KTVD", "KTVDDT", "KTVD", "", "g20", 31)
 	// Not listed: the transmitter's own virtual channel.
-	check("20.2", "KTVD", "KTVD", "KTVD", "", "", 31)
+	check("20.2", "KTVD", "", "KTVD", "", "", 31)
 	// KUSA's subchannels ride KTVD's transmitter.
-	check("9.4", "KUSADT4", "KUSA", "KTVD", "KTVD", "g94", 31)
-	check("9.7", "KUSA", "KUSA", "KTVD", "KTVD", "", 31)
+	check("9.4", "KUSA", "KUSADT4", "KTVD", "KTVD", "g94", 31)
+	check("9.7", "KUSA", "", "KTVD", "KTVD", "", 31)
 	// KWGN's ATSC 1.0 signal is on KDVR's transmitter; it broadcasts in
 	// ATSC 3.0 itself.
-	check("2.1", "KWGNDT", "KWGN", "KDVR", "KDVR", "g2", 36)
-	check("6.1", "KRMADT", "KRMA", "KRMA-TV", "", "g6", 33)
-	check("14.1", "KCECDT", "KCEC", "KCEC", "", "g14", 32)
-	// Nothing on record: only what the broadcast says.
-	check("88.1", "Mystery", "MYSTERY", "", "", "", 0)
+	check("2.1", "KWGN", "KWGNDT", "KDVR", "KDVR", "g2", 36)
+	check("6.1", "KRMA", "KRMADT", "KRMA-TV", "", "g6", 33)
+	check("14.1", "KCEC", "KCECDT", "KCEC", "", "g14", 32)
+	// Nothing on record, and a name that isn't a call sign: the name.
+	if c := by["88.1"]; c.CallSign != "Mystery" || c.BaseCall != "" || c.Transmitter != "" || c.GuideID != "" {
+		t.Errorf("88.1 = %+v", c)
+	}
+	if c := by["20.2"]; c.Name != "H & I" || c.Network != "" {
+		t.Errorf("20.2 = %+v", c)
+	}
 	if c := by["2.1"]; c.NextGen == nil || c.NextGen.HostCall != "KWGN-TV" || c.NextGen.RF != "34" || c.Network != "CW" || c.Name != "KWGN-DT" {
 		t.Errorf("2.1 = %+v, %+v", c, c.NextGen)
 	}
@@ -71,7 +78,8 @@ func TestMatch(t *testing.T) {
 
 	// Without listings or records: every channel still, as broadcast.
 	bare := lineup.Match(&lineup.Report{}, nil, found)
-	if len(bare) != len(found) || bare[0].Number != "2.1" || bare[0].CallSign != "KWGN-DT" || bare[0].Transmitter != "" {
+	if len(bare) != len(found) || bare[0].Number != "2.1" || bare[0].CallSign != "KWGN" || bare[0].Transmitter != "" ||
+		bare[6].Number != "20.2" || bare[6].CallSign != "H & I" || bare[6].BaseCall != "" {
 		t.Errorf("bare = %+v", bare)
 	}
 }

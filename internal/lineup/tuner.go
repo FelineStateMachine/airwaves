@@ -3,6 +3,7 @@ package lineup
 import (
 	"cmp"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -28,16 +29,22 @@ type TunerChannel struct {
 	Number string `json:"number"`
 	Major  int    `json:"major"`
 	Minor  int    `json:"minor"`
-	// Name is the broadcast's own name for the channel.
+	// Name is the broadcast's own name for the channel (its PSIP short
+	// name): "KTVD-HD", "H & I", "StartTV".
 	Name string `json:"name"`
-	// GuideID, Network and Logo come from the listings, when they have
-	// the channel. CallSign is theirs too, or else the call sign of the
-	// station whose virtual channel it is, or else Name.
-	GuideID  string `json:"guideId,omitempty"`
+	// CallSign is the station's call sign to show, "KWGN", the same for
+	// all its subchannels: from the listings, else the station whose
+	// virtual channel it is, else the broadcast's name. BaseCall is the
+	// same call sign as a key ("" when the name isn't a call sign).
 	CallSign string `json:"callSign"`
 	BaseCall string `json:"baseCall"`
-	Network  string `json:"network"`
-	Logo     string `json:"logo,omitempty"`
+	// GuideID, GuideCallSign ("KWGNDT", "KCNCDT2"), Network ("CW",
+	// "Start TV") and Logo come from the listings, when they have the
+	// channel.
+	GuideID       string `json:"guideId,omitempty"`
+	GuideCallSign string `json:"guideCallSign,omitempty"`
+	Network       string `json:"network"`
+	Logo          string `json:"logo,omitempty"`
 	// RF is the RF channel the tuner receives it on; 0 when unknown.
 	RF int `json:"rf"`
 	// FacilityID and Transmitter are the licensed transmitter on RF that
@@ -63,10 +70,19 @@ type NextGen struct {
 }
 
 // nameBase is a broadcast name's call sign base, for names that are call
-// signs: "KTVD-HD" and "KRMADT1" give "KTVD" and "KRMA".
+// signs: "KTVD-HD" and "KRMADT1" give "KTVD" and "KRMA"; "" for names that
+// aren't ("H & I", "StartTV").
 func nameBase(name string) string {
-	return guide.BaseCall(fcc.BaseCall(strings.TrimSpace(name)))
+	b := guide.BaseCall(fcc.BaseCall(strings.TrimSpace(name)))
+	if !callSign.MatchString(b) {
+		return ""
+	}
+	return b
 }
+
+// callSign matches a US broadcast call sign's base: "KWGN", "WGN", and a
+// low-power station's "K14QW".
+var callSign = regexp.MustCompile(`^(?:[KW][A-Z]{2,3}|[KW]\d{2}[A-Z]{2})$`)
 
 // Match describes the tuner's channels from rep's transmitters and ATSC 3.0
 // hosts and from the listings g (nil without them), in channel order.
@@ -139,14 +155,15 @@ func Match(rep *Report, g *guide.Guide, found []Scanned) []TunerChannel {
 			ch.FacilityID, ch.Transmitter = t.FacilityID, t.CallSign
 		}
 		if gc, ok := pickListing(listed[f.Number], nameBase(f.Name), t); ok {
-			ch.GuideID, ch.CallSign, ch.BaseCall, ch.Network, ch.Logo = gc.ID, gc.CallSign, guide.BaseCall(gc.CallSign), gc.Network, gc.Logo
+			ch.GuideID, ch.GuideCallSign, ch.BaseCall, ch.Network, ch.Logo = gc.ID, gc.CallSign, guide.BaseCall(gc.CallSign), gc.Network, gc.Logo
 		} else if t != nil && t.VirtualChannel == major {
-			ch.CallSign, ch.BaseCall = t.CallSign, t.BaseCall
+			ch.BaseCall = t.BaseCall
 		} else if s := byVirtual[major]; s != nil {
-			ch.CallSign, ch.BaseCall = s.CallSign, s.BaseCall
+			ch.BaseCall = s.BaseCall
 		} else {
-			ch.CallSign, ch.BaseCall = ch.Name, nameBase(f.Name)
+			ch.BaseCall = nameBase(f.Name)
 		}
+		ch.CallSign = cmp.Or(ch.BaseCall, ch.Name)
 		if t != nil && t.BaseCall != ch.BaseCall && t.VirtualChannel != major {
 			ch.Via = t.CallSign
 		}

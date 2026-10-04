@@ -62,9 +62,12 @@ type TunerInfo struct {
 // AntennaChannel is a channel the tuner receives.
 type AntennaChannel struct {
 	lineup.TunerChannel
-	// Signal is the latest reading of the channel's multiplex; null when
-	// it has never been measured.
+	// Signal is the latest reading of the channel's multiplex, and Recent
+	// the latest stretch of readings (the last sweep, or the last while
+	// it was watched) with lows and means, steadier than one reading on a
+	// marginal signal; null when it has never been measured.
 	Signal *signal.Reading `json:"signal"`
+	Recent *signal.Period  `json:"recent"`
 	// Demo marks a generated test pattern (demo mode).
 	Demo bool `json:"demo,omitempty"`
 }
@@ -111,11 +114,13 @@ type MuxStation struct {
 	ATSC3 bool `json:"atsc3"`
 }
 
-// ChannelSignal is a channel's latest reading, for the app to poll.
+// ChannelSignal is a channel's latest reading and stretch of readings,
+// for the app to poll.
 type ChannelSignal struct {
 	Number string          `json:"number"`
 	RF     int             `json:"rf"`
 	Signal *signal.Reading `json:"signal"`
+	Recent *signal.Period  `json:"recent"`
 }
 
 // SignalReport is the measurements alone, light enough to poll while
@@ -196,8 +201,8 @@ func (s *Service) tunerInfo(ctx context.Context, l *tvh.Lineup) TunerInfo {
 	if len(fes) > 0 {
 		ti.Standards = []string{"ATSC 1.0"}
 	}
-	if busy, ok := s.inputsNow(); ok {
-		ti.InUse = busyTuners(busy)
+	if st, ok := s.statusNow(); ok {
+		ti.InUse = st.busy()
 	}
 	switch {
 	case l == nil:
@@ -244,7 +249,7 @@ func (s *Service) antenna(ctx context.Context, rep *lineup.Report, g *guide.Guid
 	for i, c := range chans {
 		ac := AntennaChannel{TunerChannel: c, Demo: tuned[i].Mux.Network == tvh.DemoNetwork}
 		if m, ok := s.signals.Get(tuned[i].Mux.FrequencyHz); ok {
-			ac.Signal = m.Latest
+			ac.Signal, ac.Recent = m.Latest, m.Recent()
 		}
 		a.Channels = append(a.Channels, ac)
 		onMux[tuned[i].Mux.UUID] = append(onMux[tuned[i].Mux.UUID], c.Number)
@@ -285,10 +290,10 @@ func (s *Service) matched(ctx context.Context, rep *lineup.Report, g *guide.Guid
 // muxSignals lists the antenna network's multiplexes (or, without
 // Tvheadend's lineup, those measured before) with what's known of each.
 func (s *Service) muxSignals(l *tvh.Lineup, rep *lineup.Report, chans map[string][]string) []MuxSignal {
-	busy, _ := s.inputsNow()
+	st, _ := s.statusNow()
 	tunedTo := map[string]bool{}
-	for _, in := range busy {
-		if mux, net, ok := in.Mux(); ok && net == tvh.ATSCNetwork {
+	for _, in := range st.inputs {
+		if mux, net, ok := in.Mux(); ok && net == tvh.ATSCNetwork && in.InUse() {
 			tunedTo[mux] = true
 		}
 	}
@@ -362,7 +367,8 @@ func hostsRF(s string, rf int) bool {
 
 // compatChannels is the tuner's lineup in the report's older Channel
 // shape, for app versions from before the measured lineup, which list a
-// channel only when its "tier" reads as receivable. Its tier is measured,
+// channel only when its "tier" reads as receivable, and key favorites by
+// the listings' call sign ("KWGNDT"), as that shape had it. Its tier is measured,
 // not estimated, and the same for every antenna: "good" when the latest
 // reading of its multiplex (or, before any, Tvheadend's scan) locked,
 // "weak" when it didn't.
@@ -383,7 +389,7 @@ func compatChannels(a *Antenna) []lineup.Channel {
 			t = reception.Good
 		}
 		lc := lineup.Channel{
-			Number: c.Number, Major: c.Major, Minor: c.Minor, GuideID: c.GuideID, CallSign: c.CallSign, BaseCall: c.BaseCall,
+			Number: c.Number, Major: c.Major, Minor: c.Minor, GuideID: c.GuideID, CallSign: cmp.Or(c.GuideCallSign, c.CallSign), BaseCall: c.BaseCall,
 			Network: c.Network, Logo: c.Logo, FacilityID: c.FacilityID, Via: c.Via,
 			Tier: map[string]reception.Tier{"indoor": t, "attic": t, "rooftop": t},
 		}
@@ -395,12 +401,12 @@ func compatChannels(a *Antenna) []lineup.Channel {
 	return out
 }
 
-// dvrChannels is the tuner's lineup for recording: number, call sign and
-// listings.
+// dvrChannels is the tuner's lineup for recording: number, call sign (the
+// listings', as recording rules have it) and listings.
 func dvrChannels(chans []lineup.TunerChannel) []lineup.Channel {
 	out := make([]lineup.Channel, 0, len(chans))
 	for _, c := range chans {
-		out = append(out, lineup.Channel{Number: c.Number, Major: c.Major, Minor: c.Minor, GuideID: c.GuideID, CallSign: c.CallSign, BaseCall: c.BaseCall})
+		out = append(out, lineup.Channel{Number: c.Number, Major: c.Major, Minor: c.Minor, GuideID: c.GuideID, CallSign: cmp.Or(c.GuideCallSign, c.CallSign), BaseCall: c.BaseCall})
 	}
 	return out
 }
@@ -445,7 +451,7 @@ func (s *Service) Signal(ctx context.Context) (*SignalReport, error) {
 	a := s.antenna(ctx, rep, g)
 	out := &SignalReport{Tuner: a.Tuner, Channels: make([]ChannelSignal, 0, len(a.Channels)), Muxes: a.Muxes, Sweep: a.Sweep}
 	for _, c := range a.Channels {
-		out.Channels = append(out.Channels, ChannelSignal{Number: c.Number, RF: c.RF, Signal: c.Signal})
+		out.Channels = append(out.Channels, ChannelSignal{Number: c.Number, RF: c.RF, Signal: c.Signal, Recent: c.Recent})
 	}
 	return out, nil
 }

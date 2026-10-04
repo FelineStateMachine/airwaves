@@ -27,7 +27,7 @@ import (
 // fastTiming measures in milliseconds rather than seconds.
 var fastTiming = measureTiming{
 	sample: 20 * time.Millisecond,
-	appear: 2 * time.Second, settle: 20 * time.Millisecond, interval: 20 * time.Millisecond, readings: 3,
+	appear: 2 * time.Second, acquire: 300 * time.Millisecond, settle: 20 * time.Millisecond, interval: 20 * time.Millisecond, readings: 3,
 	idleWait: 300 * time.Millisecond,
 	poll:     20 * time.Millisecond, noLock: 200 * time.Millisecond,
 }
@@ -93,7 +93,7 @@ func TestTunerLineup(t *testing.T) {
 			t.Errorf("%s listed without the tuner having it", n)
 		}
 	}
-	if c := by["20.1"]; c.CallSign != "KTVDDT" || c.Transmitter != "KTVD" || c.RF != 31 || c.Signal != nil || c.Name != "KTVD-HD" || c.Demo {
+	if c := by["20.1"]; c.CallSign != "KTVD" || c.GuideCallSign != "KTVDDT" || c.Transmitter != "KTVD" || c.RF != 31 || c.Signal != nil || c.Name != "KTVD-HD" || c.Demo {
 		t.Errorf("20.1 = %+v", c)
 	}
 	if c := by["2.1"]; c.Via != "KDVR" || c.NextGen == nil || c.NextGen.HostCall != "KWGN-TV" {
@@ -132,6 +132,11 @@ func TestTunerLineup(t *testing.T) {
 	var compat []string
 	for _, c := range snap.Report.Channels {
 		compat = append(compat, c.Number)
+		// The listings' call sign, which that shape had (and app
+		// versions key favorites by).
+		if c.Number == "20.1" && (c.CallSign != "KTVDDT" || c.BaseCall != "KTVD") {
+			t.Errorf("report 20.1 = %+v", c)
+		}
 		if c.Tier["indoor"] != reception.Good || c.Tier["rooftop"] != reception.Good {
 			t.Errorf("%s tier %v", c.Number, c.Tier)
 		}
@@ -165,7 +170,7 @@ func TestTunerLineup(t *testing.T) {
 	if info.Tuner.Tuners != 2 || info.Tuner.Model != "hdhomerun_dvr_atsc" || !slices.Equal(info.Tuner.Standards, []string{"ATSC 1.0"}) || info.Tuner.ATSC3 {
 		t.Errorf("info tuner = %+v", info.Tuner)
 	}
-	if got := s.AntennaChannels(ctx); len(got) != 38 || got["20.1"] != "KTVDDT" || got["9.7"] != "KUSA" || got["7.1"] != "" {
+	if got := s.AntennaChannels(ctx); len(got) != 38 || got["20.1"] != "KTVD" || got["9.7"] != "KUSA" || got["7.1"] != "" {
 		t.Errorf("antenna channels = %v", got)
 	}
 }
@@ -292,15 +297,18 @@ func TestDemo(t *testing.T) {
 func TestSampleInputs(t *testing.T) {
 	s, fake := newTunerService(t)
 	ctx := t.Context()
+	fake.SetSignal("575MHz", tvhtest.Signal{Lock: true, Strength: 85, Quality: 83, Errors: 4})
 	fake.Busy(tvhtest.Tuner0, "575MHz", 150)
 	s.sampleInputs(ctx)
 	if _, ok := s.signals.Get(575_000_000); ok {
 		t.Fatal("read a tuner just tuned")
 	}
+	time.Sleep(50 * time.Millisecond)
 	s.sampleInputs(ctx)
 	m, ok := s.signals.Get(575_000_000)
-	if !ok || m.RF != 31 || m.Latest == nil || !m.Latest.Lock || *m.Latest.StrengthPct != 85 || *m.Latest.QualityPct != 83 || m.Latest.Source != signal.Active {
-		t.Fatalf("RF 31 = %+v", m)
+	if !ok || m.RF != 31 || m.Latest == nil || !m.Latest.Lock || *m.Latest.StrengthPct != 85 || *m.Latest.QualityPct != 83 || m.Latest.Source != signal.Active ||
+		m.Latest.ErrorsPerSec == nil || *m.Latest.ErrorsPerSec <= 0 {
+		t.Fatalf("RF 31 = %+v, %+v", m, m.Latest)
 	}
 
 	sig, err := s.Signal(ctx)
@@ -311,8 +319,11 @@ func TestSampleInputs(t *testing.T) {
 		t.Errorf("in use: %d", sig.Tuner.InUse)
 	}
 	for _, c := range sig.Channels {
-		if (c.RF == 31) != (c.Signal != nil) {
-			t.Errorf("%s (RF %d) signal %+v", c.Number, c.RF, c.Signal)
+		if (c.RF == 31) != (c.Signal != nil) || (c.RF == 31) != (c.Recent != nil) {
+			t.Errorf("%s (RF %d) signal %+v, recent %+v", c.Number, c.RF, c.Signal, c.Recent)
+		}
+		if c.Recent != nil && (c.Recent.Samples != 1 || c.Recent.Source != signal.Active || c.Recent.QualityPct.Avg != 83) {
+			t.Errorf("%s recent %+v", c.Number, c.Recent)
 		}
 	}
 	for _, m := range sig.Muxes {
@@ -321,7 +332,7 @@ func TestSampleInputs(t *testing.T) {
 		}
 	}
 	raw, _ := json.Marshal(sig)
-	if !strings.Contains(string(raw), `"number":"4.1","rf":35,"signal":null`) {
+	if !strings.Contains(string(raw), `"number":"4.1","rf":35,"signal":null,"recent":null`) {
 		t.Errorf("unmeasured channel: %s", raw)
 	}
 
@@ -357,6 +368,10 @@ func waitSweep(t *testing.T, s *Service) SweepStatus {
 func TestMeasure(t *testing.T) {
 	s, fake := newTunerService(t)
 	ctx := t.Context()
+	// KMGH's VHF signal arrives strong, but the tuner can't lock to it;
+	// KRMA's locks, with errors.
+	fake.SetSignal("177MHz", tvhtest.Signal{Strength: 81})
+	fake.SetSignal("587MHz", tvhtest.Signal{Lock: true, Strength: 79, Quality: 51, Errors: 2})
 	st, err := s.Measure(ctx)
 	if err != nil || !st.Running || st.StartedAt == nil {
 		t.Fatalf("measure: %+v, %v", st, err)
@@ -367,12 +382,18 @@ func TestMeasure(t *testing.T) {
 	done := waitSweep(t, s)
 	// The 8 multiplexes with channels, and RF 7 (KMGH), 16 (KUSA) and 34
 	// (KWGN's ATSC 3.0), licensed but not found.
-	if done.Total != 11 || done.Done != 11 || done.Note != "" || done.FinishedAt == nil {
+	if done.Total != 11 || done.Found != 8 || done.Done != 11 || done.Note != "" || done.FinishedAt == nil {
 		t.Errorf("sweep = %+v", done)
 	}
+	// The found ones first, by RF; then the others.
 	opened, most := fake.Opened()
-	if len(opened) != 11 || most != 1 {
-		t.Errorf("opened %v, %d at once", opened, most)
+	var muxes []string
+	for _, o := range opened {
+		muxes = append(muxes, o[strings.LastIndex(o, " ")+1:])
+	}
+	want := []string{"479MHz", "557MHz", "563MHz", "575MHz", "581MHz", "587MHz", "599MHz", "605MHz", "177MHz", "485MHz", "593MHz"}
+	if !slices.Equal(muxes, want) || most != 1 {
+		t.Errorf("opened %v, %d at once", muxes, most)
 	}
 	for _, r := range fake.Requests() {
 		if strings.HasPrefix(r, "GET /stream/") && !strings.HasSuffix(r, "?pids=0&weight=10") {
@@ -381,12 +402,27 @@ func TestMeasure(t *testing.T) {
 	}
 	for rf, freq := range map[int]int64{31: 575_000_000, 36: 605_000_000, 7: 177_000_000, 34: 593_000_000} {
 		m, ok := s.signals.Get(freq)
-		if !ok || m.Latest == nil || m.Latest.Source != signal.Sweep || m.History().Samples != 3 || m.Latest.Lock != (rf == 31 || rf == 36) {
+		// Three readings with a lock; without one, the one after giving
+		// the tuner its time to lock.
+		locked := rf == 31 || rf == 36
+		if want := map[bool]int{true: 3, false: 1}[locked]; !ok || m.Latest == nil || m.Latest.Source != signal.Sweep || m.History().Samples != want || m.Latest.Lock != locked {
 			t.Errorf("RF %d = %+v", rf, m)
 		}
 	}
 	if _, ok := s.signals.Get(473_000_000); ok {
 		t.Error("measured RF 14, which nothing uses")
+	}
+	// No lock is a reading too, with the strength the tuner measured.
+	if m, _ := s.signals.Get(177_000_000); m.Latest.Lock || m.Latest.StrengthPct == nil || *m.Latest.StrengthPct != 81 || *m.Latest.QualityPct != 0 {
+		t.Errorf("RF 7 = %+v", m.Latest)
+	}
+	// A lock, read once the tuner has a quality to give.
+	if m, _ := s.signals.Get(575_000_000); !m.Latest.Lock || m.History().QualityPct == nil || m.History().QualityPct.Min != 83 ||
+		m.Latest.ErrorsPerSec == nil || *m.Latest.ErrorsPerSec != 0 {
+		t.Errorf("RF 31 = %+v, %+v", m.History(), m.Latest)
+	}
+	if m, _ := s.signals.Get(587_000_000); !m.Latest.Lock || m.Latest.ErrorsPerSec == nil || *m.Latest.ErrorsPerSec <= 0 {
+		t.Errorf("RF 33 = %+v", m.Latest)
 	}
 }
 
@@ -533,7 +569,7 @@ func TestHDHomeRunAntenna(t *testing.T) {
 		numbers = append(numbers, n)
 		names[n] = e["GuideName"].(string)
 	}
-	if !slices.Equal(numbers, tvhNumbers(fake)) || names["20.1"] != "KTVDDT" || names["20.2"] != "KTVD" || names["9.7"] != "KUSA" {
+	if !slices.Equal(numbers, tvhNumbers(fake)) || names["20.1"] != "KTVDDT" || names["20.2"] != "H & I" || names["9.7"] != "TBD" {
 		t.Errorf("lineup %v, names %v", numbers, names)
 	}
 	if s.TunerCount() != 2 {

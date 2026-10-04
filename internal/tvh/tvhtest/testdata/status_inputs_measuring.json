@@ -1,0 +1,63 @@
+{
+ "entries": [
+  {
+   "uuid": "0bdd522a23f39bd94dd62fcc63aabe95",
+   "input": "HDHomeRun ATSC-T Tuner #0 (169.254.1.2)",
+   "stream": "177MHz in Airwaves antenna",
+   "subs": 1,
+   "weight": 10,
+   "pids": [
+    0,
+    1,
+    8187
+   ],
+   "signal": 53083,
+   "signal_scale": 1,
+   "ber": 0,
+   "snr": 0,
+   "snr_scale": 1,
+   "unc": 0,
+   "bps": 0,
+   "te": 0,
+   "cc": 0,
+   "ec_bit": 0,
+   "tc_bit": 0,
+   "ec_block": 0,
+   "tc_block": 0
+  },
+  {
+   "uuid": "f9511eb993ea1c714dfa0c4c258e64bf",
+   "input": "HDHomeRun ATSC-T Tuner #1 (169.254.1.2)",
+   "stream": "575MHz in Airwaves antenna",
+   "subs": 1,
+   "weight": 10,
+   "pids": [
+    0,
+    1,
+    7424,
+    7425,
+    7426,
+    7427,
+    7680,
+    7681,
+    7682,
+    7683,
+    8187
+   ],
+   "signal": 55049,
+   "signal_scale": 1,
+   "ber": 0,
+   "snr": 43908,
+   "snr_scale": 1,
+   "unc": 0,
+   "bps": 200032,
+   "te": 2715,
+   "cc": 1220,
+   "ec_bit": 0,
+   "tc_bit": 0,
+   "ec_block": 0,
+   "tc_block": 0
+  }
+ ],
+ "totalCount": 2
+}

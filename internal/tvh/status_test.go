@@ -86,6 +86,35 @@ func TestLineup(t *testing.T) {
 	}
 }
 
+// TestInputsIdle reads the inputs as a real Tvheadend 4.3 lists them when
+// nothing uses them: listed, with no stream and no subscriptions.
+func TestInputsIdle(t *testing.T) {
+	var body struct {
+		Entries []tvh.InputStatus `json:"entries"`
+	}
+	if err := json.Unmarshal(tvhtest.Raw(t, "status_inputs_idle.json"), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Entries) != 2 {
+		t.Fatalf("entries = %d", len(body.Entries))
+	}
+	for _, in := range body.Entries {
+		if _, _, ok := in.Mux(); ok || in.InUse() || in.Weight != 0 || in.Input == "" {
+			t.Errorf("idle input %+v", in)
+		}
+	}
+	var subs struct {
+		Entries []tvh.Subscription `json:"entries"`
+	}
+	if err := json.Unmarshal(tvhtest.Raw(t, "status_subscriptions_measuring.json"), &subs); err != nil {
+		t.Fatal(err)
+	}
+	if len(subs.Entries) != 2 || !subs.Entries[0].Running() || subs.Entries[1].Running() || subs.Entries[1].State != "Testing" ||
+		!subs.Entries[1].On(tvhtest.Tuner0, tvh.ATSCNetwork, "177MHz") || subs.Entries[0].TotalIn == 0 {
+		t.Errorf("subscriptions %+v", subs.Entries)
+	}
+}
+
 // TestFrontendsFromTree reads the tuners, their names as the input status
 // gives them and the model, from the hardware tree as Tvheadend 4.3 sends
 // it, class and parameters included, so without a lookup per node.
@@ -131,8 +160,17 @@ func TestOpenMux(t *testing.T) {
 		t.Fatalf("read %x, %v", buf[:1], err)
 	}
 	ins, err := c.Inputs(ctx)
-	if err != nil || len(ins) != 1 || ins[0].Stream != "575MHz in Airwaves antenna" || ins[0].Weight != 10 || ins[0].BPS == 0 {
+	if err != nil || len(ins) != 2 || ins[0].Stream != "575MHz in Airwaves antenna" || ins[0].Weight != 10 || !ins[0].InUse() ||
+		ins[1].InUse() || ins[1].Stream != "" {
 		t.Fatalf("inputs %+v, %v", ins, err)
+	}
+	// Locked by the next look.
+	if _, err := c.Inputs(ctx); err != nil {
+		t.Fatal(err)
+	}
+	subs, err := c.Subscriptions(ctx)
+	if err != nil || len(subs) != 1 || !subs[0].Running() || !subs[0].On(tvhtest.Tuner0, tvh.ATSCNetwork, "575MHz") || subs[0].On(tvhtest.Tuner1, tvh.ATSCNetwork, "575MHz") {
+		t.Fatalf("subscriptions %+v, %v", subs, err)
 	}
 	body.Close()
 	deadline := time.Now().Add(2 * time.Second)

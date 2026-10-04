@@ -70,7 +70,9 @@ func (b hdhrBackend) Lineup(ctx context.Context) ([]hdhr.Entry, error) {
 		if custom[vchan.NumberKey(c.Number)] {
 			continue
 		}
-		out = append(out, hdhr.Entry{Number: c.Number, Name: cmp.Or(c.CallSign, c.Name), HD: true, Group: "Antenna", Logo: c.Logo})
+		// Players match guide data by the listings' call signs, one per
+		// subchannel ("KTVDDT2"); without listings, the broadcast's name.
+		out = append(out, hdhr.Entry{Number: c.Number, Name: cmp.Or(c.GuideCallSign, c.Name), HD: true, Group: "Antenna", Logo: c.Logo})
 	}
 	slices.SortStableFunc(out, func(a, b hdhr.Entry) int { return guide.CompareNumbers(a.Number, b.Number) })
 	return out, nil

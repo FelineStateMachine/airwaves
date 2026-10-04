@@ -52,11 +52,38 @@ type Reading struct {
 	// tuners that count them.
 	BER *float64 `json:"ber"`
 	UNC *int64   `json:"unc"`
+	// ErrorsPerSec is the rate of transport and continuity errors in what
+	// arrived since the reading before, on the same tuning: a picture
+	// breaking up. Null for a first reading.
+	ErrorsPerSec *float64 `json:"errorsPerSec"`
 }
 
-// FromInput reads an input's status as Tvheadend reports it.
-func FromInput(in tvh.InputStatus, at time.Time, source string) Reading {
+// FromInput reads an input's status as Tvheadend reports it, with the
+// subscriptions now. Whether the tuner holds a lock is first what its
+// subscriptions say: "Running" once data has arrived, "Testing" while none
+// has. The input's data rate says less: it reads 0 now and then on an
+// input with little to send, and can show the last tuning's for a moment;
+// it decides only for an input with no subscription listed. Then a tuner
+// that reports quality on the relative scale (an HDHomeRun) has none, 0,
+// exactly while its demodulator has no lock (its own status page reads
+// "Modulation Lock none, Signal Quality none" then), even while a
+// subscription that had data still reads "Running".
+func FromInput(in tvh.InputStatus, subs []tvh.Subscription, at time.Time, source string) Reading {
 	r := Reading{At: at.UTC().Truncate(time.Second), Source: source, Lock: in.BPS > 0}
+	if mux, net, ok := in.Mux(); ok {
+		listed, running := false, false
+		for _, sub := range subs {
+			if sub.On(in.Input, net, mux) {
+				listed, running = true, running || sub.Running()
+			}
+		}
+		if listed {
+			r.Lock = running
+		}
+	}
+	if in.SNRScale == tvh.ScaleRelative && in.SNR == 0 {
+		r.Lock = false
+	}
 	switch in.SignalScale {
 	case tvh.ScaleRelative:
 		r.StrengthPct = ptr(round1(float64(in.Signal) * 100 / 65535))
@@ -81,6 +108,17 @@ func FromInput(in tvh.InputStatus, at time.Time, source string) Reading {
 		r.UNC = ptr(in.UNC)
 	}
 	return r
+}
+
+// SetErrors sets the error rate from the input's status at an earlier
+// reading of the same tuning, secs before.
+func (r *Reading) SetErrors(prev, now tvh.InputStatus, secs float64) {
+	r.ErrorsPerSec = nil
+	was, is := prev.TE+prev.CC, now.TE+now.CC
+	if secs <= 0 || is < was || prev.Stream != now.Stream || prev.Input != now.Input {
+		return
+	}
+	r.ErrorsPerSec = ptr(round1(float64(is-was) / secs))
 }
 
 func ptr[T any](v T) *T { return &v }
@@ -252,6 +290,17 @@ func period(w Window) Period {
 type History struct {
 	Period
 	Windows []Period `json:"windows"`
+}
+
+// Recent summarizes the latest window of readings (the last sweep of the
+// multiplex, or the last stretch of watching it), steadier than any one
+// reading; nil when there are none.
+func (m *Mux) Recent() *Period {
+	if len(m.Windows) == 0 {
+		return nil
+	}
+	p := period(m.Windows[len(m.Windows)-1])
+	return &p
 }
 
 // History summarizes the multiplex's readings; nil when there are none.
