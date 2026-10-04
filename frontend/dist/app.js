@@ -568,7 +568,9 @@ async function toggleFullscreen() {
 }
 
 // ---------- tuning & playback ----------
-async function tune(ch, { quiet = false } = {}) {
+// at is when the viewer asked for the channel (a key press), for timing
+// the change.
+async function tune(ch, { quiet = false, at = performance.now() } = {}) {
   if (!ch) return;
   if (state.recording) saveRecordingProgress();
   if (state.current && state.current.key !== ch.key) state.previous = state.current;
@@ -589,11 +591,14 @@ async function tune(ch, { quiet = false } = {}) {
   // The server ends this screen's stream as it starts the next: the
   // picture plays out what it has, without asking for more of it.
   if (state.hls) state.hls.stopLoad();
+  let played = false;
   try {
     const pb = await api().Tune(ch.number);
     if (token !== state.tuneToken) return;
     state.note = pb.note || '';
     await play(pb, token);
+    played = token === state.tuneToken;
+    if (played) reportTune(ch, performance.now() - at);
   } catch (e) {
     if (token !== state.tuneToken) return;
     log('warn', `tune ${ch.number}: ${e}`);
@@ -601,9 +606,28 @@ async function tune(ch, { quiet = false } = {}) {
     // The server read the tuner while it tried.
     if (!ch.own) loadSignal();
   } finally {
-    if (token === state.tuneToken) setTimeout(() => stage.classList.remove('tuning'), 200);
+    // The static clears as the first frame shows.
+    if (played) onFirstFrame(() => { if (token === state.tuneToken) stage.classList.remove('tuning'); });
+    else if (token === state.tuneToken) setTimeout(() => stage.classList.remove('tuning'), 200);
   }
   renderBanner();
+}
+
+// onFirstFrame calls fn once the video's first frame is on screen, where
+// the browser can tell (requestVideoFrameCallback), else a moment after
+// playback starts; within a second either way.
+function onFirstFrame(fn) {
+  let done = false;
+  const once = () => { if (!done) { done = true; fn(); } };
+  if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(once);
+  setTimeout(once, video.requestVideoFrameCallback ? 1000 : 200);
+}
+
+// reportTune tells the server how long a channel change took, from the
+// key to the picture playing, for the times on its admin page.
+function reportTune(ch, ms) {
+  if (!api().ReportTune) return;
+  api().ReportTune({ number: ch.number, kind: ch.own ? ch.kind : 'antenna', firstFrameMs: Math.round(ms) }).catch(() => {});
 }
 
 function resetPlayer() {

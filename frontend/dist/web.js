@@ -246,6 +246,8 @@
     async StopTV() {
       try { await call('POST', '/api/stop', { client: load().clientId }); } catch { /* as the desktop app: ignored */ }
     },
+    // How long a channel change took, for the server's admin page.
+    ReportTune: (m) => call('POST', '/api/metrics', m).then(() => undefined),
     DVR: () => call('GET', '/api/dvr'),
     Record: (req) => call('POST', '/api/dvr/record', req),
     DeleteRule: (id) => call('DELETE', `/api/dvr/rules/${enc(id)}`).then(() => undefined),
