@@ -197,11 +197,14 @@ const (
 )
 
 // subtitle sets up a video's captions as it starts at span s, skip frames
-// in, and returns a subtitle file to burn into the picture, or "". The
-// file is the caller's to remove.
-func subtitle(ctx context.Context, ffmpeg string, it item, skip int64, s *span, out *output) string {
+// in. It returns a subtitle file to burn into the picture, or "" (the
+// file is the caller's to remove), and for closed captions, settled,
+// closed once they're in place or will come late: the video's picture
+// waits for it on its way to the encoder, so the video opens meanwhile.
+// settled is nil when there's nothing to wait for.
+func subtitle(ctx context.Context, ffmpeg string, it item, skip int64, s *span, out *output) (burn string, settled <-chan struct{}) {
 	if it.Captions == nil {
-		return ""
+		return "", nil
 	}
 	offset := frameDuration(skip)
 	if !out.app && cc.Foreign(it.AudioLang) && canBurn(ffmpeg) {
@@ -210,37 +213,41 @@ func subtitle(ctx context.Context, ffmpeg string, it item, skip int64, s *span, 
 		cancel()
 		if cues = cc.Shift(cues, -offset); err == nil && len(cues) > 0 {
 			if path, err := writeSubtitles(cc.Screen(cues)); err == nil {
-				return path
+				return path, nil
 			}
 		}
 	}
 	// Captions not fetched yet get a moment before the video starts, then
 	// come in late.
-	wait, cancel := context.WithTimeout(ctx, captionsWait)
-	_, _ = it.Captions.get(wait)
-	cancel()
-	phase.Step(ctx, "captions")
-	if cues, ok := it.Captions.ready(); ok {
-		out.captions.set(s, cc.Shift(cues, -offset))
-		return ""
-	}
+	done := make(chan struct{})
 	go func() {
-		cues, err := it.Captions.get(ctx)
-		if err != nil {
+		defer close(done)
+		wait, cancel := context.WithTimeout(ctx, captionsWait)
+		_, _ = it.Captions.get(wait)
+		cancel()
+		phase.Step(ctx, "captions")
+		if cues, ok := it.Captions.ready(); ok {
+			out.captions.set(s, cc.Shift(cues, -offset))
 			return
 		}
-		// They're late: start from a little after now, so every caption
-		// that shows has been loaded.
-		in := frameDuration(out.video.fed()-s.start) + lateCaptions
-		var keep []cc.Cue
-		for _, c := range cc.Shift(cues, -offset) {
-			if c.Start >= in {
-				keep = append(keep, c)
+		go func() {
+			cues, err := it.Captions.get(ctx)
+			if err != nil {
+				return
 			}
-		}
-		out.captions.set(s, keep)
+			// They're late: start from a little after now, so every caption
+			// that shows has been loaded.
+			in := frameDuration(out.video.fed()-s.start) + lateCaptions
+			var keep []cc.Cue
+			for _, c := range cc.Shift(cues, -offset) {
+				if c.Start >= in {
+					keep = append(keep, c)
+				}
+			}
+			out.captions.set(s, keep)
+		}()
 	}()
-	return ""
+	return "", done
 }
 
 // writeSubtitles writes cues to a temporary SRT file for ffmpeg's

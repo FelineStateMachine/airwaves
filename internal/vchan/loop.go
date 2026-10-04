@@ -545,7 +545,8 @@ func (p *pacer) wait(n int64) bool {
 // decoder cut off mid-frame has its frame made up, so the next decoder's
 // frames start whole. Close the pipe once the decoder has it. process, when
 // set, sees what passes, whole units at a time, and may change it in place.
-func (f *feed) source(process func([]byte)) (w *os.File, done func() int64, err error) {
+// hold, when set, holds what the decoder writes back until it's closed.
+func (f *feed) source(process func([]byte), hold <-chan struct{}) (w *os.File, done func() int64, err error) {
 	r, w, err := os.Pipe()
 	if err != nil {
 		return nil, nil, err
@@ -560,6 +561,9 @@ func (f *feed) source(process func([]byte)) (w *os.File, done func() int64, err 
 			if k > 0 {
 				if n == 0 && f.first != nil {
 					f.first()
+				}
+				if n == 0 && hold != nil {
+					<-hold
 				}
 				if process != nil {
 					process(b[:k-k%f.unit])
@@ -726,7 +730,12 @@ func decode(ctx context.Context, ffmpeg, label string, it item, skip int64, out 
 	default:
 		input, sound = it.inputs(skip)
 	}
-	video, videoDone, err := out.video.source(nil)
+	// The picture waits for the video's captions to be in place before it
+	// goes to the encoder (see subtitle), so the video opens meanwhile.
+	hold := make(chan struct{})
+	release := sync.OnceFunc(func() { close(hold) })
+	defer release()
+	video, videoDone, err := out.video.source(nil, hold)
 	if err != nil {
 		log.Printf("%s: %v", label, err)
 		return false
@@ -739,8 +748,9 @@ func decode(ctx context.Context, ffmpeg, label string, it item, skip int64, out 
 		lev = newLeveler(it.Level)
 		level = lev.process
 	}
-	audio, audioDone, err := out.audio.source(level)
+	audio, audioDone, err := out.audio.source(level, nil)
 	if err != nil {
+		release()
 		video.Close()
 		videoDone()
 		log.Printf("%s: %v", label, err)
@@ -749,11 +759,20 @@ func decode(ctx context.Context, ffmpeg, label string, it item, skip int64, out 
 	span := out.captions.begin(out.video.units)
 	var args []string
 	if it.Slate {
+		release()
 		args = slateArgs(ffmpeg, it.Title, it.Frames-skip)
 	} else {
-		subs := subtitle(ctx, ffmpeg, it, skip, span, out)
+		subs, settled := subtitle(ctx, ffmpeg, it, skip, span, out)
 		if subs != "" {
 			defer os.Remove(subs)
+		}
+		if settled == nil {
+			release()
+		} else {
+			go func() {
+				<-settled
+				release()
+			}()
 		}
 		args = decodeInputs(input, sound, it.Frames-skip, subs)
 	}

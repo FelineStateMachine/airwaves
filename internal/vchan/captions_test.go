@@ -21,6 +21,7 @@ import (
 	"airwaves/internal/cc"
 	"airwaves/internal/jellyfin"
 	"airwaves/internal/jellyfin/jellyfintest"
+	"airwaves/internal/phase"
 	"airwaves/internal/stream"
 	"airwaves/internal/tuner"
 )
@@ -87,6 +88,68 @@ func TestStreamCarriesCaptions(t *testing.T) {
 	}
 }
 
+// TestCaptionsLoadWhileTheVideoOpens: captions that take a while to
+// fetch don't hold the video's opening up, only its picture going on to
+// the encoder, so they're all there from the start.
+func TestCaptionsLoadWhileTheVideoOpens(t *testing.T) {
+	ffmpeg, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("no ffmpeg")
+	}
+	dir := t.TempDir()
+	video := filepath.Join(dir, "v.mp4")
+	cmd := exec.Command(ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=s=640x360:r=25:d=4",
+		"-f", "lavfi", "-i", "sine=f=440:d=4", "-c:v", "libx264", "-c:a", "aac", video)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("make video: %v: %s", err, out)
+	}
+	slow := newCaptions("slow", func(context.Context) ([]byte, error) {
+		time.Sleep(700 * time.Millisecond)
+		return []byte("1\n00:00:00,500 --> 00:00:02,000\nFrom the start\n"), nil
+	})
+	it := item{Path: video, Frames: 4 * loopFPS, Audio: true, Title: "Captioned", Captions: slow}
+	n := 0
+	cue := func(time.Time, bool) (item, int64, error) {
+		if n++; n == 1 {
+			return it, 0, nil
+		}
+		return item{Slate: true, Frames: 10 * loopFPS}, 0, nil
+	}
+	timer := phase.New("test", "folder")
+	ctx, cancel := context.WithTimeout(phase.NewContext(context.Background(), timer), 3*time.Second)
+	defer cancel()
+	var out bytes.Buffer
+	if err := playCues(ctx, &out, ffmpeg, "test", cue); err != nil {
+		t.Fatal(err)
+	}
+	var decoding, captioned time.Duration
+	for _, m := range timer.Marks() {
+		switch m.Name {
+		case "decoding":
+			decoding = m.At
+		case "captions":
+			captioned = m.At
+		}
+	}
+	if decoding == 0 || captioned < 600*time.Millisecond || decoding > captioned {
+		t.Errorf("the video waited for its captions to open: %s", timer)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "out.ts"), out.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	extract := exec.Command(ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin",
+		"-f", "lavfi", "-i", "movie=out.ts[out0+subcc]", "-map", "0:s", "-f", "srt", "-")
+	extract.Dir = dir
+	srt, err := extract.Output()
+	if err != nil {
+		t.Fatalf("extracting captions: %v", err)
+	}
+	got, err := cc.Parse(srt)
+	if err != nil || len(got) != 1 || got[0].Text != "From the start" || got[0].Start > time.Second {
+		t.Errorf("captions %q (%v), want the one from the start:\n%s", got, err, srt)
+	}
+}
+
 func TestFeedCountsWholeFrames(t *testing.T) {
 	r, w, err := os.Pipe()
 	if err != nil {
@@ -99,7 +162,7 @@ func TestFeedCountsWholeFrames(t *testing.T) {
 		got <- b
 	}()
 	for _, data := range []string{"0123456789abcdefghij", "klmno", ""} {
-		src, done, err := f.source(nil)
+		src, done, err := f.source(nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -187,7 +250,10 @@ func TestSubtitleChoosesBurnIn(t *testing.T) {
 		out := &output{captions: &timeline{}, app: c.app, video: &feed{unit: frameBytes}}
 		it := item{AudioLang: c.lang, Captions: srtCaptions(srt)}
 		s := out.captions.begin(0)
-		path := subtitle(context.Background(), ffmpeg, it, 2*loopFPS, s, out)
+		path, settled := subtitle(context.Background(), ffmpeg, it, 2*loopFPS, s, out)
+		if settled != nil {
+			<-settled
+		}
 		burnt := path != ""
 		if burnt {
 			b, _ := os.ReadFile(path)
