@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"airwaves/internal/dvr"
 	"airwaves/internal/guide"
@@ -48,6 +49,16 @@ func (f *fake) Signal(context.Context) (*service.SignalReport, error) {
 		Tuner:    service.TunerInfo{Ready: true, Tuners: 2, Standards: []string{"ATSC 1.0"}},
 		Channels: []service.ChannelSignal{{Number: "20.1", RF: 31, Signal: &signal.Reading{Lock: true, StrengthPct: &strength}}},
 	}, nil
+}
+
+func (f *fake) ScanChannels(context.Context) (service.TunerInfo, error) {
+	return service.TunerInfo{Ready: true, Tuners: 2, Scanning: true}, nil
+}
+
+func (f *fake) StopRecording(context.Context, string) error { return nil }
+
+func (f *fake) ExtendRecording(_ context.Context, _ string, minutes int) (time.Time, error) {
+	return time.Date(2026, 10, 4, 20, 3+minutes, 0, 0, time.UTC), nil
 }
 
 func (f *fake) Measure(context.Context) (*service.SweepStatus, error) {
@@ -150,6 +161,15 @@ func TestClientServerRoundTrip(t *testing.T) {
 	if sig, err := c.Signal(ctx); err != nil || !sig.Tuner.Ready || len(sig.Channels) != 1 || sig.Channels[0].RF != 31 ||
 		!sig.Channels[0].Signal.Lock || *sig.Channels[0].Signal.StrengthPct != 85 || sig.Channels[0].Signal.QualityPct != nil {
 		t.Errorf("signal: %+v, %v", sig, err)
+	}
+	if until, err := c.ExtendRecording(ctx, "rec1", 30); err != nil || !until.Equal(time.Date(2026, 10, 4, 20, 33, 0, 0, time.UTC)) {
+		t.Errorf("extend: %s, %v", until, err)
+	}
+	if err := c.StopRecording(ctx, "rec1"); err != nil {
+		t.Errorf("stop recording: %v", err)
+	}
+	if ti, err := c.ScanChannels(ctx); err != nil || !ti.Scanning {
+		t.Errorf("scan: %+v, %v", ti, err)
 	}
 	if st, err := c.Measure(ctx); err != nil || !st.Running || st.Total != 12 {
 		t.Errorf("measure: %+v, %v", st, err)

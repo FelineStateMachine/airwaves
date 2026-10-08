@@ -212,6 +212,7 @@
     // What the tuners measured, and Measure now.
     Signal: () => call('GET', '/api/signal', undefined, { ms: 15_000 }),
     Measure: () => call('POST', '/api/signal/measure', {}, { ms: 15_000 }),
+    ScanChannels: () => call('POST', '/api/tuner/scan', {}, { ms: 15_000 }),
     Weather: () => call('GET', '/api/weather'),
 
     async CopyText(text) {
@@ -252,6 +253,8 @@
     Record: (req) => call('POST', '/api/dvr/record', req),
     DeleteRule: (id) => call('DELETE', `/api/dvr/rules/${enc(id)}`).then(() => undefined),
     DeleteRecording: (id) => call('DELETE', `/api/dvr/recordings/${enc(id)}`).then(() => undefined),
+    StopRecording: (id) => call('POST', `/api/dvr/recordings/${enc(id)}/stop`, {}).then(() => undefined),
+    ExtendRecording: (id, minutes) => call('POST', `/api/dvr/recordings/${enc(id)}/extend`, { minutes }).then((r) => r.until),
     async PlayRecording(id, from) {
       if (!id) throw 'no recording selected';
       return playback(await call('POST', '/api/dvr/play', { client: load().clientId, id, from: from || 0 }));

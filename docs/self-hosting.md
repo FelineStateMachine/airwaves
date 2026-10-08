@@ -1,7 +1,6 @@
 # Running Airwaves without an antenna
 
-This sets up an Airwaves server for its own channels only, with no antenna, tuner or
-Tvheadend:
+This sets up an Airwaves server for its own channels only, with no antenna or tuner:
 
 - **Jellyfin channels**: series, movies and collections from a Jellyfin server, on a
   schedule, with a guide.

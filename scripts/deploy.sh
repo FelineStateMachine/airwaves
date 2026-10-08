@@ -13,7 +13,7 @@ trap 'rm -rf "$stage"' EXIT
 mkdir -p "$stage/airwavesd"
 GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -C "$root" -trimpath -ldflags="-s -w" -o "$stage/airwavesd/airwavesd" ./cmd/airwavesd
 cp "$root/deploy/Dockerfile" "$stage/airwavesd/"
-cp "$root/deploy/compose.yml" "$root/deploy/compose.dvb.yml" "$root/deploy/up.sh" "$stage/"
+cp "$root/deploy/compose.yml" "$root/deploy/up.sh" "$stage/"
 cp -R "$root/deploy/weatherstar" "$stage/"
 
 ssh "$host" 'mkdir -p ~/airwaves'

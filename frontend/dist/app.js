@@ -24,9 +24,10 @@ function log(level, msg) {
 // /api/signal): per RF channel, the latest reading and the latest stretch
 // of readings (recent: the last Measure now, or the last while something
 // watched it), with lows and means. The stretch is what's shown: a single
-// reading of a marginal signal jumps around. An HDHomeRun reports strength
-// and quality (its signal-to-noise quality) as percentages; other tuners
-// may report SNR in dB.
+// reading of a marginal signal jumps around. The HDHomeRun reports
+// strength, quality (its signal-to-noise quality) and symbol quality (the
+// share of data arriving whole or corrected) as percentages; the errors in
+// what arrived the server counts itself.
 const SIG_COLOR = { lock: 'var(--amber)', part: 'var(--amber-2)', off: 'var(--red)', none: 'var(--faint)' };
 
 // sigOf sums up a measurement ({ signal, recent }, of a channel or an RF
@@ -43,22 +44,18 @@ function sigOf(m) {
   const val = (key) => (r ? (r[key] ? r[key].avg : null) : sig[key]);
   const src = r || sig;
   const q = val('qualityPct');
-  const snr = val('snrDb');
   const strengthPct = val('strengthPct');
-  const strengthDbm = val('strengthDbm');
+  const symbolPct = val('symbolPct');
   let bars = 0;
-  if (state !== 'off') {
-    if (q != null) bars = q >= 70 ? 5 : q >= 55 ? 4 : q >= 40 ? 3 : q >= 25 ? 2 : q > 0 ? 1 : 0;
-    else if (snr != null) bars = snr >= 30 ? 5 : snr >= 25 ? 4 : snr >= 20 ? 3 : snr >= 17 ? 2 : snr > 0 ? 1 : 0;
-    else bars = 3;
-  }
-  const quality = q != null ? `${Math.round(q)}%` : snr != null ? `${snr.toFixed(1)} dB` : '';
-  const strength = strengthPct != null ? `${Math.round(strengthPct)}%` : strengthDbm != null ? `${strengthDbm.toFixed(1)} dBm` : '';
+  if (state !== 'off') bars = q == null ? 3 : q >= 70 ? 5 : q >= 55 ? 4 : q >= 40 ? 3 : q >= 25 ? 2 : q > 0 ? 1 : 0;
+  const quality = q != null ? `${Math.round(q)}%` : '';
+  const strength = strengthPct != null ? `${Math.round(strengthPct)}%` : '';
+  const symbol = symbolPct != null ? `${Math.round(symbolPct)}%` : '';
   const errors = sig && sig.errorsPerSec != null ? sig.errorsPerSec : null;
   const label = state === 'off' ? 'No lock'
     : state === 'part' ? `Locked ${Math.round(lockedPct)}% of the time`
       : quality ? `Quality ${quality}` : 'Locked';
-  return { state, bars, label, color: SIG_COLOR[state], quality, strength, errors, at: Date.parse(src.to || src.at), source: src.source, lockedPct };
+  return { state, bars, label, color: SIG_COLOR[state], quality, strength, symbol, errors, at: Date.parse(src.to || src.at), source: src.source, lockedPct };
 }
 
 // meter draws a measurement's bars.
@@ -94,6 +91,7 @@ function sigDetail(s) {
   const parts = [];
   if (s.state !== 'lock' && s.quality && s.state !== 'off') parts.push(`quality ${s.quality}`);
   if (s.strength) parts.push(`strength ${s.strength}`);
+  if (s.symbol && s.state !== 'off' && s.symbol !== '100%') parts.push(`symbol quality ${s.symbol}`);
   if (s.errors != null && s.state !== 'off') parts.push(s.errors >= 1 ? `${Math.round(s.errors)} errors a second` : 'no errors');
   parts.push(`${ago(s.at)}${s.source === 'active' ? ', while tuned' : ''}`);
   return parts.join(', ');
@@ -338,8 +336,8 @@ const nextAfter = (ch, t) => programsFor(ch).find((p) => p._s > t);
 const stationFor = (ch) => ch && (state.bySite.get(`${ch.facilityId}:${ch.rf}`) || state.byFacility.get(ch.facilityId));
 // sigFor is what was measured of a channel's RF channel.
 const sigFor = (ch) => (ch && !ch.own ? { signal: ch.signal, recent: ch.recent } : null);
-// nextGen reports whether the tuners take in ATSC 3.0: through Tvheadend
-// they never do, so NextGen viewing (its guide filter) stays out of sight.
+// nextGen reports whether the tuners take in ATSC 3.0; without, NextGen
+// viewing (its guide filter) stays out of sight.
 const nextGen = () => !!(state.info && state.info.tuner && state.info.tuner.atsc3);
 // displayCall is a channel's short label: a station's call sign, or an own
 // channel's call sign, "Airwaves" when it has none.
@@ -795,7 +793,7 @@ function renderBanner() {
   }
   lines.push(esc(sigDetail(sig)));
   f(b, 'tx').innerHTML = lines.join('<br>');
-  f(b, 'atsc3').textContent = ch.atsc3 ? `Also in ATSC 3.0 on ${ch.atsc3.hostCall} RF ${ch.atsc3.rf}${nextGen() ? '' : ', which needs a NextGen TV tuner'}` : '';
+  f(b, 'atsc3').textContent = ch.atsc3 ? `Also in ATSC 3.0 on ${ch.atsc3.hostCall} RF ${ch.atsc3.rf}` : '';
 }
 
 // What the server's own channels play, for the banner's details.
@@ -2088,7 +2086,7 @@ function renderGuide() {
       const w = Math.max(0, right - left - 3);
       const isSel = r === state.gRow && sel === p;
       const rec = state.dvrKeys.get(airingKey(ch, p));
-      const recCls = rec ? (rec.status === 'unavailable' ? 'rec rec-x' : rec.status === 'recording' ? 'rec rec-on' : 'rec') : '';
+      const recCls = rec ? (rec.status === 'unavailable' || rec.status === 'conflict' ? 'rec rec-x' : rec.status === 'recording' ? 'rec rec-on' : 'rec') : '';
       const c = ['g-cell', p._e <= now ? 'past' : '', p._s <= now && now < p._e ? 'now' : '', isSel ? 'sel' : '', recCls].join(' ');
       const tag = (p.flags || []).includes('Live') ? '<span class="tag">LIVE </span>' : (p.flags || []).includes('New') ? '<span class="tag">NEW </span>' : '';
       const sub = p.episodeTitle || `${clock(p._s)} to ${clock(p._e)}`;
@@ -2154,9 +2152,9 @@ function renderGuideActions(ch, p) {
     const it = state.dvrKeys.get(airingKey(ch, p));
     const rule = seriesRuleFor(ch, p);
     if (it) {
-      const label = it.status === 'recording' ? 'Recording now' : it.status === 'unavailable' ? 'Channel not tuned on server' : 'Recording scheduled';
-      parts.push(`<span class="chip ${it.status === 'unavailable' ? '' : 'live'}">${label}</span>`);
-      if (it.id || !rule) parts.push(act('once', 'Cancel'));
+      const label = { recording: 'Recording now', unavailable: 'Channel not available', conflict: 'Conflict: every tuner records then' }[it.status] || 'Recording scheduled';
+      parts.push(`<span class="chip ${it.status === 'unavailable' || it.status === 'conflict' ? 'warn' : 'live'}">${label}</span>`);
+      parts.push(act('once', it.status === 'recording' ? 'Stop recording' : 'Cancel'));
     } else {
       parts.push(act('once', '<i></i>Record', 'rec'));
     }
@@ -2196,9 +2194,11 @@ async function recordAiring(ch, p, kind, newOnly) {
   const it = state.dvrKeys.get(airingKey(ch, p));
   const rule = seriesRuleFor(ch, p);
   try {
-    if (kind === 'once' && it) {
-      if (it.id) await api().DeleteRecording(it.id);
-      else if (!rule && it.ruleId) await api().DeleteRule(it.ruleId);
+    if (kind === 'once' && it && it.status === 'recording') {
+      await api().StopRecording(it.id);
+      toast(`Stopped recording ${p.title}; what was recorded is in the library`);
+    } else if (kind === 'once' && it) {
+      await api().DeleteRecording(it.id);
       toast(`Won't record ${p.title}`);
     } else if (kind === 'series' && rule) {
       await api().DeleteRule(rule.id);
@@ -2207,9 +2207,11 @@ async function recordAiring(ch, p, kind, newOnly) {
       return toast(`${p.title} has no series information. Press R to record this airing.`);
     } else {
       await api().Record({ kind, channel: ch.number, callSign: ch.callSign, start: p.start, newOnly: !!newOnly });
+      const aired = Math.round((Date.now() - p._s) / MIN);
       toast(kind === 'series'
         ? `Recording ${newOnly ? 'new episodes' : 'every episode'} of ${p.title} on ${ch.number}`
-        : `Recording ${p.title} at ${clock(p._s)} on ${ch.number}`);
+        : aired >= 1 ? `Recording ${p.title} from now; the first ${aired} minute${aired > 1 ? 's' : ''} already aired`
+          : `Recording ${p.title} at ${clock(p._s)} on ${ch.number}`);
     }
   } catch (e) {
     toast(String(e && e.message ? e.message : e), 6000);
@@ -2258,6 +2260,7 @@ function renderGuideDetail(ch, p) {
 // section, or /api/signal.
 function applySignal(sig) {
   const was = state.antenna && state.antenna.sweep;
+  const wasScanning = !!(state.antenna && state.antenna.tuner.scanning);
   state.antenna = { tuner: sig.tuner || {}, muxes: sig.muxes || [], sweep: sig.sweep || {} };
   state.byRF = new Map(state.antenna.muxes.map((m) => [m.rf, m]));
   const by = new Map((sig.channels || []).map((c) => [c.number, c]));
@@ -2269,6 +2272,13 @@ function applySignal(sig) {
   const sw = state.antenna.sweep;
   if (was && was.running && !sw.running && state.view === 'antenna') {
     toast(sw.note ? `Measure now ${sw.note}` : `Measured ${sw.done} RF channels`, 4000);
+  }
+  // A channel scan just finished: its channels are the lineup now.
+  if (wasScanning && !state.antenna.tuner.scanning) {
+    scan(false).then(() => {
+      renderAll();
+      toast(`The scan found ${state.antennaChans.length} channels`, 4000);
+    }).catch((e) => log('warn', e));
   }
 }
 
@@ -2294,11 +2304,11 @@ async function loadSignal() {
 }
 
 // signalTick reads the signal again while it's on screen: every 2 s while
-// Measure now runs, every 10 s in Reception or with an antenna channel's
-// banner up, every 30 s in the guide.
+// Measure now or a channel scan runs, every 10 s in Reception or with an
+// antenna channel's banner up, every 30 s in the guide.
 function signalTick() {
   if (!state.info || state.info.antenna === false || document.hidden) return;
-  const running = !!(state.antenna && state.antenna.sweep.running);
+  const running = !!(state.antenna && (state.antenna.sweep.running || state.antenna.tuner.scanning));
   const banner = state.view === 'tv' && state.current && !state.current.own && $('#banner').classList.contains('show');
   const every = running ? 2000 : state.view === 'antenna' || banner ? 10_000 : state.view === 'guide' ? 30_000 : 0;
   if (every && Date.now() - signalAt >= every - 100) loadSignal();
@@ -2319,9 +2329,48 @@ async function measureNow() {
   return undefined;
 }
 
+// scanChannels has the tuner scan for channels again, on a second press
+// within a few seconds: it takes every tuner for a few minutes.
+let scanArmed = 0;
+async function scanChannels() {
+  const t = (state.antenna && state.antenna.tuner) || {};
+  if (t.scanning) return toast('The tuner is scanning for channels', 2000);
+  if (Date.now() - scanArmed > 4000) {
+    scanArmed = Date.now();
+    renderScan();
+    setTimeout(renderScan, 4100);
+    return undefined;
+  }
+  scanArmed = 0;
+  try {
+    const ti = await api().ScanChannels();
+    if (state.antenna) state.antenna.tuner = ti;
+    signalAt = 0;
+    renderTunerCard();
+    renderScan();
+  } catch (e) {
+    toast(String(e && e.message ? e.message : e), 6000);
+  }
+  return undefined;
+}
+
+// renderScan shows the channel scan's button: what it does, and that it
+// asks twice.
+function renderScan() {
+  const a = $('#antenna');
+  const t = (state.antenna && state.antenna.tuner) || {};
+  const btn = f(a, 'scan');
+  btn.classList.toggle('busy', !!t.scanning);
+  btn.textContent = t.scanning ? 'Scanning' : 'Scan for channels';
+  f(a, 'snote').textContent = t.scanning ? 'The tuner is looking for channels; watching and measuring wait until it is done'
+    : Date.now() - scanArmed < 4000 ? 'Press again to scan: it takes every tuner for a few minutes'
+      : 'After moving the antenna, or when channels go missing';
+}
+
 function wireAntenna() {
   const a = $('#antenna');
   f(a, 'measure').addEventListener('click', () => measureNow());
+  f(a, 'scan').addEventListener('click', () => scanChannels());
   $('.a-table tbody').addEventListener('click', (e) => {
     const tr = e.target.closest('tr[data-rf]');
     if (tr) pickRF(Number(tr.dataset.rf));
@@ -2378,6 +2427,7 @@ function antennaKey(e) {
       case 'ArrowLeft': openDock(); break;
       case 'Enter':
         if (el && el.dataset.act === 'measure') measureNow();
+        else if (el && el.dataset.act === 'scan') scanChannels();
         else if (i < 0) antZone('rail');
         break;
       default: return;
@@ -2420,16 +2470,12 @@ function antMuxes() {
   const rest = all.filter((m) => !muxFound(m) && m.stations.length);
   return [...found, ...rest];
 }
-const muxFound = (m) => m.channels.length > 0 || !!(m.scan && m.scan.lock);
+const muxFound = (m) => m.channels.length > 0;
 const antRows = () => antMuxes().map((m) => m.rf);
 const muxSig = (m) => sigOf(m && { signal: m.signal, recent: m.history && m.history.windows.length ? m.history.windows[m.history.windows.length - 1] : null });
 
-// tunerName names the tuner from its model as Tvheadend reports it.
-function tunerName(t) {
-  if (!t || !t.model) return 'Tuner';
-  if (/^hdhomerun/i.test(t.model)) return 'HDHomeRun';
-  return t.model;
-}
+// tunerName names the tuner: "HDHomeRun FLEX DUO".
+const tunerName = (t) => (t && t.name) || 'Tuner';
 
 function renderAntenna() {
   if (!state.report || !state.info || state.info.antenna === false) return;
@@ -2438,6 +2484,7 @@ function renderAntenna() {
   if (!muxes.some((m) => m.rf === state.aRF)) state.aRF = muxes.length ? muxes[0].rf : 0;
   renderTunerCard();
   renderMeasure();
+  renderScan();
   const found = muxes.filter(muxFound);
   const locked = found.filter((m) => muxSig(m).state === 'lock').length;
   const chans = state.lineup.filter((c) => !c.own).length;
@@ -2462,7 +2509,6 @@ function renderTunerCard() {
     ${use ? `<div class="at-line">${esc(use)}</div>` : ''}
     ${t.scanning ? '<div class="at-line at-warn">Scanning for channels</div>' : ''}
     ${t.reason ? `<div class="at-line at-warn">${esc(t.reason)}</div>` : ''}
-    ${n && !t.atsc3 ? '<div class="at-note">NextGen TV (ATSC 3.0) needs another tuner</div>' : ''}
     ${t.model ? `<div class="at-model">${esc(t.model)}</div>` : ''}`;
 }
 
@@ -2544,10 +2590,10 @@ function renderRFDetail() {
     return;
   }
   const s = muxSig(m);
-  const scan = m.scan ? `${m.scan.lock ? 'Found by the scan' : 'Not found by the scan'}, ${new Date(m.scan.at).toLocaleDateString([], { month: 'short', day: 'numeric' })}` : 'Not scanned yet';
+  const scan = muxFound(m) ? "In the tuner's lineup" : 'Not found by the scan';
   const wins = (m.history && m.history.windows) || [];
   const bars = wins.map((w) => {
-    const q = w.qualityPct ? w.qualityPct.avg : w.snrDb ? Math.min(100, w.snrDb.avg * 3) : 0;
+    const q = w.qualityPct ? w.qualityPct.avg : 0;
     const lo = w.qualityPct ? w.qualityPct.min : 0;
     const st = w.lockedPct >= 100 ? 'lock' : w.lockedPct > 0 ? 'part' : 'off';
     const tip = `${new Date(w.from).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}: ${w.samples} reading${w.samples > 1 ? 's' : ''}${w.source === 'active' ? ' while watched' : ''}, locked ${Math.round(w.lockedPct)}%${w.qualityPct ? `, quality ${w.qualityPct.min} to ${w.qualityPct.max}%` : ''}`;
@@ -2847,7 +2893,7 @@ function settingsRows() {
   if (info.antenna !== false && info.tuner) {
     const t = info.tuner;
     const what = t.tuners ? `${t.tuners} tuner${t.tuners > 1 ? 's' : ''}, ${(t.standards || []).join(', ')}` : 'No tuner yet';
-    add('About', { id: 'tuner', kind: 'info', label: 'Tuner', value: t.tuners ? tunerName(t) : what, sub: [t.tuners && what, t.model, t.tuners && !t.atsc3 && 'NextGen TV (ATSC 3.0) needs another tuner'].filter(Boolean).join(', ') });
+    add('About', { id: 'tuner', kind: 'info', label: 'Tuner', value: t.tuners ? tunerName(t) : what, sub: [t.tuners && what, t.model].filter(Boolean).join(', ') });
   }
   add('About', { id: 'controls', kind: 'open', label: SETTINGS_LISTS.controls, open: 'controls' });
   if (state.report && state.report.sources.length) add('About', { id: 'sources', kind: 'open', label: SETTINGS_LISTS.sources, value: `${state.report.sources.length}`, open: 'sources' });
@@ -3284,8 +3330,9 @@ function recLists() {
 // The view's parts take the focus in turn (data-zone): the list, the menu
 // of lists in the rail (Left from the list's left edge), and the selected
 // item's actions (OK): for a recording Play (or Resume), From the start,
-// Watched and Delete, above the grid; for one to come, Don't record; for a
-// series, how many to keep, new episodes only, and Stop.
+// Watched and Delete, above the grid; for one to come, Don't record; for
+// one under way, Watch from the start, 30 more minutes, Stop recording and
+// Delete; for a series, how many to keep, new episodes only, and Stop.
 const recUI = { zone: 'list', act: '' };
 
 function openRecordings() {
@@ -3316,7 +3363,29 @@ function recRefocus() {
 // armed is whether a delete-like action waits for its second press; ARMED
 // says what the second does.
 const armed = (act, it) => pendingDelete === `${act}:${it && it.id}`;
-const ARMED = { delete: 'delete', skip: 'skip it', stop: 'stop it' };
+const ARMED = { delete: 'delete', skip: 'skip it', stop: 'stop it', end: 'stop recording', discard: 'delete it' };
+
+// upcomingChips says how an airing to come, or a recording under way,
+// stands: recording until when, a conflict or a channel the tuner doesn't
+// have (and why), part of a series.
+function upcomingChips(it) {
+  const series = it.ruleId && (state.dvr.rules || []).some((r) => r.id === it.ruleId && r.kind === 'series');
+  const chips = [];
+  if (it.status === 'recording') chips.push(`<span class="chip live">Recording until ${clock(Date.parse(it.until))}</span>`);
+  if (it.status === 'conflict') chips.push('<span class="chip warn">Conflict</span>');
+  if (it.status === 'unavailable') chips.push('<span class="chip">Channel not available</span>');
+  if (series) chips.push('<span class="chip">Part of a series</span>');
+  const why = it.status === 'conflict' || it.status === 'unavailable' || (it.status === 'recording' && it.detail) ? `<div class="r-why">${esc(it.detail || '')}</div>` : '';
+  return chips.join('') + why;
+}
+
+// upcomingActs are the actions of the selected airing to come: skip it; or
+// of a recording under way: watch it from the start, record half an hour
+// more, stop it (keeping what's recorded), or delete it.
+function upcomingActs(it, act) {
+  if (it.status !== 'recording') return act('skip', "Don't record", it);
+  return act('play', 'Watch from the start', it) + act('extend', '30 more minutes', it) + act('end', 'Stop recording', it) + act('discard', 'Delete', it);
+}
 
 function renderRecordings() {
   const v = $('#recordings');
@@ -3338,6 +3407,7 @@ function renderRecordings() {
       <div class="rd-title">${esc(cur.title)}</div>
       <div class="rd-ep">${esc(cur.subtitle || '')}</div>
       <p class="rd-desc">${esc(cur.status === 'failed' ? cur.detail || 'This recording failed' : cur.description || '')}</p>
+      ${cur.status !== 'failed' && cur.detail ? `<p class="rd-note">${esc(cur.detail)}</p>` : ''}
       <div class="rd-actions">${cur.status === 'failed' ? '' : act('play', resumable(cur) ? `Resume at ${mmss(cur.position)}` : 'Play', cur)}${resumable(cur) ? act('restart', 'From the start', cur) : ''}${cur.status === 'failed' ? '' : act('watched', cur.watched ? 'Mark unwatched' : 'Mark watched', cur)}${act('delete', 'Delete', cur)}</div>
       <div class="rd-hint">${recHint(cur)}</div>
     </div>
@@ -3359,8 +3429,8 @@ function renderRecordings() {
     <li class="r-item ${it.status} ${i === sel.upcoming ? 'sel' : ''}" data-i="${i}">
       <div class="r-time">${dayLabel(it.start)}<b>${clock(it.start)}</b></div>
       <div class="r-what"><div class="r-name">${esc(it.title)}</div><div class="r-sub">${esc(it.channel)} ${esc(it.callSign ? it.callSign.replace(/(DT|LD|CD|LP|CA|D)\d*$/, '') : '')}${it.subtitle ? '  |  ' + esc(it.subtitle) : ''}</div>
-        ${it.status === 'recording' ? '<span class="chip live">Recording now</span>' : it.status === 'unavailable' ? '<span class="chip">Channel not available</span>' : ''}${!it.id ? '<span class="chip">Part of a series</span>' : ''}</div>
-      <div class="r-acts">${i === sel.upcoming && it.id ? act('skip', "Don't record", it) : ''}</div>
+        ${upcomingChips(it)}</div>
+      <div class="r-acts">${i === sel.upcoming ? upcomingActs(it, act) : ''}</div>
     </li>`).join('') : '<li class="r-empty">Nothing scheduled.</li>';
 
   f(v, 'rules').innerHTML = lists.series.length ? lists.series.map((r, i) => `
@@ -3415,7 +3485,11 @@ function recAct(act) {
   if (!it) return null;
   const fail = (err) => toast(String(err && err.message ? err.message : err), 6000);
   switch (act) {
-    case 'play': return playRecording(it, resumable(it) ? it.position : 0);
+    case 'play': return playRecording(it, it.status === 'recording' ? 0 : resumable(it) ? it.position : 0);
+    case 'extend': return api().ExtendRecording(it.id, 30).then((until) => {
+      toast(`Recording ${it.title} until ${clock(Date.parse(until))}`);
+      return loadDVR();
+    }).catch(fail);
     case 'restart': return playRecording(it, 0);
     case 'watched': return api().MarkWatched(it.id, !it.watched).then(loadDVR).catch(fail);
     case 'keep': case 'newonly': {
@@ -3423,21 +3497,21 @@ function recAct(act) {
       const u = act === 'keep' ? { keep: steps[(steps.indexOf(it.keep || 0) + 1) % steps.length], newOnly: !!it.newOnly } : { keep: it.keep || 0, newOnly: !it.newOnly };
       return api().UpdateRule(it.id, u).then(loadDVR).catch(fail);
     }
-    case 'delete': case 'skip': case 'stop': {
+    case 'delete': case 'skip': case 'stop': case 'end': case 'discard': {
       if (!it.id) return null;
       if (!armed(act, it)) {
         pendingDelete = `${act}:${it.id}`;
         clearTimeout(pendingTimer);
         pendingTimer = setTimeout(() => { pendingDelete = ''; if (state.view === 'recordings') renderRecordings(); }, 4000);
-        const what = act === 'delete' ? `delete ${it.title}` : act === 'stop' ? `stop recording ${it.title}` : `skip ${it.title}`;
+        const what = act === 'delete' || act === 'discard' ? `delete ${it.title}` : act === 'stop' ? `stop recording ${it.title}` : act === 'end' ? `stop recording ${it.title}, keeping what's recorded` : `skip ${it.title}`;
         if (recUI.zone !== 'actions') toast(`Press Delete again to ${what}`);
         return renderRecordings();
       }
       pendingDelete = '';
       clearTimeout(pendingTimer);
-      const done = act === 'stop' ? api().DeleteRule(it.id) : api().DeleteRecording(it.id);
+      const done = act === 'stop' ? api().DeleteRule(it.id) : act === 'end' ? api().StopRecording(it.id) : api().DeleteRecording(it.id);
       return done.then(() => {
-        toast(act === 'delete' ? 'Deleted' : act === 'stop' ? 'Series recording stopped' : 'Removed from the schedule');
+        toast(act === 'delete' || act === 'discard' ? 'Deleted' : act === 'stop' ? 'Series recording stopped' : act === 'end' ? `Stopped. ${it.title} is in the library` : 'Removed from the schedule');
         recZone('list');
         return loadDVR();
       }).catch(fail);

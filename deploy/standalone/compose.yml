@@ -1,7 +1,7 @@
 # Airwaves without an antenna: the custom channels only (Jellyfin, YouTube,
 # folders of videos and the weather), for the Airwaves app and, if you like,
-# Jellyfin, Channels DVR and other HDHomeRun players. No tuner, Tvheadend or
-# antenna needed. Settings are in .env (copy .env.example); the steps are in
+# Jellyfin, Channels DVR and other HDHomeRun players. No tuner or antenna
+# needed. Settings are in .env (copy .env.example); the steps are in
 # docs/self-hosting.md.
 #   docker compose up -d --build
 name: airwaves-standalone

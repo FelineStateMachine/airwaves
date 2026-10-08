@@ -6,7 +6,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
-	"net/http"
+	"log"
 	"net/url"
 	"slices"
 	"strings"
@@ -17,6 +17,7 @@ import (
 	"airwaves/internal/guide"
 	"airwaves/internal/hdhr"
 	"airwaves/internal/lineup"
+	"airwaves/internal/tuner"
 	"airwaves/internal/vchan"
 )
 
@@ -25,11 +26,12 @@ import (
 func (s *Service) HDHR() hdhr.Backend { return hdhrBackend{s} }
 
 // TunerCount is what the emulated HDHomeRun reports: the server's real
-// tuners (two until any are found). Custom channels need no tuner.
+// tuners (two until they're found). Custom channels need no tuner.
 func (s *Service) TunerCount() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return max(len(s.fes), 2)
+	if s.tuners == nil {
+		return 2
+	}
+	return cmp.Or(s.tuners.Count(), 2)
 }
 
 type hdhrBackend struct{ s *Service }
@@ -78,32 +80,33 @@ func (b hdhrBackend) Lineup(ctx context.Context) ([]hdhr.Entry, error) {
 	return out, nil
 }
 
+// Stream implements hdhr.Backend: a custom channel, or an antenna channel
+// passed through as broadcast, on a tuner shared like the app's.
 func (b hdhrBackend) Stream(ctx context.Context, number string, w io.Writer) error {
 	if v := b.s.customChannel(number); v != nil {
 		return v.Stream(ctx, w)
 	}
-	if b.s.tvhTuner == nil {
-		return fmt.Errorf("no tuner")
+	if b.s.tuners == nil {
+		return fmt.Errorf("no channel %s: %w", number, ErrNoAntenna)
 	}
-	uuid, err := b.s.tvhTuner.ChannelUUID(ctx, number)
+	freq, program, err := b.s.tuning(ctx, number)
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, b.s.opt.Tvheadend.StreamURL(uuid), nil)
+	sub, err := b.s.tuners.Open(ctx, tuner.Request{FrequencyHz: freq, Program: program, Priority: tuner.Watching, Who: number + " for an HDHomeRun app"})
 	if err != nil {
 		return err
 	}
-	// No client timeout: a stream runs until the viewer stops.
-	resp, err := http.DefaultClient.Do(req)
+	defer sub.Close()
+	wait, cancel := context.WithTimeout(ctx, b.s.timing.noLock)
+	_, err = sub.Wait(wait)
+	cancel()
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("tvheadend stream: HTTP %d", resp.StatusCode)
-	}
-	_, err = io.Copy(w, resp.Body)
-	return err
+	log.Printf("hdhr: streaming %s", number)
+	defer log.Printf("hdhr: stopped streaming %s", number)
+	return sub.Copy(ctx, w)
 }
 
 type xmltvDoc struct {

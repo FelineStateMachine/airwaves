@@ -1,5 +1,6 @@
-// Package tuner provides video sources for live channels: Tvheadend, which
-// drives the HDHomeRun, and the test patterns its demo channels play.
+// Package tuner shares the HDHomeRun's tuners among viewers, recordings
+// and measuring (see Manager), and says how ffmpeg reads what they
+// receive (Input).
 package tuner
 
 import (
@@ -7,23 +8,22 @@ import (
 	"fmt"
 	"hash/fnv"
 	"io"
-	"strings"
 
 	"airwaves/internal/cc"
+	"airwaves/internal/ts"
 )
 
-// Device describes a video source.
+// Device describes the tuner.
 type Device struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Kind    string `json:"kind"` // "tvheadend" or "none"
-	Model   string `json:"model,omitempty"`
-	BaseURL string `json:"baseUrl,omitempty"`
-	Tuners  int    `json:"tuners,omitempty"`
-	Detail  string `json:"detail,omitempty"`
+	ID     string `json:"id"`
+	Name   string `json:"name"` // "HDHomeRun FLEX DUO"
+	Kind   string `json:"kind"` // "hdhomerun" or "none"
+	Model  string `json:"model,omitempty"`
+	Tuners int    `json:"tuners,omitempty"`
+	Detail string `json:"detail,omitempty"`
 	// Standards lists the broadcast standards the tuners receive ("ATSC
 	// 1.0"); none without a tuner. ATSC3 is whether that includes ATSC 3.0
-	// (NextGen TV), which no tuner Tvheadend drives does.
+	// (NextGen TV).
 	Standards []string `json:"standards,omitempty"`
 	ATSC3     bool     `json:"atsc3"`
 }
@@ -65,10 +65,24 @@ type Input struct {
 	Source func(ctx context.Context, w io.Writer) error
 }
 
-// Tuner opens channels by virtual channel number ("7.1").
-type Tuner interface {
-	Device() Device
-	Input(ctx context.Context, number string) (Input, error)
+// AudioTracks turns a program's audio streams into tracks to offer, in
+// broadcast order (main track first). AC-4 (ATSC 3.0) can't be decoded by
+// ffmpeg and is left out, keeping the others' numbering, with a note when
+// it leaves nothing to hear.
+func AudioTracks(p ts.Program) ([]AudioTrack, string) {
+	var out []AudioTrack
+	skipped := false
+	for n, s := range p.Audio() {
+		if s.Codec() == "AC4" {
+			skipped = true
+			continue
+		}
+		out = append(out, AudioTrack{Map: fmt.Sprintf("0:a:%d", n), Lang: s.Lang, Described: s.Described})
+	}
+	if len(out) == 0 && skipped {
+		return nil, "ATSC 3.0 AC-4 audio cannot be decoded; video only"
+	}
+	return out, ""
 }
 
 var patterns = []string{
@@ -82,9 +96,9 @@ var patterns = []string{
 	"cellauto=s=640x360:r=30:rule=110:scroll=1,scale=1280:720:flags=neighbor",
 }
 
-// TestPattern is a channel's demo test pattern read straight from ffmpeg's
-// generators, with an English and a Spanish tone: for testing streaming
-// without Tvheadend. Nothing tunes it in place of a channel.
+// TestPattern is a test pattern read straight from ffmpeg's generators,
+// with an English and a Spanish tone, for testing streaming without a
+// tuner.
 func TestPattern(number string) Input {
 	video, eng, spa := demoSources(number)
 	return Input{
@@ -107,22 +121,4 @@ func demoSources(number string) (video, main, second string) {
 	tone := 220 + float64(n%12)*40
 	sine := "sine=frequency=%.0f:sample_rate=48000,volume=0.05"
 	return patterns[n%uint32(len(patterns))], fmt.Sprintf(sine, tone), fmt.Sprintf(sine, tone*1.5)
-}
-
-// DemoCommand is an ffmpeg command line that broadcasts a demo channel as
-// MPEG-TS on stdout with ATSC 1.0 codecs (MPEG-2 video, AC-3 audio in
-// English and Spanish), for Tvheadend's pipe:// IPTV input. It contains no
-// quoted arguments because Tvheadend splits commands on spaces.
-func DemoCommand(ffmpeg, number, name string) string {
-	video, eng, spa := demoSources(number)
-	return strings.Join([]string{
-		ffmpeg, "-loglevel", "error",
-		"-re", "-f", "lavfi", "-i", video,
-		"-re", "-f", "lavfi", "-i", eng,
-		"-re", "-f", "lavfi", "-i", spa,
-		"-map", "0:v", "-map", "1:a", "-map", "2:a",
-		"-c:v", "mpeg2video", "-b:v", "6M", "-g", "15", "-c:a", "ac3", "-b:a", "192k",
-		"-metadata:s:a:0", "language=eng", "-metadata:s:a:1", "language=spa",
-		"-f", "mpegts", "-metadata", "service_name=" + name, "pipe:1",
-	}, " ")
 }

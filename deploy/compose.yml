@@ -1,24 +1,7 @@
-# Airwaves server: Tvheadend owns the tuners and recordings, airwavesd
-# serves the guide, live TV and DVR to the desktop app.
+# Airwaves server: airwavesd drives the HDHomeRun, records, and serves the
+# guide, live TV and recordings to the TV app.
 name: airwaves
 services:
-  tvheadend:
-    image: lscr.io/linuxserver/tvheadend:latest
-    container_name: airwaves-tvheadend
-    restart: unless-stopped
-    # Host networking lets Tvheadend find HDHomeRun tuners by LAN broadcast.
-    network_mode: host
-    environment:
-      PUID: "1000"
-      PGID: "100"
-      TZ: ${TZ:?set TZ in .env, like America/Chicago}
-      # Access control is off, so listen on 127.0.0.1 only: reachable from
-      # this host (admin UI via `ssh -L 9981:127.0.0.1:9981`) and airwavesd.
-      RUN_OPTS: --noacl --bindaddr 127.0.0.1
-    volumes:
-      - ./tvheadend/config:/config
-      - ${RECORDINGS:-./recordings}:/recordings
-
   airwavesd:
     build: ./airwavesd
     image: airwavesd:local
@@ -27,12 +10,14 @@ services:
     # An init process reaps Chromium's helper processes after the weather
     # channel stops rendering.
     init: true
+    # Host networking finds the HDHomeRun by broadcast, on the LAN or on a
+    # spare Ethernet port with link-local addressing.
     network_mode: host
-    depends_on:
-      - tvheadend
     environment:
       TZ: ${TZ:?set TZ in .env, like America/Chicago}
-      AIRWAVES_TVHEADEND: http://127.0.0.1:9981
+      # The HDHomeRun's address or device ID, when discovery can't find it.
+      AIRWAVES_HDHOMERUN: ${AIRWAVES_HDHOMERUN:-}
+      AIRWAVES_RECORDINGS: /recordings
       # Listen on the tailnet address only (set in .env by deploy.sh).
       AIRWAVES_LISTEN: ${AIRWAVES_BIND:-127.0.0.1}:8089
       AIRWAVES_NAME: ${AIRWAVES_NAME:-airwaves}
@@ -57,6 +42,7 @@ services:
       AIRWAVES_LOUDNESS: ${AIRWAVES_LOUDNESS:-off}
     volumes:
       - ./data:/data
+      - ${RECORDINGS:-./recordings}:/recordings
       - ${MUSIC:-./music}:/music:ro
       # Writable: the admin page saves channel settings here, and YouTube
       # channels keep their schedules here.

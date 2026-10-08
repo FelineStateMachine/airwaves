@@ -21,6 +21,7 @@ import (
 	"airwaves/internal/phase"
 	"airwaves/internal/service"
 	"airwaves/internal/stream"
+	"airwaves/internal/tuner"
 	"airwaves/internal/weather"
 )
 
@@ -34,6 +35,8 @@ type Backend interface {
 	Signal(ctx context.Context) (*service.SignalReport, error)
 	// Measure starts measuring every RF channel on an idle tuner.
 	Measure(ctx context.Context) (*service.SweepStatus, error)
+	// ScanChannels has the tuner scan for channels again.
+	ScanChannels(ctx context.Context) (service.TunerInfo, error)
 	Weather(ctx context.Context) (*weather.Report, error)
 	Tune(ctx context.Context, client, number string) (*stream.Playback, error)
 	Stop(ctx context.Context, client string) error
@@ -41,6 +44,10 @@ type Backend interface {
 	Record(ctx context.Context, req dvr.Request) (*dvr.Rule, error)
 	DeleteRule(ctx context.Context, id string) error
 	DeleteRecording(ctx context.Context, id string) error
+	// StopRecording ends a recording in progress, keeping it;
+	// ExtendRecording makes one run longer.
+	StopRecording(ctx context.Context, id string) error
+	ExtendRecording(ctx context.Context, id string, minutes int) (time.Time, error)
 	PlayRecording(ctx context.Context, client, id string, from float64) (*stream.Playback, error)
 	SaveProgress(ctx context.Context, id string, position, duration float64) error
 	MarkWatched(ctx context.Context, id string, watched bool) error
@@ -105,6 +112,12 @@ type progressReq struct {
 	Watched  *bool   `json:"watched,omitempty"`
 }
 
+// extendReq extends a recording by Minutes; the reply says Until when.
+type extendReq struct {
+	Minutes int       `json:"minutes,omitempty"`
+	Until   time.Time `json:"until,omitzero"`
+}
+
 // Handler routes requests.
 func (s *Server) Handler() http.Handler {
 	b := s.Backend
@@ -130,6 +143,9 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("POST /api/signal/measure", func(w http.ResponseWriter, r *http.Request) {
 		reply(w)(b.Measure(r.Context()))
+	})
+	mux.HandleFunc("POST /api/tuner/scan", func(w http.ResponseWriter, r *http.Request) {
+		reply(w)(b.ScanChannels(r.Context()))
 	})
 	mux.HandleFunc("GET /api/weather", func(w http.ResponseWriter, r *http.Request) {
 		reply(w)(b.Weather(r.Context()))
@@ -176,6 +192,17 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("DELETE /api/dvr/recordings/{id}", func(w http.ResponseWriter, r *http.Request) {
 		reply(w)(struct{}{}, b.DeleteRecording(r.Context(), r.PathValue("id")))
+	})
+	mux.HandleFunc("POST /api/dvr/recordings/{id}/stop", func(w http.ResponseWriter, r *http.Request) {
+		reply(w)(struct{}{}, b.StopRecording(r.Context(), r.PathValue("id")))
+	})
+	mux.HandleFunc("POST /api/dvr/recordings/{id}/extend", func(w http.ResponseWriter, r *http.Request) {
+		var req extendReq
+		if !decode(w, r, &req) {
+			return
+		}
+		until, err := b.ExtendRecording(r.Context(), r.PathValue("id"), req.Minutes)
+		reply(w)(extendReq{Until: until}, err)
 	})
 	mux.HandleFunc("POST /api/dvr/play", func(w http.ResponseWriter, r *http.Request) {
 		var req clientReq
@@ -306,13 +333,15 @@ func reply(w http.ResponseWriter) func(any, error) {
 
 // errStatus is the HTTP status for a backend error: 501 for what this
 // server doesn't have (an antenna, a tuner, recording, a location for the
-// weather), 503 for a channel with no signal right now, else 500.
+// weather), 503 for a channel with no signal or no free tuner right now,
+// else 500.
 func errStatus(err error) int {
 	var noSignal *service.NoSignalError
+	var busy *tuner.BusyError
 	switch {
 	case errors.Is(err, service.ErrNoAntenna), errors.Is(err, service.ErrNoTuner), errors.Is(err, service.ErrNoDVR), errors.Is(err, service.ErrNoLocation):
 		return http.StatusNotImplemented
-	case errors.As(err, &noSignal):
+	case errors.As(err, &noSignal), errors.As(err, &busy):
 		return http.StatusServiceUnavailable
 	}
 	return http.StatusInternalServerError

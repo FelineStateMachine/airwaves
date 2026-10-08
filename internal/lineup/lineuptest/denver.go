@@ -1,7 +1,7 @@
-// Package lineuptest holds a report and listings for downtown Denver, to
-// match against the tuner lineup in internal/tvh/tvhtest: the stations on
-// Lookout Mountain whose RF channels that tuner's scan found, and some it
-// didn't (KMGH on VHF RF 7, KUSA's main channel, KWGN's ATSC 3.0 signal).
+// Package lineuptest holds a report, listings and an HDHomeRun's lineup
+// for downtown Denver: the stations on Lookout Mountain whose RF channels
+// the tuner's scan found, and some it didn't (KMGH on VHF RF 7, KUSA's
+// main channel, KWGN's ATSC 3.0 signal).
 package lineuptest
 
 import (

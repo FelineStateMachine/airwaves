@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -13,25 +14,23 @@ import (
 	"airwaves/internal/dvr"
 	"airwaves/internal/geo"
 	"airwaves/internal/store"
-	"airwaves/internal/tvh"
-	"airwaves/internal/web"
 )
 
-// TestNoAntenna: a server with custom channels only has no Tvheadend (even
+// TestNoAntenna: a server with custom channels only has no tuner (even
 // when given one), lineup, listings, reception or recording; its snapshot
 // is the custom channels, and Info says there's no antenna.
 func TestNoAntenna(t *testing.T) {
 	ctx := t.Context()
 	s, err := New(Options{
 		Name: "friend", Mode: "server", NoAntenna: true, CacheDir: t.TempDir(),
-		Tvheadend: tvh.New("http://127.0.0.1:1", web.NewClient()), Demo: true,
+		HDHomeRun: "http://127.0.0.1:1", DVRPath: filepath.Join(t.TempDir(), "dvr.json"), RecordingsDir: t.TempDir(),
 		WeatherStarPort: 8090, Config: Config{Lat: 39.74, Lon: -104.99},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.opt.Tvheadend != nil || s.tvhTuner != nil || s.dvr != nil {
-		t.Error("Tvheadend kept without an antenna")
+	if s.tuners != nil || s.dvr != nil {
+		t.Error("a tuner or recording without an antenna")
 	}
 
 	info, _ := s.Info(ctx)

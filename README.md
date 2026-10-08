@@ -12,8 +12,8 @@ A desktop TV and program guide for free over-the-air broadcasts, built with Go a
 3. **What is on now?** A Gracenote-backed grid guide, live TV, and recordings.
 
 There is one setup: an HDHomeRun on the network as the tuner, a home server running
-`airwavesd` and Tvheadend, and the desktop app as the TV. The server owns the lineup,
-guide, recording rules and library; the app is the remote.
+`airwavesd`, and the desktop app as the TV. The server owns the tuner, the lineup, the
+guide, recording and the library; the app is the remote.
 
 It also maps which stations broadcast ATSC 3.0 (NextGen TV), which transmitter hosts each
 service, and where the ATSC 1.0 simulcast of each channel lives.
@@ -41,10 +41,9 @@ go run ./cmd/otascan -zip 80302 -lat 39.74 -lon -104.99 -all -json > report.json
 
 ## Server
 
-The server is three containers: Tvheadend (tuners, scanning, writing recordings),
-`airwavesd` (lineup, reception, guide, recording rules, live and recorded HLS, the
-emulated HDHomeRun and custom channels) and the WeatherStar display behind the weather
-channel.
+The server is two containers: `airwavesd` (the tuner, lineup, reception, guide,
+recording, live and recorded HLS, the emulated HDHomeRun and custom channels) and the
+WeatherStar display behind the weather channel.
 
 ```sh
 AIRWAVES_ZIP=80302 scripts/deploy.sh nas   # cross-compiles airwavesd, syncs deploy/ to ~/airwaves, starts it
@@ -53,12 +52,11 @@ AIRWAVES_ZIP=80302 scripts/deploy.sh nas   # cross-compiles airwavesd, syncs dep
 `deploy.sh` writes `~/airwaves/.env` on first run with the host name, its Tailscale
 address, the host's time zone (`TZ`) and the antenna's ZIP code (`AIRWAVES_ZIP`, which
 sets the lineup and listings), and binds `airwavesd` (port 8089) to the Tailscale address
-only. Tvheadend listens on 127.0.0.1 only; reach its admin UI with
-`ssh -L 9981:127.0.0.1:9981 nas`, then http://localhost:9981. Other `.env` settings:
-`AIRWAVES_LAT` / `AIRWAVES_LON` for the
+only. Other `.env` settings: `AIRWAVES_LAT` / `AIRWAVES_LON` for the
 antenna's exact position (better than the ZIP centroid, since terrain decides
 reception); `AIRWAVES_TOKEN` (requires the same token in the app);
-`AIRWAVES_ADMIN_PASSWORD` (for the admin page and `/admin/mcp`); `RECORDINGS` (host
+`AIRWAVES_ADMIN_PASSWORD` (for the admin page and `/admin/mcp`); `AIRWAVES_HDHOMERUN`
+(the tuner's address or device ID, when discovery can't find it); `RECORDINGS` (host
 path for recordings, default `~/airwaves/recordings`); `MUSIC` and `CHANNELS` (host
 folders for the custom channels); `TZ`. Location is deployment
 configuration only; the app never shows or edits it.
@@ -74,42 +72,56 @@ asks for the token. Favorites, hidden channels and the other app settings are ke
 each browser.
 
 **The tuner** is an HDHomeRun (for example a FLEX DUO) with the antenna on its coax
-input. Both containers use host networking so Tvheadend can find it by broadcast, on
-the LAN or on a spare Ethernet port with link-local addressing that the firewall trusts.
-For development without one, `AIRWAVES_DEMO=true` gives Tvheadend generated
-test-pattern channels until a tuner is found.
+input, and `airwavesd` is its only client. It uses the device's own HTTP API: its
+channel scan and lineup, its tuner status, and its streams. `airwavesd` uses host
+networking to find it by broadcast, on the LAN or on a spare Ethernet port with
+link-local addressing that the firewall trusts; `AIRWAVES_HDHOMERUN` names it instead
+(`192.168.1.30`, or a device ID such as `1050ABCD`).
 
-When the HDHomeRun appears, `airwavesd` creates an "Airwaves antenna" network from the
-US ATSC channel list, attaches its tuners, and lets Tvheadend scan. Channels are mapped as
-they are found, and any demo channels are removed for good. The scan takes a few minutes;
-if channels show up under the wrong numbers, check them in Tvheadend's Configuration >
-Channel / EPG.
+**One tuner per RF channel.** `airwavesd` reads each RF channel in use once, as a whole,
+and hands each viewer, recording and HDHomeRun client its own program from it, so
+watching 9.2 while 9.1 records takes one tuner. With every tuner taken, a recording takes
+one from a viewer (the one tuned last), a viewer one from Measure now, and changing
+channels always gets the viewer's own tuner back; otherwise tuning says who has the
+tuners. A tuner stays on its RF channel for a few seconds after its last viewer, so
+coming back to it is instant.
 
-**The lineup is the tuner's.** The app's antenna channels are exactly the channels
-Tvheadend's scan found; the FCC's records, the Gracenote listings and the ATSC 3.0 list
+**The lineup is the tuner's.** The app's antenna channels are exactly the channels the
+HDHomeRun's scan found; the FCC's records, the Gracenote listings and the ATSC 3.0 list
 only describe them (call sign, network, transmitter, listings), never add one. Without a
 tuner there are no antenna channels. A channel that won't lock right now stays listed,
-and tuning it says so: "No signal on RF 31 (KTVD 20.x) right now".
+and tuning it says so: "No signal on RF 31 (KTVD 20.x) right now". The HDHomeRun scans
+when it powers up; **Scan for channels** in Reception (`POST /api/tuner/scan`) scans
+again, after moving the antenna, taking every tuner for the few minutes it runs.
 
-**Signal is measured, never estimated.** `airwavesd` records, per RF channel, Tvheadend's
-scan result and readings of the tuner (strength and quality as the HDHomeRun reports them,
-in percent; SNR in dB, BER and uncorrected blocks from tuners that report them): every
-10 seconds while a tuner is in use, and on request (`POST /api/signal/measure`, Measure
-now), which briefly tunes each RF channel worth measuring on an idle tuner, at the lowest
-weight a viewer's can have, so any viewer or recording takes the tuner over and the
-sweep stops. Readings are kept in `<data>/signal.json` and served at `GET /api/signal`
-and in the snapshot's `antenna` section. Terrain-based estimates are for planning an
-antenna, in `otascan`, and aren't served to the app.
+**Signal is measured, never estimated.** `airwavesd` records, per RF channel, readings
+of the tuner: strength, signal-to-noise quality and symbol quality, as the HDHomeRun
+reports them in percent, whether data arrived, and the transport and continuity errors
+in it, counted as it arrives. It reads them every 10 seconds while a tuner is in use, and
+on request (`POST /api/signal/measure`, Measure now), which briefly tunes each RF
+channel worth measuring on a free tuner, at the lowest priority, so any viewer or
+recording takes the tuner over and the sweep stops. Readings are kept in
+`<data>/signal.json` and served at `GET /api/signal` and in the snapshot's `antenna`
+section. Terrain-based estimates are for planning an antenna, in `otascan`, and aren't
+served to the app.
 
-Recording rules are Airwaves': one airing, or a series by Gracenote series ID on one
-channel, optionally new episodes only. Series rules skip episodes already recorded or
-already scheduled. Every minute `airwavesd` turns the rules into timed Tvheadend entries
-(1 minute early, 3 late, 30 late for sports) and removes entries for deleted rules.
+**Recording** is Airwaves' own. Rules are one airing, or a series by Gracenote series ID
+on one channel, optionally new episodes only; series rules skip episodes already recorded
+or already scheduled, and an airing skipped from a series is recorded at a repeat when
+there is one. An airing records from a minute early to 3 minutes late (30 for sports)
+into the recordings folder, a folder per show (`Nature/2026-10-04 20.00 Episode.ts`),
+and its details, with the rules, are in `<data>/dvr.json`. Coming up shows each airing
+to come with whether it will get a tuner: a conflict names the recordings that have
+every tuner then. A recording under way can be watched from the start, given 30 more
+minutes, or stopped, keeping what it recorded. Losing the signal or the tuner makes a
+gap, not an end: it tries again until its time is up, and after a restart a recording
+whose time isn't up carries on. A finished recording says what it's missing: "Began 12
+minutes into the program", "About 3 minutes are missing in between".
 
 ## Without an antenna
 
 `airwavesd` also runs on its own for the custom channels only (Jellyfin, YouTube,
-folders of videos and the weather), with no antenna, tuner or Tvheadend. That is
+folders of videos and the weather), with no antenna or tuner. That is
 `deploy/standalone`, built from this repository on any Docker host, amd64 or arm64;
 [docs/self-hosting.md](docs/self-hosting.md) walks a newcomer through it. `scripts/deploy.sh`
 and `deploy/compose.yml` are unchanged by it: every setting below defaults to what they
@@ -117,7 +129,7 @@ had.
 
 | Setting | Does |
 | --- | --- |
-| `AIRWAVES_ANTENNA=off` | Custom channels only: no Tvheadend, demo channels, FCC or Gracenote lineup, terrain, reception reports or recording. `/api/info` says `"antenna": false` and the app hides Reception; what needs an antenna answers 501 with the reason. The location (`AIRWAVES_ZIP`, or `AIRWAVES_LAT` and `AIRWAVES_LON`) is only for the weather, and there's none unless given. |
+| `AIRWAVES_ANTENNA=off` | Custom channels only: no tuner, FCC or Gracenote lineup, terrain, reception reports or recording. `/api/info` says `"antenna": false` and the app hides Reception; what needs an antenna answers 501 with the reason. The location (`AIRWAVES_ZIP`, or `AIRWAVES_LAT` and `AIRWAVES_LON`) is only for the weather, and there's none unless given. |
 | `AIRWAVES_HDHR` | `on` or `off`, the emulated HDHomeRun: on by default, off without an antenna. |
 | `AIRWAVES_HDHR_DISCOVERY` | `on` or `off`, answering HDHomeRun discovery on the LAN (needs host networking): the same defaults. Without it, the device's URLs use the address clients were given (their `Host` header), since a container's port mapping changes its own. |
 | `AIRWAVES_ADMIN_PASSWORD` | A password for `/admin/` and `/admin/mcp`: HTTP Basic auth with any user name, or `Authorization: Bearer <password>` from MCP clients. It's never logged, and the programs `airwavesd` runs don't inherit it. |
@@ -147,8 +159,8 @@ had.
 | Key | Elsewhere |
 | --- | --- |
 | G | Guide: arrows move, and Up and Down wrap round the channels. The filters (Favorites, Sports...; also `[` `]`) are Down from the top bar, which is Left from the earliest program. Enter watches what's on, or shows a program to come's actions; hold Enter, or I, for any program's: watch, record, series, new episodes only, favorite, hide. Home jumps to now, R / Shift R / N record, f favorite, H hide (U undoes) |
-| D | Recordings: Left (or `[` `]`) for Library, Coming up, Series. Enter shows a recording's actions: resume, from the start, watched, delete (press twice); Shift Enter starts over, W marks watched, Delete twice removes; on a series K sets how many to keep, N new episodes only |
-| A | Reception: what the tuners measured, by RF channel (the ones the scan found first), with the transmitters licensed on each. Up and Down pick one, Enter watches its first channel; Left for the tuner and Measure now, which reads every RF channel on a free tuner and shows its progress |
+| D | Recordings: Left (or `[` `]`) for Library, Coming up, Series. Enter shows a recording's actions: resume, from the start, watched, delete (press twice); for one recording now, watch from the start, 30 more minutes, stop (keeping it) and delete; Shift Enter starts over, W marks watched, Delete twice removes; on a series K sets how many to keep, N new episodes only |
+| A | Reception: what the tuners measured, by RF channel (the ones the scan found first), with the transmitters licensed on each. Up and Down pick one, Enter watches its first channel; Left for the tuner, Measure now, which reads every RF channel on a free tuner and shows its progress, and Scan for channels (press twice) |
 | W | Weather: current conditions, alerts, the next 24 hours, 7-day, radar loop and satellite; Up and Down move through them, Left to watch the weather channel |
 | `,` or S | Settings: server, guide hours, deleting watched recordings, hidden channels, the tuner |
 | Esc | Back to TV; from a recording, back to live |
@@ -209,10 +221,10 @@ images are served from `/wximg/`, so the app never handles coordinates.
 
 `airwavesd` also appears on the home network as an HDHomeRun network tuner, so other
 players can watch the lineup: model HDTC-2US, friendly name "Airwaves", a device ID
-derived from the server name, and as many tuners as Tvheadend
-reports (2 until the real tuner is found). Antenna channels are passed through from
-Tvheadend untouched (the original MPEG-TS, MPEG-2 video and AC-3 audio); custom channels
-are H.264 and AAC in MPEG-TS at 1280x720.
+derived from the server name, and as many tuners as the real one has (2 until it is
+found). Antenna channels are passed through as broadcast (each channel's own program of
+the RF channel's MPEG-TS, MPEG-2 video and AC-3 audio), on tuners shared with the app
+and recordings as above; custom channels are H.264 and AAC in MPEG-TS at 1280x720.
 
 It serves HTTP on port 5004 (`AIRWAVES_HDHR_LISTEN`, default `:5004`; empty or
 `AIRWAVES_HDHR=off` disables it, and `AIRWAVES_HDHR_DISCOVERY=off` only its discovery):
@@ -226,7 +238,7 @@ It serves HTTP on port 5004 (`AIRWAVES_HDHR_LISTEN`, default `:5004`; empty or
 | `/channel-logos/<number>` | A custom channel's logo, also on the API port; the playlist and guide link to it |
 
 Discovery answers on UDP 65001, only to other machines: requests from the server itself
-are ignored so Tvheadend never adopts Airwaves as a tuner. Open TCP 5004 and UDP 65001
+are ignored, so `airwavesd` never finds itself when it looks for the real tuner. Open TCP 5004 and UDP 65001
 on the server's LAN interface only. With the server at 192.168.1.20:
 
 - **Channels DVR**: found automatically as an HDHomeRun under Settings > Sources;
@@ -585,8 +597,8 @@ refused, and the Jellyfin account isn't among the tools.
 
 ## Playback
 
-Live channels and recordings are read from Tvheadend as MPEG-TS and transcoded by
-`airwavesd` to H.264 and AAC in HLS, which the app plays natively. Custom channels come
+Live channels are read from the HDHomeRun, and recordings from their files, as MPEG-TS
+and transcoded by `airwavesd` to H.264 and AAC in HLS, which the app plays natively. Custom channels come
 from `airwavesd` itself and play the same way. ATSC 1.0 (MPEG-2 video, AC-3 audio) plays
 fully; ATSC 3.0 is out of scope (AC-4 audio and A3SA DRM).
 
@@ -598,8 +610,7 @@ cmd/airwavesd             the home server
 cmd/otascan               terminal report
 internal/service          the engine airwavesd runs
 internal/api              HTTP API, and a client with the same interface
-internal/dvr              recording rules and reconciliation with Tvheadend
-internal/tvh              Tvheadend API: channels, DVR entries, network setup, input status; tvhtest fakes it
+internal/dvr              recording rules, the recorder and the library
 internal/fcc              FCC TV Query client and parser
 internal/terrain          Terrarium elevation tiles and path profiles
 internal/reception        propagation model and antenna presets (otascan)
@@ -607,9 +618,10 @@ internal/atsc3            RabbitEars ATSC 3.0 list parser
 internal/guide            Gracenote lineup and listings
 internal/lineup           merges all of the above into a Report, and describes the tuner's channels from it
 internal/signal           what the tuners measured per RF channel, kept across restarts
-internal/tuner            Tvheadend input, demo test patterns
+internal/tuner            shares the HDHomeRun's tuners: one per RF channel, by priority
+internal/ts               MPEG-TS: tables, a program out of an RF channel, errors
 internal/stream           ffmpeg to HLS, one session per client
-internal/hdhr             emulated HDHomeRun: discovery, lineup, streams, XMLTV
+internal/hdhr             the HDHomeRun's HTTP API and discovery (hdhrtest fakes it); the emulated one
 internal/vchan            custom channels: Airwaves Weather, folder, Jellyfin and YouTube channels
 internal/jellyfin         Jellyfin client: sign-in, Quick Connect, browsing, stream URLs
 deploy/, scripts/         Docker files for the server and the deploy script
@@ -617,10 +629,10 @@ deploy/standalone         Docker Compose for custom channels only, built from so
 frontend/dist             the UI: plain HTML, CSS and JS, no build step; also served at /tv/
 ```
 
-`go test ./...` covers the parsers, the propagation model, recording rules, the tuner
-lineup, signal measuring and demo cleanup against a fake Tvheadend (answering with a real
-one's JSON), the API client and server, the emulated HDHomeRun's discovery and HTTP
-API, and an end-to-end ffmpeg HLS stream.
+`go test ./...` covers the parsers, the propagation model, the tuner sharing, recording,
+the tuner lineup and signal measuring against a fake HDHomeRun (with a real one's Denver
+lineup, and synthetic MPEG-TS), the API client and server, the emulated HDHomeRun's
+discovery and HTTP API, and an end-to-end ffmpeg HLS stream.
 
 ## License
 

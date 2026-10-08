@@ -17,8 +17,7 @@ its own license, kept beside it in the tree.
 Go modules are listed in `go.mod` and keep their own licenses.
 
 The deployment builds or runs these from their upstream images and releases
-rather than shipping them: [Tvheadend](https://tvheadend.org) (GPL-3.0),
-[WeatherStar 4000+](https://github.com/netbymatt/ws4kp) (MIT, with Airwaves
+rather than shipping them: [WeatherStar 4000+](https://github.com/netbymatt/ws4kp) (MIT, with Airwaves
 branding swapped in by `deploy/weatherstar/Dockerfile`),
 [yt-dlp](https://github.com/yt-dlp/yt-dlp) (Unlicense), [Deno](https://deno.com)
 (MIT), [FFmpeg](https://ffmpeg.org) and Chromium.

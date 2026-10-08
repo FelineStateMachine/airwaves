@@ -15,7 +15,7 @@ import (
 type Scanned struct {
 	Number string // "20.1"
 	// Name is the broadcast's own name for it (its PSIP short name, as
-	// Tvheadend names the service): "KTVD-HD", "H & I".
+	// the HDHomeRun's lineup gives it): "KTVD-HD", "H & I".
 	Name string
 	// RF is the RF channel of the multiplex it came in on; 0 when unknown.
 	RF int

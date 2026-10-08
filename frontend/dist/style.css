@@ -546,7 +546,10 @@ body:not(.mode-guide) .g-cell.rec-on::after { animation: none; } /* hidden, so s
 .r-item .r-name { font-size: 16px; }
 .r-item .r-time { font: 400 11px var(--f-mono); color: var(--muted); text-align: right; min-width: 64px; }
 .r-item .r-time b { display: block; font: 600 18px var(--f-display); color: var(--paper); letter-spacing: .02em; }
-.r-item.unavailable .r-name { color: var(--muted); }
+.r-item.unavailable .r-name, .r-item.conflict .r-name { color: var(--muted); }
+.r-item .r-why { color: var(--muted); font-size: 0.85em; margin-top: 4px; }
+.r-detail .rd-note { margin: 6px 0 0; color: var(--amber-2); max-width: 70ch; }
+.chip.warn { background: var(--amber-2); color: #000; box-shadow: none; }
 .r-item .chip { display: inline-block; margin-top: 5px; }
 .r-list ul .r-item, .r-list .r-item:not(:has(.r-time)) { grid-template-columns: minmax(0, 1fr) auto; }
 .x { border: 0; background: none; color: var(--faint); cursor: pointer; font-size: 14px; padding: 6px; border-radius: 3px; }

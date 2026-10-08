@@ -30,13 +30,13 @@ import (
 	"airwaves/internal/dvr"
 	"airwaves/internal/geo"
 	"airwaves/internal/guide"
+	"airwaves/internal/hdhr"
 	"airwaves/internal/lineup"
 	"airwaves/internal/phase"
 	"airwaves/internal/signal"
 	"airwaves/internal/store"
 	"airwaves/internal/stream"
 	"airwaves/internal/tuner"
-	"airwaves/internal/tvh"
 	"airwaves/internal/vchan"
 	"airwaves/internal/weather"
 	"airwaves/internal/web"
@@ -45,8 +45,9 @@ import (
 // Version is reported to clients.
 const Version = "0.2.0"
 
-// ErrNoDVR is returned by recording calls when no Tvheadend is configured.
-var ErrNoDVR = errors.New("recording needs an Airwaves server with Tvheadend")
+// ErrNoDVR is returned by recording calls on a server with nowhere to
+// keep recordings.
+var ErrNoDVR = errors.New("recording needs a recordings folder on the server")
 
 // ErrNotRecordable is returned when asked to record a custom channel.
 var ErrNotRecordable = errors.New("custom channels play from the server and can't be recorded")
@@ -142,20 +143,17 @@ type Options struct {
 	// ConfigPath persists Config; empty keeps it in memory.
 	ConfigPath string
 	Config     Config
-	// Loopback serves streams on 127.0.0.1 for an in-process player.
-	Loopback bool
-	Tuner    tuner.Tuner
-	// Tvheadend enables server tuners and recording.
-	Tvheadend *tvh.Client
-	DVRPath   string
-	// Demo fills Tvheadend with generated channels, for development before
-	// there's a tuner. They're never made, and are removed, once a tuner's
-	// antenna network exists.
-	Demo bool
-	// DemoFFmpeg is the ffmpeg path inside the Tvheadend container.
-	DemoFFmpeg string
-	// NoAntenna serves custom channels only: no Tvheadend, demo channels,
-	// lineup or listings from the ZIP code, reception reports or recording.
+	// HDHomeRun is the tuner's address or device ID; empty finds it by
+	// discovery. SkipDeviceID is a device never to use: this server's own
+	// emulated one.
+	HDHomeRun    string
+	SkipDeviceID uint32
+	// DVRPath keeps the recording rules and recordings, and RecordingsDir
+	// the recorded files; recording needs both.
+	DVRPath       string
+	RecordingsDir string
+	// NoAntenna serves custom channels only: no tuner, lineup or listings
+	// from the ZIP code, reception reports or recording.
 	// The location (Config) is then only for the weather, and there's none
 	// unless it's given.
 	NoAntenna bool
@@ -199,7 +197,7 @@ type Service struct {
 	cancel    context.CancelFunc
 	streams   *stream.Server
 	streamErr error
-	tvhTuner  *tuner.Tvheadend
+	tuners    *tuner.Manager
 	dvr       *dvr.Manager
 	weather   *weather.Source
 	// wx is the weather channel, when there's a WeatherStar display;
@@ -214,34 +212,31 @@ type Service struct {
 
 	mu     sync.Mutex
 	cfg    Config
-	tuner  tuner.Tuner
 	report *lineup.Report
 	guide  *guide.Guide
 	built  time.Time
 	wxUp   bool // the display at WeatherStarURL answered last time
-	// fes are the ATSC tuners Tvheadend has, as of fesAt; fesKnown once
-	// looked up.
-	fes      []tvh.Frontend
-	fesAt    time.Time
-	fesKnown bool
-	// status is the inputs and subscriptions as of statusAt; lastSample
-	// the inputs at the last sample, and when.
-	status       tunerStatus
-	statusAt     time.Time
-	lastSample   map[string]tvh.InputStatus
+	// dev is the HDHomeRun, nil until found; devErr why the last search
+	// didn't find it.
+	dev    *hdhr.Device
+	devErr string
+	// lineup is the tuner's channels as of lineupAt; scan its channel
+	// scan as of scanAt.
+	lineup   []hdhr.Channel
+	lineupAt time.Time
+	scan     hdhr.ScanStatus
+	scanAt   time.Time
+	// lastSample is the tuners at the last sample, and when.
+	lastSample   map[int]tuner.State
 	lastSampleAt time.Time
 	sweep        SweepStatus
-	sweepMux     string // the multiplex the sweep is on
+	sweepFreq    int64 // the RF channel the sweep is on
 }
 
 // New builds a Service. Streaming failures (no ffmpeg) are reported by
 // Info rather than failing construction, so the guide still works.
 func New(opt Options) (*Service, error) {
-	if opt.NoAntenna {
-		opt.Tvheadend, opt.Demo = nil, false
-		opt.Tuner = noAntenna{}
-	}
-	s := &Service{opt: opt, http: web.NewClient(), tuner: opt.Tuner, timing: defaultTiming}
+	s := &Service{opt: opt, http: web.NewClient(), timing: defaultTiming}
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 	s.cfg = s.withDefaults(opt.Config)
 	if opt.ConfigPath != "" {
@@ -269,19 +264,15 @@ func New(opt Options) (*Service, error) {
 		log.Print(err)
 	}
 	s.weather = weather.NewSource(s.http)
-	s.streams, s.streamErr = stream.NewServer(opt.Loopback)
+	s.streams, s.streamErr = stream.NewServer(false)
 
-	if opt.Tvheadend != nil {
-		s.tvhTuner = tuner.NewTvheadend(opt.Tvheadend)
-		s.tvhTuner.Networks = s.offeredNetworks
-		s.tuner = s.tvhTuner
-		s.dvr, err = dvr.Open(opt.DVRPath, opt.Tvheadend, s.tvhTuner)
-		if err != nil {
-			return nil, err
+	if !opt.NoAntenna {
+		s.tuners = tuner.NewManager()
+		if opt.DVRPath != "" && opt.RecordingsDir != "" {
+			if s.dvr, err = dvr.Open(opt.DVRPath, opt.RecordingsDir, s.tuners, s.tuning); err != nil {
+				return nil, err
+			}
 		}
-	}
-	if s.tuner == nil {
-		s.tuner = noTuner{}
 	}
 	if opt.WeatherStarPort > 0 {
 		s.wxLocal = strings.TrimRight(opt.WeatherStarURL, "/")
@@ -334,29 +325,6 @@ func (s *Service) reserved() []string {
 // someone else's would be wrong.
 func (s *Service) withDefaults(c Config) Config {
 	return c.normalized()
-}
-
-// noAntenna is the tuner of a server with custom channels only.
-type noAntenna struct{}
-
-func (noAntenna) Device() tuner.Device {
-	return tuner.Device{ID: "none", Name: "No antenna", Kind: "none", Detail: "custom channels only"}
-}
-
-func (noAntenna) Input(_ context.Context, number string) (tuner.Input, error) {
-	return tuner.Input{}, fmt.Errorf("no channel %s: %w", number, ErrNoAntenna)
-}
-
-// noTuner is the tuner of a server with an antenna but no Tvheadend: it
-// has no channels.
-type noTuner struct{}
-
-func (noTuner) Device() tuner.Device {
-	return tuner.Device{ID: "none", Name: "No tuner", Kind: "none", Detail: "the server has no Tvheadend"}
-}
-
-func (noTuner) Input(_ context.Context, number string) (tuner.Input, error) {
-	return tuner.Input{}, fmt.Errorf("no channel %s: %w", number, ErrNoTuner)
 }
 
 // wxOn reports whether the weather channel can be shown: there's a
@@ -427,9 +395,13 @@ func (s *Service) customChannel(number string) vchan.Channel {
 	return nil
 }
 
-// Close stops all streams and measuring, and saves the measurements.
+// Close stops all streams, recordings and measuring, and saves the
+// measurements. Recordings in progress carry on at the next start.
 func (s *Service) Close() {
 	s.cancel()
+	if s.dvr != nil {
+		s.dvr.Close()
+	}
 	if s.streams != nil {
 		s.streams.Close()
 	}
@@ -451,36 +423,12 @@ func (s *Service) StreamHandler() http.Handler {
 
 // Info implements the Backend contract.
 func (s *Service) Info(context.Context) (Info, error) {
-	s.mu.Lock()
-	t := s.tuner
-	s.mu.Unlock()
-	i := Info{Name: s.opt.Name, Mode: s.opt.Mode, Version: Version, Tuner: t.Device(), DVR: s.dvr != nil, WeatherStar: s.wxOn(),
+	i := Info{Name: s.opt.Name, Mode: s.opt.Mode, Version: Version, Tuner: s.tunerDevice(), DVR: s.dvr != nil, WeatherStar: s.wxOn(),
 		Antenna: !s.opt.NoAntenna}
-	if s.opt.Tvheadend != nil {
-		ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
-		defer cancel()
-		if fes, err := s.frontends(ctx, false); err == nil {
-			i.Tuner.Tuners = len(fes)
-			for _, fe := range fes {
-				i.Tuner.Model = cmp.Or(i.Tuner.Model, fe.Model)
-			}
-			if len(fes) > 0 {
-				// Tvheadend's ATSC tuners receive ATSC 1.0 only.
-				i.Tuner.Standards = []string{"ATSC 1.0"}
-			}
-		}
-	}
 	if s.streamErr != nil {
 		i.Playback = s.streamErr.Error()
 	}
 	return i, nil
-}
-
-// SetTuner switches the live source (local mode).
-func (s *Service) SetTuner(t tuner.Tuner) {
-	s.mu.Lock()
-	s.tuner = t
-	s.mu.Unlock()
 }
 
 // Config returns the location settings.
@@ -843,24 +791,17 @@ func (s *Service) Tune(ctx context.Context, client, number string) (*stream.Play
 		}
 		return s.streams.Start(ctx, client, in)
 	}
-	if s.tvhTuner != nil {
-		ctx = phase.NewContext(ctx, phase.New("tune "+number+" (antenna)", "antenna"))
-		var pb *stream.Playback
-		err := s.tuneAntenna(ctx, client, number, func(ctx context.Context, in tuner.Input) error {
-			var err error
-			pb, err = s.streams.Start(ctx, client, in)
-			return err
-		})
-		return pb, err
+	if s.opt.NoAntenna {
+		return nil, fmt.Errorf("no channel %s: %w", number, ErrNoAntenna)
 	}
-	s.mu.Lock()
-	t := s.tuner
-	s.mu.Unlock()
-	in, err := t.Input(ctx, number)
-	if err != nil {
-		return nil, err
-	}
-	return s.streams.Start(ctx, client, in)
+	ctx = phase.NewContext(ctx, phase.New("tune "+number+" (antenna)", "antenna"))
+	var pb *stream.Playback
+	err := s.tuneAntenna(ctx, client, number, func(ctx context.Context, in tuner.Input) error {
+		var err error
+		pb, err = s.streams.Start(ctx, client, in)
+		return err
+	})
+	return pb, err
 }
 
 // Stop ends client's playback.
@@ -925,51 +866,56 @@ func (s *Service) DeleteRecording(ctx context.Context, id string) error {
 	return s.dvr.DeleteEntry(ctx, id)
 }
 
-// PlayRecording streams a recording to client, starting near from seconds
-// in (zero plays from the beginning).
+// PlayRecording streams a recording to client, from seconds in (zero
+// plays from the beginning). One still recording plays as far as it has
+// got, and on as it grows.
 func (s *Service) PlayRecording(ctx context.Context, client, id string, from float64) (*stream.Playback, error) {
 	if s.dvr == nil {
-		return nil, ErrNoDVR
+		return nil, s.noDVR()
 	}
 	if s.streamErr != nil {
 		return nil, s.streamErr
 	}
-	url := s.opt.Tvheadend.FileURL(id)
-	audio, err := s.streams.ProbeAudio(ctx, url)
+	r, path, ok := s.dvr.Get(id)
+	if !ok {
+		return nil, fmt.Errorf("no recording %s", id)
+	}
+	if r.Status == dvr.Failed {
+		return nil, errors.New("that recording failed and can't be played")
+	}
+	audio, err := s.streams.ProbeAudio(ctx, path)
 	if err != nil || len(audio) == 0 {
 		audio = []tuner.AudioTrack{{Map: "0:a:0"}}
 	}
-	// Read the file front to back: Tvheadend drops the connection when
-	// ffmpeg seeks to probe the end. To resume, start the HTTP read at the
-	// matching byte offset instead; MPEG-TS resynchronizes on its own.
-	args := []string{"-seekable", "0"}
-	if size, dur := s.recordingSize(ctx, id); from > 5 && size > 0 && dur > 0 && from < dur {
-		off := int64(float64(size)*from/dur) / 188 * 188
-		args = append(args, "-offset", strconv.FormatInt(off, 10))
-	} else {
+	var args []string
+	if from <= 5 || from >= r.Duration(time.Now()).Seconds() {
 		from = 0
+	} else {
+		args = append(args, "-ss", strconv.FormatFloat(from, 'f', 1, 64))
 	}
-	args = append(args, "-i", url)
+	if r.Status == dvr.Recording {
+		args = append(args, "-follow", "1")
+	}
+	args = append(args, "-i", path)
 	in := tuner.Input{Args: args, Video: "0:v:0", Audio: audio, Broadcast: true, VOD: true, Offset: from}
 	return s.streams.Start(ctx, client, in)
 }
 
-// recordingSize returns a recording's file size and duration in seconds.
-func (s *Service) recordingSize(ctx context.Context, id string) (int64, float64) {
-	entries, err := s.opt.Tvheadend.Finished(ctx)
-	if err != nil {
-		return 0, 0
+// StopRecording ends a recording in progress early, keeping what it
+// recorded.
+func (s *Service) StopRecording(_ context.Context, id string) error {
+	if s.dvr == nil {
+		return s.noDVR()
 	}
-	for _, e := range entries {
-		if e.UUID == id {
-			dur := float64(e.StopReal - e.StartReal)
-			if dur <= 0 {
-				dur = float64(e.Stop - e.Start)
-			}
-			return e.FileSize, dur
-		}
+	return s.dvr.Stop(id)
+}
+
+// ExtendRecording makes a recording in progress run minutes longer.
+func (s *Service) ExtendRecording(_ context.Context, id string, minutes int) (time.Time, error) {
+	if s.dvr == nil {
+		return time.Time{}, s.noDVR()
 	}
-	return 0, 0
+	return s.dvr.Extend(id, time.Duration(minutes)*time.Minute)
 }
 
 // SaveProgress records how far a recording has been watched.
@@ -1014,12 +960,17 @@ func (s *Service) recordingChannels(ctx context.Context) (*guide.Guide, []lineup
 	return g, dvrChannels(chans), err
 }
 
-// Run keeps a server healthy until ctx ends: refreshes listings, keeps
-// Tvheadend's channels matching the hardware (the antenna network once a
-// tuner appears; demo channels before, in demo mode), measures the signal
-// while tuners are in use, and reconciles recordings.
+// Run keeps a server healthy until ctx ends: refreshes listings, finds the
+// tuner and keeps up with it, measures the signal while tuners are in use,
+// and makes recordings.
 func (s *Service) Run(ctx context.Context) {
-	go s.sample(ctx)
+	if s.tuners != nil {
+		s.findTuner(ctx)
+		go s.sample(ctx)
+		if s.dvr != nil {
+			go s.dvr.Run(ctx, s.recordingChannels)
+		}
+	}
 	tick := time.NewTicker(time.Minute)
 	defer tick.Stop()
 	for n := 0; ; n++ {
@@ -1032,48 +983,17 @@ func (s *Service) Run(ctx context.Context) {
 	}
 }
 
-// maintain runs once a minute. Reconciling is a few local Tvheadend calls,
-// so it runs every time; mapping is asynchronous in Tvheadend, so channels
-// mapped now are scheduled on the next pass.
+// maintain runs once a minute.
 func (s *Service) maintain(ctx context.Context, prune bool) {
 	s.checkWeatherStar(ctx)
-	_, snapErr := s.snapshot(ctx, false)
-	if snapErr != nil {
-		log.Printf("snapshot: %v", snapErr)
+	if _, err := s.snapshot(ctx, false); err != nil {
+		log.Printf("snapshot: %v", err)
 	}
-	if s.opt.Tvheadend == nil {
+	if s.tuners == nil {
 		return
 	}
-	if err := s.setupTuners(ctx); err != nil {
-		log.Printf("tvheadend setup: %v", err)
-	}
-	if n, err := s.opt.Tvheadend.RemoveOrphanChannels(ctx); err != nil {
-		log.Printf("remove orphan channels: %v", err)
-	} else if n > 0 {
-		log.Printf("removed %d channels left without a service", n)
-		s.tvhTuner.Invalidate()
-	}
-	if n, err := s.opt.Tvheadend.MapServices(ctx); err != nil {
-		log.Printf("map services: %v", err)
-	} else if n > 0 {
-		log.Printf("mapped %d new channels", n)
-		s.tvhTuner.Invalidate()
-	}
-	s.syncScans(ctx)
-	if snapErr != nil {
-		return
-	}
-	// Without the tuner's lineup, recordings stay as they are rather than
-	// being unscheduled for channels that seem gone.
-	g, chans, err := s.recordingChannels(ctx)
-	if err != nil {
-		log.Printf("reconcile recordings: %v", err)
-		return
-	}
-	if err := s.dvr.Reconcile(ctx, g, chans); err != nil {
-		log.Printf("reconcile recordings: %v", err)
-	}
-	if prune {
+	s.findTuner(ctx)
+	if prune && s.dvr != nil {
 		if err := s.dvr.Retain(ctx); err != nil {
 			log.Printf("retain recordings: %v", err)
 		}
@@ -1081,87 +1001,4 @@ func (s *Service) maintain(ctx context.Context, prune bool) {
 			log.Printf("prune recordings: %v", err)
 		}
 	}
-}
-
-// setupTuners attaches real tuners to the antenna network when present.
-// Once that network exists (a tuner has been found), demo channels are
-// removed and never made again, even while the tuner is away; before, in
-// demo mode, they stand in for the antenna.
-func (s *Service) setupTuners(ctx context.Context) error {
-	c := s.opt.Tvheadend
-	fes, err := s.frontends(ctx, true)
-	if err != nil {
-		return err
-	}
-	if len(fes) > 0 {
-		changed, err := c.EnsureATSC(ctx, fes)
-		if err != nil {
-			return err
-		}
-		if changed {
-			log.Printf("antenna network created for %d tuners; Tvheadend is scanning", len(fes))
-			s.tvhTuner.Invalidate()
-		}
-	}
-	nets, err := c.Networks(ctx)
-	if err != nil {
-		return err
-	}
-	var real, demo bool
-	for _, n := range nets {
-		real = real || n.Name == tvh.ATSCNetwork
-		demo = demo || n.Name == tvh.DemoNetwork
-	}
-	switch {
-	case real && demo:
-		if err := c.RemoveNetwork(ctx, tvh.DemoNetwork); err != nil {
-			return fmt.Errorf("remove the demo channels: %w", err)
-		}
-		log.Print("removed the demo channels: a tuner's antenna network exists")
-		s.tvhTuner.Invalidate()
-	case real, !s.opt.Demo:
-	default:
-		return c.EnsureDemo(ctx, s.demoChannels())
-	}
-	return nil
-}
-
-// demoChannels are the main channels of the stations in the listings (or,
-// without listings, in the FCC's records) as generated test patterns.
-func (s *Service) demoChannels() []tvh.DemoChannel {
-	s.mu.Lock()
-	rep, g := s.report, s.guide
-	s.mu.Unlock()
-	ffmpeg := cmp.Or(s.opt.DemoFFmpeg, "/usr/bin/ffmpeg")
-	seen := make(map[int]bool)
-	var out []tvh.DemoChannel
-	add := func(major int, name string) {
-		if major <= 0 || seen[major] {
-			return
-		}
-		seen[major] = true
-		// Tvheadend splits the command on spaces, so one word.
-		if f := strings.Fields(name); len(f) > 0 {
-			name = f[0]
-		} else {
-			name = "CH" + strconv.Itoa(major)
-		}
-		out = append(out, tvh.DemoChannel{
-			Major: major, Minor: 1, Name: name,
-			Command: tuner.DemoCommand(ffmpeg, fmt.Sprintf("%d.1", major), name),
-		})
-	}
-	if g != nil {
-		for _, c := range g.Channels {
-			if major, minor := guide.SplitNumber(c.Number); minor == 1 {
-				add(major, guide.BaseCall(c.CallSign))
-			}
-		}
-	}
-	if len(out) == 0 && rep != nil {
-		for _, st := range rep.Stations {
-			add(st.VirtualChannel, st.BaseCall)
-		}
-	}
-	return out
 }

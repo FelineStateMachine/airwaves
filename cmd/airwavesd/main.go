@@ -1,8 +1,8 @@
-// Command airwavesd runs the Airwaves engine on a home server: lineup,
-// reception and guide, live TV and recordings through Tvheadend, served to
-// the desktop app over HTTP. With AIRWAVES_ANTENNA=off it serves the custom
+// Command airwavesd runs the Airwaves engine on a home server: the lineup,
+// reception and guide, live TV and recordings from an HDHomeRun, served to
+// the TV app over HTTP. With AIRWAVES_ANTENNA=off it serves the custom
 // channels only (Jellyfin, YouTube, folders of videos and the weather), with
-// no antenna or Tvheadend; see docs/self-hosting.md.
+// no antenna or tuner; see docs/self-hosting.md.
 package main
 
 import (
@@ -28,7 +28,6 @@ import (
 	"airwaves/internal/api"
 	"airwaves/internal/hdhr"
 	"airwaves/internal/service"
-	"airwaves/internal/tvh"
 	"airwaves/internal/vchan"
 	"airwaves/internal/web"
 )
@@ -50,16 +49,15 @@ func run() error {
 	host, _ := os.Hostname()
 	listen := flag.String("listen", env("AIRWAVES_LISTEN", ":"+strconv.Itoa(api.DefaultPort)), "HTTP listen address")
 	data := flag.String("data", env("AIRWAVES_DATA", "/data"), "directory for config, caches and DVR rules")
-	antenna := flag.String("antenna", os.Getenv("AIRWAVES_ANTENNA"), "on (the default): the over-the-air lineup, guide, tuners and recording through Tvheadend; off: custom channels only")
-	tvhURL := flag.String("tvheadend", env("AIRWAVES_TVHEADEND", "http://tvheadend:9981"), "Tvheadend base URL; empty disables tuners and recording")
+	antenna := flag.String("antenna", os.Getenv("AIRWAVES_ANTENNA"), "on (the default): the over-the-air lineup, guide, HDHomeRun and recording; off: custom channels only")
+	tunerAddr := flag.String("hdhomerun", os.Getenv("AIRWAVES_HDHOMERUN"), "the HDHomeRun's address or device ID; empty finds it on the network")
+	recordings := flag.String("recordings", os.Getenv("AIRWAVES_RECORDINGS"), "folder for recordings (default <data>/recordings)")
 	// Location is deployment configuration; clients never see or change it.
 	zip := flag.String("zip", os.Getenv("AIRWAVES_ZIP"), "US ZIP code of the antenna, for its lineup and listings (required with an antenna); without an antenna, of the weather (default none)")
 	lat := flag.Float64("lat", envFloat("AIRWAVES_LAT"), "antenna latitude; with -lon, overrides the ZIP centroid")
 	lon := flag.Float64("lon", envFloat("AIRWAVES_LON"), "antenna longitude")
 	name := flag.String("name", env("AIRWAVES_NAME", host), "server name shown in the app")
 	token := flag.String("token", env("AIRWAVES_TOKEN", ""), "optional bearer token for the API")
-	demo := flag.Bool("demo", env("AIRWAVES_DEMO", "false") == "true", "for development: give Tvheadend generated test-pattern channels until a tuner is attached (never once one has been)")
-	demoFFmpeg := flag.String("demo-ffmpeg", env("AIRWAVES_DEMO_FFMPEG", "/usr/bin/ffmpeg"), "ffmpeg path inside the Tvheadend container")
 	weatherStar := flag.Int("weatherstar-port", int(envFloat("AIRWAVES_WEATHERSTAR_PORT")), "host port of a WeatherStar 4000+ container; 0 disables the WX channel")
 	weatherStarURL := flag.String("weatherstar-url", os.Getenv("AIRWAVES_WEATHERSTAR_URL"), "where airwavesd reaches the WeatherStar display, when not at 127.0.0.1 on -weatherstar-port (http://weatherstar:8080 for a container of its own)")
 	chromium := flag.String("chromium", env("AIRWAVES_CHROMIUM", findChromium()), "Chromium for rendering the weather channel; empty disables it")
@@ -95,6 +93,14 @@ func run() error {
 	if err := writable(*data); err != nil {
 		return err
 	}
+	if *recordings == "" {
+		*recordings = filepath.Join(*data, "recordings")
+	}
+	if feat.antenna {
+		if err := writable(*recordings); err != nil {
+			return err
+		}
+	}
 	if *channels != "" {
 		if err := writable(*channels); err != nil {
 			log.Printf("channels: %v; the admin page can't save channels", err)
@@ -115,9 +121,10 @@ func run() error {
 		ConfigPath:      filepath.Join(*data, "config.json"),
 		Config:          service.Config{ZIP: *zip, GuideHours: 48},
 		DVRPath:         filepath.Join(*data, "dvr.json"),
+		RecordingsDir:   *recordings,
 		SignalPath:      filepath.Join(*data, "signal.json"),
-		Demo:            *demo,
-		DemoFFmpeg:      *demoFFmpeg,
+		HDHomeRun:       *tunerAddr,
+		SkipDeviceID:    hdhr.DeviceIDFor(*name),
 		NoAntenna:       !feat.antenna,
 		WeatherStarPort: *weatherStar,
 		WeatherStarURL:  *weatherStarURL,
@@ -127,9 +134,6 @@ func run() error {
 		YtDlp:           yt,
 		Loudness:        loudness,
 		Progress:        func(s string) { log.Print(s) },
-	}
-	if feat.antenna && *tvhURL != "" {
-		opt.Tvheadend = tvh.New(*tvhURL, web.NewClient())
 	}
 	svc, err := service.New(opt)
 	if err != nil {
@@ -166,10 +170,11 @@ func run() error {
 	}()
 	log.Printf("airwavesd %s listening on %s", service.Version, *listen)
 	if feat.antenna {
-		log.Printf("antenna: on, Tvheadend %q; signal measurements in %s", *tvhURL, opt.SignalPath)
-		if *demo {
-			log.Print("demo channels: on until a tuner is found (AIRWAVES_DEMO=true)")
+		where := "found on the network"
+		if *tunerAddr != "" {
+			where = "at " + *tunerAddr
 		}
+		log.Printf("antenna: on, the HDHomeRun %s; recordings in %s; signal measurements in %s", where, *recordings, opt.SignalPath)
 	} else {
 		log.Print("antenna: off, custom channels only")
 	}
@@ -296,7 +301,7 @@ func startHDHR(ctx context.Context, svc *service.Service, addr, name string, dis
 
 // features are what this server does.
 type features struct {
-	antenna   bool // the over-the-air lineup, guide and Tvheadend
+	antenna   bool // the over-the-air lineup, guide, tuner and recording
 	hdhr      bool // the emulated HDHomeRun
 	discovery bool // answering HDHomeRun discovery on the LAN
 }

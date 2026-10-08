@@ -1,11 +1,11 @@
 // Package signal keeps what the tuners measured on each multiplex (each RF
-// channel): Tvheadend's scan results, and readings of signal strength and
-// quality taken while a tuner was on it. Nothing here is estimated: a
-// value is there because a tuner reported it, and is null otherwise.
+// channel): readings of signal strength and quality taken while a tuner
+// was on it. Nothing here is estimated: a value is there because a tuner
+// reported it, and is null otherwise.
 //
-// Readings come from Tvheadend's input status. An HDHomeRun reports
-// strength and signal quality (its SNQ) as percentages, so their dB fields
-// stay null; tuners that report decibels fill those in instead.
+// The HDHomeRun reports strength, signal-to-noise quality and symbol
+// quality as percentages; whether data arrived, and the damage in it,
+// Airwaves sees for itself.
 package signal
 
 import (
@@ -21,13 +21,13 @@ import (
 	"sync"
 	"time"
 
-	"airwaves/internal/tvh"
+	"airwaves/internal/tuner"
 )
 
 // Sources of readings.
 const (
 	// Active readings are taken while something had a tuner on the
-	// multiplex: a viewer, a recording, or Tvheadend's own guide scan.
+	// multiplex: a viewer or a recording.
 	Active = "active"
 	// Sweep readings are taken by Measure now, on an idle tuner.
 	Sweep = "sweep"
@@ -39,118 +39,48 @@ type Reading struct {
 	Source string    `json:"source"` // Active or Sweep
 	// Lock is whether data arrived: the tuner locked to the signal.
 	Lock bool `json:"lock"`
-	// StrengthPct is signal strength on the tuner's relative scale, 0 to
-	// 100; StrengthDBm is set instead by tuners that report dBm.
+	// StrengthPct is signal strength, QualityPct the signal-to-noise
+	// quality and SymbolPct the share of symbols received whole or
+	// corrected over the last second, all as the tuner reports them, 0
+	// to 100.
 	StrengthPct *float64 `json:"strengthPct"`
-	StrengthDBm *float64 `json:"strengthDbm"`
-	// QualityPct is the signal-to-noise quality on the tuner's relative
-	// scale (an HDHomeRun's SNQ); SNRdB is set instead by tuners that
-	// report the ratio in dB.
-	QualityPct *float64 `json:"qualityPct"`
-	SNRdB      *float64 `json:"snrDb"`
-	// BER is the bit error ratio, and UNC the uncorrected blocks, from
-	// tuners that count them.
-	BER *float64 `json:"ber"`
-	UNC *int64   `json:"unc"`
+	QualityPct  *float64 `json:"qualityPct"`
+	SymbolPct   *float64 `json:"symbolPct"`
 	// ErrorsPerSec is the rate of transport and continuity errors in what
 	// arrived since the reading before, on the same tuning: a picture
 	// breaking up. Null for a first reading.
 	ErrorsPerSec *float64 `json:"errorsPerSec"`
 }
 
-// FromInput reads an input's status as Tvheadend reports it, with the
-// subscriptions now. Whether the tuner holds a lock is first what its
-// subscriptions say: "Running" once data has arrived, "Testing" while none
-// has. The input's data rate says less: it reads 0 now and then on an
-// input with little to send, and can show the last tuning's for a moment;
-// it decides only for an input with no subscription listed. Then a tuner
-// that reports quality on the relative scale (an HDHomeRun) has none, 0,
-// exactly while its demodulator has no lock (its own status page reads
-// "Modulation Lock none, Signal Quality none" then), even while a
-// subscription that had data still reads "Running".
-func FromInput(in tvh.InputStatus, subs []tvh.Subscription, at time.Time, source string) Reading {
-	r := Reading{At: at.UTC().Truncate(time.Second), Source: source, Lock: in.BPS > 0}
-	if mux, net, ok := in.Mux(); ok {
-		listed, running := false, false
-		for _, sub := range subs {
-			if sub.On(in.Input, net, mux) {
-				listed, running = true, running || sub.Running()
-			}
+// FromTuner reads a tuner as it is now: whether data arrives, and what
+// the HDHomeRun measures of the signal.
+func FromTuner(t tuner.State, at time.Time, source string) Reading {
+	pct := func(v *int) *float64 {
+		if v == nil {
+			return nil
 		}
-		if listed {
-			r.Lock = running
-		}
+		return ptr(float64(*v))
 	}
-	if in.SNRScale == tvh.ScaleRelative && in.SNR == 0 {
-		r.Lock = false
+	return Reading{
+		At: at.UTC().Truncate(time.Second), Source: source, Lock: t.Locked,
+		StrengthPct: pct(t.Device.StrengthPct), QualityPct: pct(t.Device.QualityPct), SymbolPct: pct(t.Device.SymbolPct),
 	}
-	switch in.SignalScale {
-	case tvh.ScaleRelative:
-		r.StrengthPct = ptr(round1(float64(in.Signal) * 100 / 65535))
-	case tvh.ScaleDecibel:
-		r.StrengthDBm = ptr(round1(float64(in.Signal) / 1000))
-	}
-	switch in.SNRScale {
-	case tvh.ScaleRelative:
-		r.QualityPct = ptr(round1(float64(in.SNR) * 100 / 65535))
-	case tvh.ScaleDecibel:
-		r.SNRdB = ptr(round1(float64(in.SNR) / 1000))
-	}
-	// A driver's own BER and UNC counters read 0 when it has none, so only
-	// a count Tvheadend made, or one above zero, says anything.
-	if in.TCBit > 0 {
-		r.BER = ptr(float64(in.ECBit) / float64(in.TCBit))
-	}
-	switch {
-	case in.TCBlock > 0:
-		r.UNC = ptr(in.ECBlock)
-	case in.UNC > 0:
-		r.UNC = ptr(in.UNC)
-	}
-	return r
 }
 
-// SetErrors sets the error rate from the input's status at an earlier
+// SetErrors sets the error rate from the tuner's state at an earlier
 // reading of the same tuning, secs before.
-func (r *Reading) SetErrors(prev, now tvh.InputStatus, secs float64) {
+func (r *Reading) SetErrors(prev, now tuner.State, secs float64) {
 	r.ErrorsPerSec = nil
-	was, is := prev.TE+prev.CC, now.TE+now.CC
-	if secs <= 0 || is < was || prev.Stream != now.Stream || prev.Input != now.Input {
+	same := prev.Number == now.Number && prev.FrequencyHz == now.FrequencyHz && prev.Since.Equal(now.Since)
+	if secs <= 0 || !same || now.Errors < prev.Errors {
 		return
 	}
-	r.ErrorsPerSec = ptr(round1(float64(is-was) / secs))
+	r.ErrorsPerSec = ptr(round1(float64(now.Errors-prev.Errors) / secs))
 }
 
 func ptr[T any](v T) *T { return &v }
 
 func round1(v float64) float64 { return math.Round(v*10) / 10 }
-
-// Scan is how Tvheadend's last scan of a multiplex went.
-type Scan struct {
-	// Lock is whether the scan found the multiplex and its services.
-	Lock bool `json:"lock"`
-	// Partial is set when it locked but missed some of the tables.
-	Partial bool `json:"partial,omitempty"`
-	// At is when the scan found it, from Tvheadend; for a scan that found
-	// nothing, which Tvheadend doesn't date, when Airwaves first saw that.
-	At time.Time `json:"at"`
-}
-
-// ScanOf turns a multiplex's scan result into a Scan; ok is false while
-// it has none. seen is when the result was read.
-func ScanOf(m tvh.Mux, seen time.Time) (Scan, bool) {
-	switch m.ScanResult {
-	case tvh.ScanOK, tvh.ScanPartial:
-		at := seen
-		if m.ScanLast > 0 {
-			at = time.Unix(m.ScanLast, 0)
-		}
-		return Scan{Lock: true, Partial: m.ScanResult == tvh.ScanPartial, At: at.UTC()}, true
-	case tvh.ScanFail:
-		return Scan{At: seen.UTC().Truncate(time.Second)}, true
-	}
-	return Scan{}, false
-}
 
 // Stat is the spread of one quantity over readings.
 type Stat struct {
@@ -194,9 +124,8 @@ type Window struct {
 	Samples     int       `json:"samples"`
 	Locked      int       `json:"locked"`
 	StrengthPct *Stat     `json:"strengthPct,omitempty"`
-	StrengthDBm *Stat     `json:"strengthDbm,omitempty"`
 	QualityPct  *Stat     `json:"qualityPct,omitempty"`
-	SNRdB       *Stat     `json:"snrDb,omitempty"`
+	SymbolPct   *Stat     `json:"symbolPct,omitempty"`
 }
 
 func (w *Window) add(r Reading) {
@@ -206,9 +135,8 @@ func (w *Window) add(r Reading) {
 		w.Locked++
 	}
 	w.StrengthPct = w.StrengthPct.add(r.StrengthPct)
-	w.StrengthDBm = w.StrengthDBm.add(r.StrengthDBm)
 	w.QualityPct = w.QualityPct.add(r.QualityPct)
-	w.SNRdB = w.SNRdB.add(r.SNRdB)
+	w.SymbolPct = w.SymbolPct.add(r.SymbolPct)
 }
 
 // Limits of the history kept per multiplex.
@@ -225,7 +153,6 @@ const (
 type Mux struct {
 	FrequencyHz int64    `json:"frequencyHz"`
 	RF          int      `json:"rf"`
-	Scan        *Scan    `json:"scan,omitempty"`
 	Latest      *Reading `json:"latest,omitempty"`
 	Windows     []Window `json:"windows,omitempty"`
 }
@@ -271,14 +198,13 @@ type Period struct {
 	// LockedPct is the share of readings with a lock.
 	LockedPct   float64 `json:"lockedPct"`
 	StrengthPct *Range  `json:"strengthPct"`
-	StrengthDBm *Range  `json:"strengthDbm"`
 	QualityPct  *Range  `json:"qualityPct"`
-	SNRdB       *Range  `json:"snrDb"`
+	SymbolPct   *Range  `json:"symbolPct"`
 }
 
 func period(w Window) Period {
 	p := Period{From: w.From, To: w.To, Source: w.Source, Samples: w.Samples,
-		StrengthPct: w.StrengthPct.rng(), StrengthDBm: w.StrengthDBm.rng(), QualityPct: w.QualityPct.rng(), SNRdB: w.SNRdB.rng()}
+		StrengthPct: w.StrengthPct.rng(), QualityPct: w.QualityPct.rng(), SymbolPct: w.SymbolPct.rng()}
 	if w.Samples > 0 {
 		p.LockedPct = round1(float64(w.Locked) * 100 / float64(w.Samples))
 	}
@@ -320,9 +246,8 @@ func (m *Mux) History() *History {
 		all.Samples += w.Samples
 		all.Locked += w.Locked
 		all.StrengthPct = merge(all.StrengthPct, w.StrengthPct)
-		all.StrengthDBm = merge(all.StrengthDBm, w.StrengthDBm)
 		all.QualityPct = merge(all.QualityPct, w.QualityPct)
-		all.SNRdB = merge(all.SNRdB, w.SNRdB)
+		all.SymbolPct = merge(all.SymbolPct, w.SymbolPct)
 		h.Windows = append(h.Windows, period(w))
 	}
 	h.Period = period(all)
@@ -397,22 +322,6 @@ func (s *Store) Record(freq int64, rf int, r Reading) {
 	s.dirty = true
 }
 
-// SetScan notes a scan result. A result that hasn't changed keeps its
-// date, so a failed scan stays dated from when it was first seen.
-func (s *Store) SetScan(freq int64, rf int, sc Scan) {
-	if freq <= 0 {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	m := s.mux(freq, rf)
-	if old := m.Scan; old != nil && old.Lock == sc.Lock && old.Partial == sc.Partial && (!sc.Lock || !sc.At.After(old.At)) {
-		return
-	}
-	m.Scan = &sc
-	s.dirty = true
-}
-
 // Get returns a copy of what was measured at freq; ok is false when
 // nothing was.
 func (s *Store) Get(freq int64) (Mux, bool) {
@@ -439,10 +348,6 @@ func (s *Store) All() []Mux {
 
 func clone(m *Mux) Mux {
 	c := *m
-	if m.Scan != nil {
-		sc := *m.Scan
-		c.Scan = &sc
-	}
 	if m.Latest != nil {
 		r := *m.Latest
 		c.Latest = &r
@@ -450,7 +355,7 @@ func clone(m *Mux) Mux {
 	c.Windows = make([]Window, len(m.Windows))
 	for i, w := range m.Windows {
 		c.Windows[i] = w
-		for _, p := range []**Stat{&c.Windows[i].StrengthPct, &c.Windows[i].StrengthDBm, &c.Windows[i].QualityPct, &c.Windows[i].SNRdB} {
+		for _, p := range []**Stat{&c.Windows[i].StrengthPct, &c.Windows[i].QualityPct, &c.Windows[i].SymbolPct} {
 			if *p != nil {
 				st := **p
 				*p = &st
@@ -522,6 +427,22 @@ func writeAtomic(path string, raw []byte) error {
 		return err
 	}
 	return os.Rename(tmp.Name(), path)
+}
+
+// Frequency is the center frequency (Hz) of US broadcast RF channel rf,
+// 0 for one that isn't.
+func Frequency(rf int) int64 {
+	switch {
+	case rf >= 2 && rf <= 4:
+		return int64(57+6*(rf-2)) * 1e6
+	case rf >= 5 && rf <= 6:
+		return int64(79+6*(rf-5)) * 1e6
+	case rf >= 7 && rf <= 13:
+		return int64(177+6*(rf-7)) * 1e6
+	case rf >= 14 && rf <= 36:
+		return int64(473+6*(rf-14)) * 1e6
+	}
+	return 0
 }
 
 // RF is the US broadcast RF channel centered on freq (Hz), 0 when freq

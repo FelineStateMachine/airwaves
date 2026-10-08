@@ -24,7 +24,7 @@ const appName = "airwaves"
 var errNoServer = errors.New("no Airwaves server set")
 
 // App is the desktop remote for an airwavesd server, which owns the tuner
-// (an HDHomeRun through Tvheadend), the lineup, the guide and recordings.
+// (an HDHomeRun), the lineup, the guide and recordings.
 type App struct {
 	ctx context.Context
 
@@ -206,6 +206,15 @@ func (a *App) Measure() (*service.SweepStatus, error) {
 	return c.Measure(a.ctx)
 }
 
+// ScanChannels has the server's tuner scan for channels again.
+func (a *App) ScanChannels() (service.TunerInfo, error) {
+	c, _, err := a.server()
+	if err != nil {
+		return service.TunerInfo{}, err
+	}
+	return c.ScanChannels(a.ctx)
+}
+
 // Weather returns the local weather report from the server.
 func (a *App) Weather() (*weather.Report, error) {
 	c, _, err := a.server()
@@ -281,6 +290,25 @@ func (a *App) DeleteRecording(id string) error {
 		return err
 	}
 	return c.DeleteRecording(a.ctx, id)
+}
+
+// StopRecording ends a recording in progress early, keeping it.
+func (a *App) StopRecording(id string) error {
+	c, _, err := a.server()
+	if err != nil {
+		return err
+	}
+	return c.StopRecording(a.ctx, id)
+}
+
+// ExtendRecording makes a recording in progress run minutes longer, and
+// says until when.
+func (a *App) ExtendRecording(id string, minutes int) (time.Time, error) {
+	c, _, err := a.server()
+	if err != nil {
+		return time.Time{}, err
+	}
+	return c.ExtendRecording(a.ctx, id, minutes)
 }
 
 // PlayRecording streams a recording from about from seconds in.

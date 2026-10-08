@@ -127,6 +127,24 @@ func (c *Client) DeleteRecording(ctx context.Context, id string) error {
 	return c.call(ctx, http.MethodDelete, "/api/dvr/recordings/"+url.PathEscape(id), nil, nil)
 }
 
+// StopRecording implements Backend.
+func (c *Client) StopRecording(ctx context.Context, id string) error {
+	return c.call(ctx, http.MethodPost, "/api/dvr/recordings/"+url.PathEscape(id)+"/stop", struct{}{}, nil)
+}
+
+// ExtendRecording implements Backend.
+func (c *Client) ExtendRecording(ctx context.Context, id string, minutes int) (time.Time, error) {
+	var out extendReq
+	err := c.call(ctx, http.MethodPost, "/api/dvr/recordings/"+url.PathEscape(id)+"/extend", extendReq{Minutes: minutes}, &out)
+	return out.Until, err
+}
+
+// ScanChannels implements Backend.
+func (c *Client) ScanChannels(ctx context.Context) (service.TunerInfo, error) {
+	var out service.TunerInfo
+	return out, c.call(ctx, http.MethodPost, "/api/tuner/scan", struct{}{}, &out)
+}
+
 // PlayRecording implements Backend.
 func (c *Client) PlayRecording(ctx context.Context, client, id string, from float64) (*stream.Playback, error) {
 	var pb stream.Playback

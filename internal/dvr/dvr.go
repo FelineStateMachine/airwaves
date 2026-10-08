@@ -1,8 +1,8 @@
-// Package dvr turns recording rules into timed Tvheadend recordings.
-//
-// Airwaves owns the rules and the guide (Gracenote, with series IDs and
-// "new episode" flags); Tvheadend owns the tuners and writes the files.
-// Reconcile keeps Tvheadend's schedule matching the rules.
+// Package dvr records over-the-air TV. The user's rules (one airing, or a
+// series by Gracenote series ID on one channel) pick airings from the
+// guide; Airwaves records them itself, on the tuners it shares with
+// viewers, where a recording comes first. Recordings are files in the
+// recordings folder, described in the same state file as the rules.
 package dvr
 
 import (
@@ -13,7 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
+	"log"
 	"os"
 	"path/filepath"
 	"slices"
@@ -24,7 +24,7 @@ import (
 
 	"airwaves/internal/guide"
 	"airwaves/internal/lineup"
-	"airwaves/internal/tvh"
+	"airwaves/internal/tuner"
 )
 
 // Kind is the type of rule.
@@ -34,6 +34,28 @@ type Kind string
 const (
 	Once   Kind = "once"
 	Series Kind = "series"
+)
+
+// Statuses of a recording, as Item shows them.
+const (
+	// Scheduled is an airing a rule wants that hasn't started.
+	Scheduled = "scheduled"
+	// Conflict is one that won't get a tuner: others record from every
+	// tuner then.
+	Conflict = "conflict"
+	// Unavailable is one on a channel the tuner doesn't have.
+	Unavailable = "unavailable"
+	Recording   = "recording"
+	Completed   = "completed"
+	Failed      = "failed"
+)
+
+// Padding around an airing: a minute early, three late, and half an hour
+// late for sports, which overrun.
+const (
+	early      = time.Minute
+	late       = 3 * time.Minute
+	lateSports = 30 * time.Minute
 )
 
 // Request asks to record an airing picked in the guide.
@@ -74,9 +96,42 @@ type Rule struct {
 	Keep int `json:"keep,omitempty"`
 }
 
+// Rec is a recording Airwaves made or is making: an airing, and the file
+// it went to.
+type Rec struct {
+	ID          string `json:"id"`
+	Key         string `json:"key"` // the airing's, "7.1@1791058239"
+	RuleID      string `json:"ruleId,omitempty"`
+	Title       string `json:"title"`
+	Subtitle    string `json:"subtitle,omitempty"`
+	Description string `json:"description,omitempty"`
+	Image       string `json:"image,omitempty"`
+	ProgramID   string `json:"programId,omitempty"`
+	Channel     string `json:"channel"`
+	CallSign    string `json:"callSign,omitempty"`
+	// Start and End are the airing's; From and Until what is recorded,
+	// with padding. Until moves when the recording is extended or stopped.
+	Start time.Time `json:"start"`
+	End   time.Time `json:"end"`
+	From  time.Time `json:"from"`
+	Until time.Time `json:"until"`
+	// File is where it is, in the recordings folder.
+	File   string `json:"file"`
+	Status string `json:"status"` // Recording, Completed or Failed
+	// Detail says what's missing or what went wrong.
+	Detail string `json:"detail,omitempty"`
+	// Began and Ended are when data first and last arrived; Covered how
+	// much of the time between them was recorded.
+	Began   time.Time     `json:"began,omitzero"`
+	Ended   time.Time     `json:"ended,omitzero"`
+	Covered time.Duration `json:"covered,omitempty"`
+	Size    int64         `json:"size,omitempty"`
+}
+
 // Item is a recording as shown to the user.
 type Item struct {
-	ID          string    `json:"id"` // Tvheadend entry UUID; empty if not scheduled
+	// ID is a recording's own; for an airing not started, its key.
+	ID          string    `json:"id"`
 	Key         string    `json:"key"`
 	RuleID      string    `json:"ruleId,omitempty"`
 	Title       string    `json:"title"`
@@ -87,12 +142,16 @@ type Item struct {
 	CallSign    string    `json:"callSign,omitempty"`
 	Start       time.Time `json:"start"`
 	End         time.Time `json:"end"`
-	// Status is scheduled, recording, completed, failed or unavailable.
-	Status    string `json:"status"`
-	Detail    string `json:"detail,omitempty"`
-	SizeBytes int64  `json:"sizeBytes,omitempty"`
-	// Duration of the recorded file, Position the resume point and Watched
-	// whether it has been seen, all for finished recordings.
+	// Status is Scheduled, Conflict, Unavailable, Recording, Completed
+	// or Failed.
+	Status string `json:"status"`
+	Detail string `json:"detail,omitempty"`
+	// Until is when a recording in progress stops: the airing's end with
+	// its padding, later when extended.
+	Until     time.Time `json:"until,omitzero"`
+	SizeBytes int64     `json:"sizeBytes,omitempty"`
+	// Duration of what's recorded so far, Position the resume point and
+	// Watched whether it has been seen.
 	Duration float64 `json:"duration,omitempty"`
 	Position float64 `json:"position,omitempty"`
 	Watched  bool    `json:"watched,omitempty"`
@@ -122,53 +181,58 @@ type State struct {
 	Prefs     Prefs  `json:"prefs"`
 }
 
-// meta remembers guide details of an airing Airwaves scheduled, for
-// artwork and episode de-duplication after the guide has moved on.
-type meta struct {
-	RuleID    string `json:"ruleId"`
-	Channel   string `json:"channel"`
-	CallSign  string `json:"callSign"`
-	Image     string `json:"image,omitempty"`
-	ProgramID string `json:"programId,omitempty"`
-}
-
 type fileState struct {
-	Rules    []Rule              `json:"rules"`
-	Meta     map[string]meta     `json:"meta"`
-	Progress map[string]Progress `json:"progress"` // by Tvheadend entry UUID
-	Prefs    Prefs               `json:"prefs"`
+	Rules      []Rule              `json:"rules"`
+	Recordings []Rec               `json:"recordings"`
+	Progress   map[string]Progress `json:"progress"` // by recording ID
+	Prefs      Prefs               `json:"prefs"`
 }
 
-// ChannelResolver maps a virtual channel to a Tvheadend channel UUID.
-type ChannelResolver interface {
-	ChannelUUID(ctx context.Context, number string) (string, error)
+// Tuners is where recordings get their tuner.
+type Tuners interface {
+	Open(ctx context.Context, r tuner.Request) (*tuner.Sub, error)
+	Count() int
 }
 
-// Manager owns the rules.
+// Locate finds where a channel is broadcast: its RF channel and program.
+type Locate func(ctx context.Context, number string) (freqHz int64, program int, err error)
+
+// Listings supplies the guide and the tuner's channels, for the rules.
+type Listings func(ctx context.Context) (*guide.Guide, []lineup.Channel, error)
+
+// Manager owns the rules and the recordings.
 type Manager struct {
-	tvh      *tvh.Client
-	channels ChannelResolver
-	path     string
+	path   string
+	dir    string
+	tuners Tuners
+	locate Locate
 
-	mu sync.Mutex
-	st fileState
+	ctx    context.Context // until Close, for the recordings
+	cancel context.CancelCauseFunc
+
+	mu   sync.Mutex
+	st   fileState
+	jobs map[string]*job // recordings in progress, by ID
 }
 
-// Open loads rules from path (created on first save).
-func Open(path string, c *tvh.Client, channels ChannelResolver) (*Manager, error) {
-	m := &Manager{tvh: c, channels: channels, path: path, st: fileState{Meta: map[string]meta{}, Progress: map[string]Progress{}}}
+// Open loads the rules and recordings kept at path (created on first
+// save), recording into dir. A file that can't be read is set aside, as
+// path.bad, and the DVR starts empty rather than not at all.
+func Open(path, dir string, tuners Tuners, locate Locate) (*Manager, error) {
+	m := &Manager{path: path, dir: dir, tuners: tuners, locate: locate, jobs: map[string]*job{},
+		st: fileState{Progress: map[string]Progress{}}}
+	m.ctx, m.cancel = context.WithCancelCause(context.Background())
 	raw, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return m, nil
-	}
-	if err != nil {
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+	case err != nil:
 		return nil, err
-	}
-	if err := json.Unmarshal(raw, &m.st); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
-	}
-	if m.st.Meta == nil {
-		m.st.Meta = map[string]meta{}
+	default:
+		if err := json.Unmarshal(raw, &m.st); err != nil {
+			log.Printf("recordings: %s can't be read (%v); set aside as %s.bad, starting empty", path, err, path)
+			_ = os.Rename(path, path+".bad")
+			m.st = fileState{}
+		}
 	}
 	if m.st.Progress == nil {
 		m.st.Progress = map[string]Progress{}
@@ -176,6 +240,7 @@ func Open(path string, c *tvh.Client, channels ChannelResolver) (*Manager, error
 	return m, nil
 }
 
+// save writes the state. Called with m.mu held.
 func (m *Manager) save() error {
 	raw, err := json.MarshalIndent(m.st, "", "  ")
 	if err != nil {
@@ -184,14 +249,35 @@ func (m *Manager) save() error {
 	if err := os.MkdirAll(filepath.Dir(m.path), 0o755); err != nil {
 		return err
 	}
-	tmp := m.path + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o644); err != nil {
+	f, err := os.CreateTemp(filepath.Dir(m.path), filepath.Base(m.path)+".*")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, m.path)
+	_, err = f.Write(raw)
+	if err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(f.Name(), m.path)
+	}
+	if err != nil {
+		os.Remove(f.Name())
+	}
+	return err
 }
 
-// Add creates a rule from a guide selection and schedules it.
+// saveLogged saves, logging a failure. Called with m.mu held.
+func (m *Manager) saveLogged() {
+	if err := m.save(); err != nil {
+		log.Printf("recordings: %v", err)
+	}
+}
+
+// Add creates a rule from a guide selection. An airing that's on now
+// starts recording at once.
 func (m *Manager) Add(ctx context.Context, req Request, g *guide.Guide, chans []lineup.Channel) (*Rule, error) {
 	ch := findChannel(chans, req.Channel, req.CallSign)
 	if ch == nil || ch.GuideID == "" || g == nil {
@@ -238,11 +324,12 @@ func (m *Manager) Add(ctx context.Context, req Request, g *guide.Guide, chans []
 	if err != nil {
 		return nil, err
 	}
-	return &r, m.Reconcile(ctx, g, chans)
+	m.Start(g, chans, time.Now())
+	return &r, nil
 }
 
-// DeleteRule removes a rule and any of its recordings that have not started.
-func (m *Manager) DeleteRule(ctx context.Context, id string) error {
+// DeleteRule removes a rule. Its recordings in progress carry on.
+func (m *Manager) DeleteRule(_ context.Context, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	i := slices.IndexFunc(m.st.Rules, func(r Rule) bool { return r.ID == id })
@@ -250,53 +337,64 @@ func (m *Manager) DeleteRule(ctx context.Context, id string) error {
 		return fmt.Errorf("no rule %s", id)
 	}
 	m.st.Rules = slices.Delete(m.st.Rules, i, i+1)
-	if err := m.save(); err != nil {
-		return err
-	}
-	upcoming, err := m.tvh.Upcoming(ctx)
-	if err != nil {
-		return err
-	}
-	for _, e := range upcoming {
-		if rule, _, ok := parseComment(e.Comment); ok && rule == id && e.SchedStatus == "scheduled" {
-			if err := m.tvh.DeleteScheduled(ctx, e.UUID); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	return m.save()
 }
 
-// DeleteEntry removes one recording: a scheduled airing is skipped (and
-// stays skipped for series rules), an active one is cancelled, a finished
-// one is deleted with its file.
-func (m *Manager) DeleteEntry(ctx context.Context, uuid string) error {
+// DeleteEntry removes one recording, by its ID or, for an airing not
+// started, its key: an airing to come is skipped (a once rule for it
+// goes), one recording now is stopped and discarded, and a finished one
+// is deleted with its file. A series never records an airing deleted
+// from it again.
+func (m *Manager) DeleteEntry(_ context.Context, id string) error {
+	m.mu.Lock()
+	i := slices.IndexFunc(m.st.Recordings, func(r Rec) bool { return r.ID == id })
+	if i < 0 {
+		// An airing to come.
+		defer m.mu.Unlock()
+		m.skip(id)
+		return m.save()
+	}
+	rec := m.st.Recordings[i]
+	j := m.jobs[id]
+	m.mu.Unlock()
+	if j != nil {
+		j.cancel(errDiscard)
+		<-j.done
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	upcoming, err := m.tvh.Upcoming(ctx)
-	if err != nil {
-		return err
+	m.skip(rec.Key)
+	m.remove(rec.ID)
+	return m.save()
+}
+
+// skip keeps the airing key from being recorded: a once rule for it goes,
+// and series rules on its channel skip it. Called with m.mu held.
+func (m *Manager) skip(key string) {
+	channel, _, _ := strings.Cut(key, "@")
+	m.st.Rules = slices.DeleteFunc(m.st.Rules, func(r Rule) bool { return r.Kind == Once && airingKey(r.Channel, r.Start) == key })
+	for i := range m.st.Rules {
+		if r := &m.st.Rules[i]; r.Kind == Series && r.Channel == channel && !slices.Contains(r.Skip, key) {
+			r.Skip = append(r.Skip, key)
+		}
 	}
-	for _, e := range upcoming {
-		if e.UUID != uuid {
-			continue
-		}
-		if rule, key, ok := parseComment(e.Comment); ok {
-			for i := range m.st.Rules {
-				if m.st.Rules[i].ID == rule {
-					m.st.Rules[i].Skip = append(m.st.Rules[i].Skip, key)
-				}
-			}
-			if err := m.save(); err != nil {
-				return err
-			}
-		}
-		if e.SchedStatus == "recording" {
-			return m.tvh.Cancel(ctx, uuid)
-		}
-		return m.tvh.DeleteScheduled(ctx, uuid)
+}
+
+// remove deletes a finished recording and its file. Called with m.mu held.
+func (m *Manager) remove(id string) {
+	i := slices.IndexFunc(m.st.Recordings, func(r Rec) bool { return r.ID == id })
+	if i < 0 {
+		return
 	}
-	return m.tvh.Remove(ctx, uuid)
+	if f := m.st.Recordings[i].File; f != "" {
+		path := filepath.Join(m.dir, f)
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			log.Printf("recordings: %v", err)
+		}
+		_ = os.Remove(filepath.Dir(path)) // the show's folder, once empty
+	}
+	m.st.Recordings = slices.Delete(m.st.Recordings, i, i+1)
+	delete(m.st.Progress, id)
 }
 
 type airing struct {
@@ -306,75 +404,19 @@ type airing struct {
 	ch   lineup.Channel
 }
 
-// Reconcile schedules what the rules want and unschedules what they no
-// longer want. Safe to call often.
-func (m *Manager) Reconcile(ctx context.Context, g *guide.Guide, chans []lineup.Channel) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	now := time.Now()
-
-	upcoming, err := m.tvh.Upcoming(ctx)
-	if err != nil {
-		return err
+// window is what's recorded of the airing: from a minute before it to a
+// few minutes after, half an hour for sports.
+func (a airing) window() (from, until time.Time) {
+	after := late
+	if slices.Contains(a.p.Genres, "sports") {
+		after = lateSports
 	}
-	finished, err := m.tvh.Finished(ctx)
-	if err != nil {
-		return err
-	}
-	scheduled := make(map[string]tvh.Entry)
-	for _, e := range upcoming {
-		if _, key, ok := parseComment(e.Comment); ok {
-			scheduled[key] = e
-		}
-	}
-	recordedPrograms := make(map[string]bool)
-	for _, e := range finished {
-		if _, key, ok := parseComment(e.Comment); ok && e.ErrorCode == 0 {
-			if id := m.st.Meta[key].ProgramID; episodeID(id) {
-				recordedPrograms[id] = true
-			}
-		}
-	}
-
-	// Once rules whose airing is over are done; Tvheadend keeps the file.
-	m.st.Rules = slices.DeleteFunc(m.st.Rules, func(r Rule) bool { return r.Kind == Once && r.End.Before(now) })
-
-	want := m.desired(g, chans, now, recordedPrograms)
-	wantKeys := make(map[string]bool, len(want))
-	for _, a := range want {
-		wantKeys[a.key] = true
-		if _, ok := scheduled[a.key]; ok {
-			continue
-		}
-		uuid, err := m.channels.ChannelUUID(ctx, a.ch.Number)
-		if err != nil {
-			continue // shown as unavailable in State
-		}
-		stopExtra := 3
-		if slices.Contains(a.p.Genres, "sports") {
-			stopExtra = 30 // live sports overrun
-		}
-		_, err = m.tvh.CreateEntry(ctx, tvh.NewEntry{
-			Channel: uuid, Start: a.p.Start.Unix(), Stop: a.p.End.Unix(),
-			Title: a.p.Title, Subtitle: a.p.EpisodeTitle, Description: a.p.Description,
-			Comment: comment(a.rule.ID, a.key), StartExtra: 1, StopExtra: stopExtra,
-		})
-		if err != nil {
-			return err
-		}
-		m.st.Meta[a.key] = meta{RuleID: a.rule.ID, Channel: a.ch.Number, CallSign: a.ch.CallSign, Image: a.p.Image, ProgramID: a.p.ProgramID}
-	}
-	for key, e := range scheduled {
-		if !wantKeys[key] && e.SchedStatus == "scheduled" {
-			if err := m.tvh.DeleteScheduled(ctx, e.UUID); err != nil {
-				return err
-			}
-		}
-	}
-	return m.save()
+	return a.p.Start.Add(-early), a.p.End.Add(after)
 }
 
-// desired lists the airings the rules call for, earliest first.
+// desired lists the airings the rules call for that haven't ended,
+// earliest first. recorded holds the episodes already recorded.
+// Called with m.mu held.
 func (m *Manager) desired(g *guide.Guide, chans []lineup.Channel, now time.Time, recorded map[string]bool) []airing {
 	var out []airing
 	seen := make(map[string]bool) // episode IDs already claimed
@@ -389,9 +431,9 @@ func (m *Manager) desired(g *guide.Guide, chans []lineup.Channel, now time.Time,
 			if r.Sports {
 				p.Genres = []string{"sports"}
 			}
-			ch := lineup.Channel{Number: r.Channel, CallSign: r.CallSign, GuideID: r.GuideID}
-			if key := airingKey(r.Channel, r.Start); !slices.Contains(r.Skip, key) {
-				out = append(out, airing{key: key, rule: r, p: p, ch: ch})
+			a := airing{key: airingKey(r.Channel, r.Start), rule: r, p: p, ch: lineup.Channel{Number: r.Channel, CallSign: r.CallSign, GuideID: r.GuideID}}
+			if _, until := a.window(); until.After(now) && !slices.Contains(r.Skip, a.key) {
+				out = append(out, a)
 			}
 		case Series:
 			if g == nil {
@@ -420,127 +462,182 @@ func (m *Manager) desired(g *guide.Guide, chans []lineup.Channel, now time.Time,
 			}
 		}
 	}
-	slices.SortFunc(out, func(a, b airing) int { return a.p.Start.Compare(b.p.Start) })
+	slices.SortStableFunc(out, func(a, b airing) int { return a.p.Start.Compare(b.p.Start) })
 	return out
+}
+
+// recorded lists the episodes recorded, or being recorded, by program ID.
+// Called with m.mu held.
+func (m *Manager) recorded() map[string]bool {
+	out := map[string]bool{}
+	for _, r := range m.st.Recordings {
+		if r.Status != Failed && episodeID(r.ProgramID) {
+			out[r.ProgramID] = true
+		}
+	}
+	return out
+}
+
+// has reports whether the airing key has a recording, made or being made.
+// Called with m.mu held.
+func (m *Manager) has(key string) bool {
+	return slices.ContainsFunc(m.st.Recordings, func(r Rec) bool { return r.Key == key })
 }
 
 // State describes rules, schedule and library for the UI.
 func (m *Manager) State(ctx context.Context, g *guide.Guide, chans []lineup.Channel) (*State, error) {
-	if _, err := m.tvh.ServerInfo(ctx); err != nil {
-		return &State{Reason: "Tvheadend is not reachable: " + err.Error()}, nil
-	}
-	upcoming, err := m.tvh.Upcoming(ctx)
-	if err != nil {
-		return nil, err
-	}
-	finished, err := m.tvh.Finished(ctx)
-	if err != nil {
-		return nil, err
-	}
-	failed, err := m.tvh.Failed(ctx)
-	if err != nil {
-		return nil, err
-	}
-
+	now := time.Now()
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	st := &State{Available: true, Rules: slices.Clone(m.st.Rules), Prefs: m.st.Prefs}
-	scheduledKeys := make(map[string]bool)
-	for _, e := range upcoming {
-		it := m.item(e)
-		scheduledKeys[it.Key] = true
-		st.Upcoming = append(st.Upcoming, it)
-	}
-	// Airings the rules want but Tvheadend cannot tune yet.
-	for _, a := range m.desired(g, chans, time.Now(), nil) {
-		if scheduledKeys[a.key] {
-			continue
+	st := &State{Available: true, Rules: slices.Clone(m.st.Rules), Prefs: m.st.Prefs, Upcoming: []Item{}, Recorded: []Item{}}
+	want := m.desired(g, chans, now, m.recorded())
+	var active []Rec
+	for _, r := range m.st.Recordings {
+		if r.Status == Recording {
+			active = append(active, r)
+			st.Upcoming = append(st.Upcoming, m.item(r, now))
+		} else {
+			st.Recorded = append(st.Recorded, m.item(r, now))
 		}
+	}
+	var todo []airing
+	for _, a := range want {
+		if !m.has(a.key) {
+			todo = append(todo, a)
+		}
+	}
+	m.mu.Unlock()
+
+	for _, p := range m.plan(ctx, active, todo) {
+		a := p.airing
 		st.Upcoming = append(st.Upcoming, Item{
-			Key: a.key, RuleID: a.rule.ID, Title: a.p.Title, Subtitle: a.p.EpisodeTitle,
+			ID: a.key, Key: a.key, RuleID: a.rule.ID, Title: a.p.Title, Subtitle: a.p.EpisodeTitle,
 			Description: a.p.Description, Image: a.p.Image, Channel: a.ch.Number, CallSign: a.ch.CallSign,
-			Start: a.p.Start, End: a.p.End, Status: "unavailable",
-			Detail: "Channel " + a.ch.Number + " is not tuned on the server",
+			Start: a.p.Start, End: a.p.End, Status: p.status, Detail: p.detail,
 		})
 	}
-	for _, e := range finished {
-		st.Recorded = append(st.Recorded, m.item(e))
-	}
-	for _, e := range failed {
-		it := m.item(e)
-		it.Status = "failed"
-		st.Recorded = append(st.Recorded, it)
-	}
-	slices.SortFunc(st.Upcoming, func(a, b Item) int { return a.Start.Compare(b.Start) })
-	slices.SortFunc(st.Recorded, func(a, b Item) int { return b.Start.Compare(a.Start) })
+	slices.SortStableFunc(st.Upcoming, func(a, b Item) int { return a.Start.Compare(b.Start) })
+	slices.SortStableFunc(st.Recorded, func(a, b Item) int { return b.Start.Compare(a.Start) })
 	return st, nil
 }
 
-func (m *Manager) item(e tvh.Entry) Item {
-	it := Item{
-		ID: e.UUID, Title: e.Title, Subtitle: e.Subtitle, Description: e.Description,
-		Channel: e.ChannelName, Start: time.Unix(e.Start, 0), End: time.Unix(e.Stop, 0),
-		Status: e.SchedStatus, Detail: e.Status, SizeBytes: e.FileSize, Duration: fileDuration(e),
+// planned is an airing to come and whether it will get a tuner.
+type planned struct {
+	airing
+	status, detail string
+}
+
+// plan says which airings to come will get a tuner: each RF channel
+// takes one, whatever is recorded from it, and earlier airings (then
+// older rules) come first. Recordings in progress hold theirs.
+func (m *Manager) plan(ctx context.Context, active []Rec, todo []airing) []planned {
+	type slot struct {
+		from, until time.Time
+		freq        int64
+		title       string
 	}
-	if p, ok := m.st.Progress[e.UUID]; ok {
-		it.Position, it.Watched = p.Position, p.Watched
-	}
-	if strings.HasPrefix(it.Status, "completed") {
-		it.Status = "completed"
-	}
-	if rule, key, ok := parseComment(e.Comment); ok {
-		md := m.st.Meta[key]
-		it.Key, it.RuleID, it.Image = key, rule, md.Image
-		if md.Channel != "" {
-			it.Channel, it.CallSign = md.Channel, md.CallSign
+	tuners := m.tuners.Count()
+	var taken []slot
+	for _, r := range active {
+		if freq, _, err := m.locate(ctx, r.Channel); err == nil {
+			taken = append(taken, slot{r.From, r.Until, freq, r.Title})
 		}
+	}
+	out := make([]planned, 0, len(todo))
+	for _, a := range todo {
+		p := planned{airing: a, status: Scheduled}
+		freq, _, err := m.locate(ctx, a.ch.Number)
+		if err != nil {
+			p.status, p.detail = Unavailable, err.Error()
+			out = append(out, p)
+			continue
+		}
+		from, until := a.window()
+		// The moments the tuners in use could change within the window.
+		moments := []time.Time{from}
+		for _, s := range taken {
+			if s.from.After(from) && s.from.Before(until) {
+				moments = append(moments, s.from)
+			}
+		}
+		for _, t := range moments {
+			freqs := map[int64]bool{}
+			var titles []string
+			for _, s := range taken {
+				if !s.from.After(t) && s.until.After(t) {
+					freqs[s.freq] = true
+					titles = append(titles, s.title)
+				}
+			}
+			if !freqs[freq] && len(freqs) >= tuners {
+				p.status = Conflict
+				slices.Sort(titles)
+				p.detail = "Every tuner is recording then: " + strings.Join(slices.Compact(titles), ", ")
+				break
+			}
+		}
+		if p.status == Scheduled {
+			taken = append(taken, slot{from, until, freq, a.p.Title})
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// item shows a recording. Called with m.mu held.
+func (m *Manager) item(r Rec, now time.Time) Item {
+	it := Item{
+		ID: r.ID, Key: r.Key, RuleID: r.RuleID, Title: r.Title, Subtitle: r.Subtitle, Description: r.Description,
+		Image: r.Image, Channel: r.Channel, CallSign: r.CallSign, Start: r.Start, End: r.End,
+		Status: r.Status, Detail: r.Detail, SizeBytes: r.Size, Duration: r.Duration(now).Seconds(),
+	}
+	if r.Status == Recording {
+		it.Until = r.Until
+		if j := m.jobs[r.ID]; j != nil {
+			it.SizeBytes, it.Detail = j.size(), cmp.Or(j.problem(), r.Detail)
+		}
+	}
+	if p, ok := m.st.Progress[r.ID]; ok {
+		it.Position, it.Watched = p.Position, p.Watched
 	}
 	return it
 }
 
-// Prune drops metadata for recordings that no longer exist.
-func (m *Manager) Prune(ctx context.Context) error {
-	upcoming, err := m.tvh.Upcoming(ctx)
-	if err != nil {
-		return err
+// Duration is how long the recording runs: from its first data to its
+// last, or to now while it records.
+func (r Rec) Duration(now time.Time) time.Duration {
+	switch {
+	case r.Began.IsZero():
+		return 0
+	case r.Status == Recording:
+		return now.Sub(r.Began)
+	case r.Ended.After(r.Began):
+		return r.Ended.Sub(r.Began)
 	}
-	finished, err := m.tvh.Finished(ctx)
-	if err != nil {
-		return err
-	}
-	failed, err := m.tvh.Failed(ctx)
-	if err != nil {
-		return err
-	}
-	live := make(map[string]bool)
-	liveIDs := make(map[string]bool)
-	for _, e := range slices.Concat(upcoming, finished, failed) {
-		liveIDs[e.UUID] = true
-		if _, key, ok := parseComment(e.Comment); ok {
-			live[key] = true
-		}
-	}
+	return 0
+}
+
+// Get returns a recording and the path of its file.
+func (m *Manager) Get(id string) (Rec, string, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for key := range m.st.Meta {
-		if !live[key] {
-			delete(m.st.Meta, key)
+	for _, r := range m.st.Recordings {
+		if r.ID == id {
+			return r, filepath.Join(m.dir, r.File), true
 		}
 	}
+	return Rec{}, "", false
+}
+
+// Prune drops watch progress of recordings that no longer exist.
+func (m *Manager) Prune(context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	for id := range m.st.Progress {
-		if !liveIDs[id] {
+		if !slices.ContainsFunc(m.st.Recordings, func(r Rec) bool { return r.ID == id }) {
 			delete(m.st.Progress, id)
 		}
 	}
 	return m.save()
-}
-
-// fileDuration is how long the recorded file runs, padding included.
-func fileDuration(e tvh.Entry) float64 {
-	if e.StopReal > e.StartReal && e.StartReal > 0 {
-		return float64(e.StopReal - e.StartReal)
-	}
-	return float64(e.Stop - e.Start)
 }
 
 // SaveProgress records how far a recording has been watched. Reaching the
@@ -603,12 +700,9 @@ func (m *Manager) SetPrefs(p Prefs) (Prefs, error) {
 
 // Retain deletes recordings beyond a series' Keep count (oldest first) and
 // watched recordings older than the library's limit.
-func (m *Manager) Retain(ctx context.Context) error {
-	finished, err := m.tvh.Finished(ctx)
-	if err != nil {
-		return err
-	}
+func (m *Manager) Retain(context.Context) error {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	keep := make(map[string]int)
 	for _, r := range m.st.Rules {
 		if r.Kind == Series && r.Keep > 0 {
@@ -616,43 +710,28 @@ func (m *Manager) Retain(ctx context.Context) error {
 		}
 	}
 	days := m.st.Prefs.DeleteWatchedAfterDays
-	progress := maps.Clone(m.st.Progress)
-	m.mu.Unlock()
-
-	slices.SortFunc(finished, func(a, b tvh.Entry) int { return cmp.Compare(b.Start, a.Start) })
+	done := slices.DeleteFunc(slices.Clone(m.st.Recordings), func(r Rec) bool { return r.Status == Recording })
+	slices.SortFunc(done, func(a, b Rec) int { return b.Start.Compare(a.Start) })
 	var remove []string
 	seen := make(map[string]int)
-	for _, e := range finished {
-		if rule, _, ok := parseComment(e.Comment); ok && keep[rule] > 0 {
-			seen[rule]++
-			if seen[rule] > keep[rule] {
-				remove = append(remove, e.UUID)
+	for _, r := range done {
+		if keep[r.RuleID] > 0 {
+			if seen[r.RuleID]++; seen[r.RuleID] > keep[r.RuleID] {
+				remove = append(remove, r.ID)
 				continue
 			}
 		}
-		if p := progress[e.UUID]; days > 0 && p.Watched && time.Since(time.Unix(e.Stop, 0)) > time.Duration(days)*24*time.Hour {
-			remove = append(remove, e.UUID)
+		if p := m.st.Progress[r.ID]; days > 0 && p.Watched && time.Since(r.End) > time.Duration(days)*24*time.Hour {
+			remove = append(remove, r.ID)
 		}
+	}
+	if len(remove) == 0 {
+		return nil
 	}
 	for _, id := range remove {
-		if err := m.tvh.Remove(ctx, id); err != nil {
-			return err
-		}
+		m.remove(id)
 	}
-	return nil
-}
-
-const commentPrefix = "airwaves|"
-
-func comment(ruleID, key string) string { return commentPrefix + ruleID + "|" + key }
-
-func parseComment(c string) (rule, key string, ok bool) {
-	rest, ok := strings.CutPrefix(c, commentPrefix)
-	if !ok {
-		return "", "", false
-	}
-	rule, key, ok = strings.Cut(rest, "|")
-	return rule, key, ok
+	return m.save()
 }
 
 // AiringKey identifies an airing: "7.1@1791058239".
