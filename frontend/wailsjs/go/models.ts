@@ -81,12 +81,11 @@ export namespace dvr {
 	    image?: string;
 	    channel: string;
 	    callSign?: string;
-	    // Go type: time
-	    start: any;
-	    // Go type: time
-	    end: any;
+	    start: time.Time;
+	    end: time.Time;
 	    status: string;
 	    detail?: string;
+	    until: time.Time;
 	    sizeBytes?: number;
 	    duration?: number;
 	    position?: number;
@@ -107,10 +106,11 @@ export namespace dvr {
 	        this.image = source["image"];
 	        this.channel = source["channel"];
 	        this.callSign = source["callSign"];
-	        this.start = this.convertValues(source["start"], null);
-	        this.end = this.convertValues(source["end"], null);
+	        this.start = this.convertValues(source["start"], time.Time);
+	        this.end = this.convertValues(source["end"], time.Time);
 	        this.status = source["status"];
 	        this.detail = source["detail"];
+	        this.until = this.convertValues(source["until"], time.Time);
 	        this.sizeBytes = source["sizeBytes"];
 	        this.duration = source["duration"];
 	        this.position = source["position"];
@@ -151,8 +151,7 @@ export namespace dvr {
 	    kind: string;
 	    channel: string;
 	    callSign: string;
-	    // Go type: time
-	    start: any;
+	    start: time.Time;
 	    newOnly: boolean;
 	
 	    static createFrom(source: any = {}) {
@@ -164,7 +163,7 @@ export namespace dvr {
 	        this.kind = source["kind"];
 	        this.channel = source["channel"];
 	        this.callSign = source["callSign"];
-	        this.start = this.convertValues(source["start"], null);
+	        this.start = this.convertValues(source["start"], time.Time);
 	        this.newOnly = source["newOnly"];
 	    }
 	
@@ -196,12 +195,9 @@ export namespace dvr {
 	    seriesId?: string;
 	    newOnly?: boolean;
 	    image?: string;
-	    // Go type: time
-	    created: any;
-	    // Go type: time
-	    start: any;
-	    // Go type: time
-	    end: any;
+	    created: time.Time;
+	    start: time.Time;
+	    end: time.Time;
 	    subtitle?: string;
 	    description?: string;
 	    programId?: string;
@@ -224,9 +220,9 @@ export namespace dvr {
 	        this.seriesId = source["seriesId"];
 	        this.newOnly = source["newOnly"];
 	        this.image = source["image"];
-	        this.created = this.convertValues(source["created"], null);
-	        this.start = this.convertValues(source["start"], null);
-	        this.end = this.convertValues(source["end"], null);
+	        this.created = this.convertValues(source["created"], time.Time);
+	        this.start = this.convertValues(source["start"], time.Time);
+	        this.end = this.convertValues(source["end"], time.Time);
 	        this.subtitle = source["subtitle"];
 	        this.description = source["description"];
 	        this.programId = source["programId"];
@@ -389,12 +385,9 @@ export namespace guide {
 	}
 	export class Guide {
 	    lineup: string;
-	    // Go type: time
-	    start: any;
-	    // Go type: time
-	    end: any;
-	    // Go type: time
-	    fetched: any;
+	    start: time.Time;
+	    end: time.Time;
+	    fetched: time.Time;
 	    channels: Channel[];
 	    programs: Record<string, Array<Program>>;
 	
@@ -405,9 +398,9 @@ export namespace guide {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.lineup = source["lineup"];
-	        this.start = this.convertValues(source["start"], null);
-	        this.end = this.convertValues(source["end"], null);
-	        this.fetched = this.convertValues(source["fetched"], null);
+	        this.start = this.convertValues(source["start"], time.Time);
+	        this.end = this.convertValues(source["end"], time.Time);
+	        this.fetched = this.convertValues(source["fetched"], time.Time);
 	        this.channels = this.convertValues(source["channels"], Channel);
 	        this.programs = this.convertValues(source["programs"], Array<Program>, true);
 	    }
@@ -431,10 +424,8 @@ export namespace guide {
 		}
 	}
 	export class Program {
-	    // Go type: time
-	    start: any;
-	    // Go type: time
-	    end: any;
+	    start: time.Time;
+	    end: time.Time;
 	    title: string;
 	    episodeTitle?: string;
 	    description?: string;
@@ -456,8 +447,8 @@ export namespace guide {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.start = this.convertValues(source["start"], null);
-	        this.end = this.convertValues(source["end"], null);
+	        this.start = this.convertValues(source["start"], time.Time);
+	        this.end = this.convertValues(source["end"], time.Time);
 	        this.title = source["title"];
 	        this.episodeTitle = source["episodeTitle"];
 	        this.description = source["description"];
@@ -607,7 +598,7 @@ export namespace lineup {
 	    distanceKm: number;
 	    bearingDeg: number;
 	    band: string;
-	    signal: Record<string, reception.Estimate>;
+	    signal?: Record<string, reception.Estimate>;
 	    atsc3: boolean;
 	    carries: string[];
 	
@@ -660,12 +651,11 @@ export namespace lineup {
 		}
 	}
 	export class Report {
-	    // Go type: time
-	    generated: any;
+	    generated: time.Time;
 	    place: geo.Place;
 	    point: geo.Point;
 	    radiusKm: number;
-	    presets: reception.Preset[];
+	    presets?: reception.Preset[];
 	    stations: Station[];
 	    channels: Channel[];
 	    atsc3: atsc3.Host[];
@@ -678,7 +668,7 @@ export namespace lineup {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.generated = this.convertValues(source["generated"], null);
+	        this.generated = this.convertValues(source["generated"], time.Time);
 	        this.place = this.convertValues(source["place"], geo.Place);
 	        this.point = this.convertValues(source["point"], geo.Point);
 	        this.radiusKm = source["radiusKm"];
@@ -716,7 +706,6 @@ export namespace main {
 	
 	export class Boot {
 	    settings: store.Settings;
-	    presets: reception.Preset[];
 	    info: service.Info;
 	    config: service.Config;
 	    error?: string;
@@ -734,7 +723,6 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.settings = this.convertValues(source["settings"], store.Settings);
-	        this.presets = this.convertValues(source["presets"], reception.Preset);
 	        this.info = this.convertValues(source["info"], service.Info);
 	        this.config = this.convertValues(source["config"], service.Config);
 	        this.error = source["error"];
@@ -763,6 +751,25 @@ export namespace main {
 		    }
 		    return a;
 		}
+	}
+
+}
+
+export namespace phase {
+	
+	export class Mark {
+	    name: string;
+	    ms: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new Mark(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.ms = source["ms"];
+	    }
 	}
 
 }
@@ -820,6 +827,290 @@ export namespace reception {
 
 export namespace service {
 	
+	export class SweepStatus {
+	    running: boolean;
+	    startedAt?: time.Time;
+	    finishedAt?: time.Time;
+	    total: number;
+	    found: number;
+	    done: number;
+	    rf?: number;
+	    note?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SweepStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.running = source["running"];
+	        this.startedAt = this.convertValues(source["startedAt"], time.Time);
+	        this.finishedAt = this.convertValues(source["finishedAt"], time.Time);
+	        this.total = source["total"];
+	        this.found = source["found"];
+	        this.done = source["done"];
+	        this.rf = source["rf"];
+	        this.note = source["note"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class MuxStation {
+	    facilityId: number;
+	    callSign: string;
+	    virtualChannel: number;
+	    service: string;
+	    city: string;
+	    state: string;
+	    distanceKm: number;
+	    bearingDeg: number;
+	    erpKw: number;
+	    haatM: number;
+	    atsc3: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new MuxStation(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.facilityId = source["facilityId"];
+	        this.callSign = source["callSign"];
+	        this.virtualChannel = source["virtualChannel"];
+	        this.service = source["service"];
+	        this.city = source["city"];
+	        this.state = source["state"];
+	        this.distanceKm = source["distanceKm"];
+	        this.bearingDeg = source["bearingDeg"];
+	        this.erpKw = source["erpKw"];
+	        this.haatM = source["haatM"];
+	        this.atsc3 = source["atsc3"];
+	    }
+	}
+	export class MuxSignal {
+	    rf: number;
+	    frequencyMhz: number;
+	    band: string;
+	    tuned: boolean;
+	    channels: string[];
+	    stations: MuxStation[];
+	    signal?: signal.Reading;
+	    history?: signal.History;
+	
+	    static createFrom(source: any = {}) {
+	        return new MuxSignal(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.rf = source["rf"];
+	        this.frequencyMhz = source["frequencyMhz"];
+	        this.band = source["band"];
+	        this.tuned = source["tuned"];
+	        this.channels = source["channels"];
+	        this.stations = this.convertValues(source["stations"], MuxStation);
+	        this.signal = this.convertValues(source["signal"], signal.Reading);
+	        this.history = this.convertValues(source["history"], signal.History);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class AntennaChannel {
+	    number: string;
+	    major: number;
+	    minor: number;
+	    name: string;
+	    callSign: string;
+	    baseCall: string;
+	    guideId?: string;
+	    guideCallSign?: string;
+	    network: string;
+	    logo?: string;
+	    rf: number;
+	    facilityId: number;
+	    transmitter?: string;
+	    via?: string;
+	    // Go type: lineup
+	    atsc3?: any;
+	    signal?: signal.Reading;
+	    recent?: signal.Period;
+	
+	    static createFrom(source: any = {}) {
+	        return new AntennaChannel(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.number = source["number"];
+	        this.major = source["major"];
+	        this.minor = source["minor"];
+	        this.name = source["name"];
+	        this.callSign = source["callSign"];
+	        this.baseCall = source["baseCall"];
+	        this.guideId = source["guideId"];
+	        this.guideCallSign = source["guideCallSign"];
+	        this.network = source["network"];
+	        this.logo = source["logo"];
+	        this.rf = source["rf"];
+	        this.facilityId = source["facilityId"];
+	        this.transmitter = source["transmitter"];
+	        this.via = source["via"];
+	        this.atsc3 = this.convertValues(source["atsc3"], null);
+	        this.signal = this.convertValues(source["signal"], signal.Reading);
+	        this.recent = this.convertValues(source["recent"], signal.Period);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class TunerInfo {
+	    ready: boolean;
+	    reason?: string;
+	    name?: string;
+	    model?: string;
+	    tuners: number;
+	    inUse: number;
+	    standards: string[];
+	    atsc3: boolean;
+	    scanning: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new TunerInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ready = source["ready"];
+	        this.reason = source["reason"];
+	        this.name = source["name"];
+	        this.model = source["model"];
+	        this.tuners = source["tuners"];
+	        this.inUse = source["inUse"];
+	        this.standards = source["standards"];
+	        this.atsc3 = source["atsc3"];
+	        this.scanning = source["scanning"];
+	    }
+	}
+	export class Antenna {
+	    tuner: TunerInfo;
+	    channels: AntennaChannel[];
+	    muxes: MuxSignal[];
+	    sweep: SweepStatus;
+	
+	    static createFrom(source: any = {}) {
+	        return new Antenna(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.tuner = this.convertValues(source["tuner"], TunerInfo);
+	        this.channels = this.convertValues(source["channels"], AntennaChannel);
+	        this.muxes = this.convertValues(source["muxes"], MuxSignal);
+	        this.sweep = this.convertValues(source["sweep"], SweepStatus);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	export class ChannelSignal {
+	    number: string;
+	    rf: number;
+	    signal?: signal.Reading;
+	    recent?: signal.Period;
+	
+	    static createFrom(source: any = {}) {
+	        return new ChannelSignal(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.number = source["number"];
+	        this.rf = source["rf"];
+	        this.signal = this.convertValues(source["signal"], signal.Reading);
+	        this.recent = this.convertValues(source["recent"], signal.Period);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class Config {
 	    zip: string;
 	    lat: number;
@@ -928,26 +1219,24 @@ export namespace service {
 		    return a;
 		}
 	}
-	export class PathProfile {
-	    distanceKm: number;
-	    elevations: number[];
-	    rxGroundM: number;
-	    txHeightM: number;
-	    presets: reception.Preset[];
-	    signal: Record<string, reception.Estimate>;
+	
+	
+	export class SignalReport {
+	    tuner: TunerInfo;
+	    channels: ChannelSignal[];
+	    muxes: MuxSignal[];
+	    sweep: SweepStatus;
 	
 	    static createFrom(source: any = {}) {
-	        return new PathProfile(source);
+	        return new SignalReport(source);
 	    }
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.distanceKm = source["distanceKm"];
-	        this.elevations = source["elevations"];
-	        this.rxGroundM = source["rxGroundM"];
-	        this.txHeightM = source["txHeightM"];
-	        this.presets = this.convertValues(source["presets"], reception.Preset);
-	        this.signal = this.convertValues(source["signal"], reception.Estimate, true);
+	        this.tuner = this.convertValues(source["tuner"], TunerInfo);
+	        this.channels = this.convertValues(source["channels"], ChannelSignal);
+	        this.muxes = this.convertValues(source["muxes"], MuxSignal);
+	        this.sweep = this.convertValues(source["sweep"], SweepStatus);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -972,6 +1261,7 @@ export namespace service {
 	    report?: lineup.Report;
 	    guide?: guide.Guide;
 	    custom: CustomChannel[];
+	    antenna?: Antenna;
 	
 	    static createFrom(source: any = {}) {
 	        return new Snapshot(source);
@@ -982,6 +1272,163 @@ export namespace service {
 	        this.report = this.convertValues(source["report"], lineup.Report);
 	        this.guide = this.convertValues(source["guide"], guide.Guide);
 	        this.custom = this.convertValues(source["custom"], CustomChannel);
+	        this.antenna = this.convertValues(source["antenna"], Antenna);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+
+}
+
+export namespace signal {
+	
+	export class Period {
+	    from: time.Time;
+	    to: time.Time;
+	    source?: string;
+	    samples: number;
+	    lockedPct: number;
+	    strengthPct?: Range;
+	    qualityPct?: Range;
+	    symbolPct?: Range;
+	
+	    static createFrom(source: any = {}) {
+	        return new Period(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.from = this.convertValues(source["from"], time.Time);
+	        this.to = this.convertValues(source["to"], time.Time);
+	        this.source = source["source"];
+	        this.samples = source["samples"];
+	        this.lockedPct = source["lockedPct"];
+	        this.strengthPct = this.convertValues(source["strengthPct"], Range);
+	        this.qualityPct = this.convertValues(source["qualityPct"], Range);
+	        this.symbolPct = this.convertValues(source["symbolPct"], Range);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Range {
+	    min: number;
+	    avg: number;
+	    max: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new Range(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.min = source["min"];
+	        this.avg = source["avg"];
+	        this.max = source["max"];
+	    }
+	}
+	export class History {
+	    from: time.Time;
+	    to: time.Time;
+	    source?: string;
+	    samples: number;
+	    lockedPct: number;
+	    strengthPct?: Range;
+	    qualityPct?: Range;
+	    symbolPct?: Range;
+	    windows: Period[];
+	
+	    static createFrom(source: any = {}) {
+	        return new History(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.from = this.convertValues(source["from"], time.Time);
+	        this.to = this.convertValues(source["to"], time.Time);
+	        this.source = source["source"];
+	        this.samples = source["samples"];
+	        this.lockedPct = source["lockedPct"];
+	        this.strengthPct = this.convertValues(source["strengthPct"], Range);
+	        this.qualityPct = this.convertValues(source["qualityPct"], Range);
+	        this.symbolPct = this.convertValues(source["symbolPct"], Range);
+	        this.windows = this.convertValues(source["windows"], Period);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	
+	export class Reading {
+	    at: time.Time;
+	    source: string;
+	    lock: boolean;
+	    strengthPct?: number;
+	    qualityPct?: number;
+	    symbolPct?: number;
+	    errorsPerSec?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new Reading(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.at = this.convertValues(source["at"], time.Time);
+	        this.source = source["source"];
+	        this.lock = source["lock"];
+	        this.strengthPct = source["strengthPct"];
+	        this.qualityPct = source["qualityPct"];
+	        this.symbolPct = source["symbolPct"];
+	        this.errorsPerSec = source["errorsPerSec"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -1011,8 +1458,6 @@ export namespace store {
 	    server: string;
 	    token: string;
 	    clientId: string;
-	    antenna: string;
-	    showAll: boolean;
 	    lastChannel: string;
 	    favorites?: string[];
 	    hidden?: string[];
@@ -1029,8 +1474,6 @@ export namespace store {
 	        this.server = source["server"];
 	        this.token = source["token"];
 	        this.clientId = source["clientId"];
-	        this.antenna = source["antenna"];
-	        this.showAll = source["showAll"];
 	        this.lastChannel = source["lastChannel"];
 	        this.favorites = source["favorites"];
 	        this.hidden = source["hidden"];
@@ -1050,6 +1493,7 @@ export namespace stream {
 	    path: string;
 	    note?: string;
 	    offset?: number;
+	    timing?: phase.Mark[];
 	
 	    static createFrom(source: any = {}) {
 	        return new Playback(source);
@@ -1062,6 +1506,42 @@ export namespace stream {
 	        this.path = source["path"];
 	        this.note = source["note"];
 	        this.offset = source["offset"];
+	        this.timing = this.convertValues(source["timing"], phase.Mark);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+}
+
+export namespace time {
+	
+	export class Time {
+	
+	
+	    static createFrom(source: any = {}) {
+	        return new Time(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	
 	    }
 	}
 
@@ -1074,9 +1554,10 @@ export namespace tuner {
 	    name: string;
 	    kind: string;
 	    model?: string;
-	    baseUrl?: string;
 	    tuners?: number;
 	    detail?: string;
+	    standards?: string[];
+	    atsc3: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new Device(source);
@@ -1088,9 +1569,10 @@ export namespace tuner {
 	        this.name = source["name"];
 	        this.kind = source["kind"];
 	        this.model = source["model"];
-	        this.baseUrl = source["baseUrl"];
 	        this.tuners = source["tuners"];
 	        this.detail = source["detail"];
+	        this.standards = source["standards"];
+	        this.atsc3 = source["atsc3"];
 	    }
 	}
 
@@ -1121,10 +1603,8 @@ export namespace weather {
 	    headline: string;
 	    severity: string;
 	    urgency: string;
-	    // Go type: time
-	    onset: any;
-	    // Go type: time
-	    ends: any;
+	    onset: time.Time;
+	    ends: time.Time;
 	    description: string;
 	    instruction: string;
 	
@@ -1138,8 +1618,8 @@ export namespace weather {
 	        this.headline = source["headline"];
 	        this.severity = source["severity"];
 	        this.urgency = source["urgency"];
-	        this.onset = this.convertValues(source["onset"], null);
-	        this.ends = this.convertValues(source["ends"], null);
+	        this.onset = this.convertValues(source["onset"], time.Time);
+	        this.ends = this.convertValues(source["ends"], time.Time);
 	        this.description = source["description"];
 	        this.instruction = source["instruction"];
 	    }
@@ -1163,8 +1643,7 @@ export namespace weather {
 		}
 	}
 	export class Hour {
-	    // Go type: time
-	    start: any;
+	    start: time.Time;
 	    tempF: number;
 	    precip: number;
 	    short: string;
@@ -1177,7 +1656,7 @@ export namespace weather {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.start = this.convertValues(source["start"], null);
+	        this.start = this.convertValues(source["start"], time.Time);
 	        this.tempF = source["tempF"];
 	        this.precip = source["precip"];
 	        this.short = source["short"];
@@ -1205,8 +1684,7 @@ export namespace weather {
 	}
 	export class Now {
 	    station: string;
-	    // Go type: time
-	    observed: any;
+	    observed: time.Time;
 	    description: string;
 	    tempF?: number;
 	    feelsLikeF?: number;
@@ -1225,7 +1703,7 @@ export namespace weather {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.station = source["station"];
-	        this.observed = this.convertValues(source["observed"], null);
+	        this.observed = this.convertValues(source["observed"], time.Time);
 	        this.description = source["description"];
 	        this.tempF = source["tempF"];
 	        this.feelsLikeF = source["feelsLikeF"];
@@ -1258,8 +1736,7 @@ export namespace weather {
 	}
 	export class Period {
 	    name: string;
-	    // Go type: time
-	    start: any;
+	    start: time.Time;
 	    isDay: boolean;
 	    tempF: number;
 	    short: string;
@@ -1274,7 +1751,7 @@ export namespace weather {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
-	        this.start = this.convertValues(source["start"], null);
+	        this.start = this.convertValues(source["start"], time.Time);
 	        this.isDay = source["isDay"];
 	        this.tempF = source["tempF"];
 	        this.short = source["short"];
@@ -1302,10 +1779,8 @@ export namespace weather {
 		}
 	}
 	export class Sun {
-	    // Go type: time
-	    rise: any;
-	    // Go type: time
-	    set: any;
+	    rise: time.Time;
+	    set: time.Time;
 	
 	    static createFrom(source: any = {}) {
 	        return new Sun(source);
@@ -1313,8 +1788,8 @@ export namespace weather {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.rise = this.convertValues(source["rise"], null);
-	        this.set = this.convertValues(source["set"], null);
+	        this.rise = this.convertValues(source["rise"], time.Time);
+	        this.set = this.convertValues(source["set"], time.Time);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -1336,8 +1811,7 @@ export namespace weather {
 		}
 	}
 	export class Report {
-	    // Go type: time
-	    updated: any;
+	    updated: time.Time;
 	    now?: Now;
 	    periods: Period[];
 	    hourly: Hour[];
@@ -1354,7 +1828,7 @@ export namespace weather {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.updated = this.convertValues(source["updated"], null);
+	        this.updated = this.convertValues(source["updated"], time.Time);
 	        this.now = this.convertValues(source["now"], Now);
 	        this.periods = this.convertValues(source["periods"], Period);
 	        this.hourly = this.convertValues(source["hourly"], Hour);

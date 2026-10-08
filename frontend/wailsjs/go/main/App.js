@@ -22,6 +22,10 @@ export function DeleteRule(arg1) {
   return window['go']['main']['App']['DeleteRule'](arg1);
 }
 
+export function ExtendRecording(arg1, arg2) {
+  return window['go']['main']['App']['ExtendRecording'](arg1, arg2);
+}
+
 export function Log(arg1, arg2) {
   return window['go']['main']['App']['Log'](arg1, arg2);
 }
@@ -30,20 +34,16 @@ export function MarkWatched(arg1, arg2) {
   return window['go']['main']['App']['MarkWatched'](arg1, arg2);
 }
 
+export function Measure() {
+  return window['go']['main']['App']['Measure']();
+}
+
 export function OpenURL(arg1) {
   return window['go']['main']['App']['OpenURL'](arg1);
 }
 
 export function PlayRecording(arg1, arg2) {
   return window['go']['main']['App']['PlayRecording'](arg1, arg2);
-}
-
-export function Preview(arg1) {
-  return window['go']['main']['App']['Preview'](arg1);
-}
-
-export function Profile(arg1, arg2, arg3) {
-  return window['go']['main']['App']['Profile'](arg1, arg2, arg3);
 }
 
 export function Record(arg1) {
@@ -62,6 +62,10 @@ export function Scan(arg1) {
   return window['go']['main']['App']['Scan'](arg1);
 }
 
+export function ScanChannels() {
+  return window['go']['main']['App']['ScanChannels']();
+}
+
 export function SetConfig(arg1) {
   return window['go']['main']['App']['SetConfig'](arg1);
 }
@@ -72,6 +76,14 @@ export function SetDVRPrefs(arg1) {
 
 export function SetZoom(arg1) {
   return window['go']['main']['App']['SetZoom'](arg1);
+}
+
+export function Signal() {
+  return window['go']['main']['App']['Signal']();
+}
+
+export function StopRecording(arg1) {
+  return window['go']['main']['App']['StopRecording'](arg1);
 }
 
 export function StopTV() {
