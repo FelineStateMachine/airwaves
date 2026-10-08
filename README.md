@@ -152,13 +152,13 @@ had.
 | R / Shift R / N | Record this show / every episode / new episodes |
 | C | Closed captions on or off |
 | V | Next audio track (second language, described video) |
-| f | Favorite this channel |
+| Shift F | Favorite this channel |
 | I | Info banner; again for the measured signal, again to hide |
-| M / Shift F | Mute / fullscreen |
+| M / F | Mute / fullscreen |
 
 | Key | Elsewhere |
 | --- | --- |
-| G | Guide: arrows move, and Up and Down wrap round the channels. The filters (Favorites, Sports...; also `[` `]`) are Down from the top bar, which is Left from the earliest program. Enter watches what's on, or shows a program to come's actions; hold Enter, or I, for any program's: watch, record, series, new episodes only, favorite, hide. Home jumps to now, R / Shift R / N record, f favorite, H hide (U undoes) |
+| G | Guide: arrows move, and Up and Down wrap round the channels. The filters (Favorites, Sports...; also `[` `]`) are Down from the top bar, which is Left from the earliest program. Enter watches what's on, or shows a program to come's actions; hold Enter, or I, for any program's: watch, record, series, new episodes only, favorite, hide. Home jumps to now, R / Shift R / N record, Shift F favorite, H hide (U undoes) |
 | D | Recordings: Left (or `[` `]`) for Library, Coming up, Series. Enter shows a recording's actions: resume, from the start, watched, delete (press twice); for one recording now, watch from the start, 30 more minutes, stop (keeping it) and delete; Shift Enter starts over, W marks watched, Delete twice removes; on a series K sets how many to keep, N new episodes only |
 | A | Reception: what the tuners measured, by RF channel (the ones the scan found first), with the transmitters licensed on each. Up and Down pick one, Enter watches its first channel; Left for the tuner, Measure now, which reads every RF channel on a free tuner and shows its progress, and Scan for channels (press twice) |
 | W | Weather: current conditions, alerts, the next 24 hours, 7-day, radar loop and satellite; Up and Down move through them, Left to watch the weather channel |

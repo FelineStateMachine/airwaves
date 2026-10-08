@@ -870,7 +870,7 @@ const OSD_BUTTONS = [
   ['guide', 'Guide'], ['play', 'Pause'], ['back', '-10 s'], ['ahead', '+30 s'], ['live', 'Live'],
   ['captions', 'Captions'], ['audio', 'Audio'], ['record', 'Record'], ['favorite', 'Favorite'], ['last', 'Last channel'],
 ];
-const OSD_KEYS = { guide: 'G', play: 'Space', back: 'Left', ahead: 'Right', live: 'End', captions: 'C', audio: 'V', record: 'R', favorite: 'F', last: 'L' };
+const OSD_KEYS = { guide: 'G', play: 'Space', back: 'Left', ahead: 'Right', live: 'End', captions: 'C', audio: 'V', record: 'R', favorite: 'Shift F', last: 'L' };
 const ICON_TEXT = 'text-anchor="middle" font-family="Plex Mono, Menlo, monospace" font-weight="700"';
 const OSD_ICONS = {
   guide: '<path d="M3 4h18v3.5H3zm0 6.25h7.5v3.5H3zm9.5 0H21v3.5h-8.5zM3 16.5h11V20H3zm13 0h5V20h-5z"/>',
@@ -1276,7 +1276,7 @@ function wireKeys() {
       state.lastHidden = null;
       return unhide([key]).then(() => toast('Channel shown again', 1800));
     }
-    if (k === 'F') return toggleFullscreen();
+    if (k === 'f') return toggleFullscreen();
 
     if (state.view === 'guide') return guideKey(e);
     if (state.view === 'antenna') return antennaKey(e);
@@ -1302,7 +1302,7 @@ function wireKeys() {
       case 'n': case 'N': return recordNow('series', true);
       case 'c': case 'C': return toggleCaptions();
       case 'v': case 'V': return cycleAudio();
-      case 'f': return toggleFavorite(state.current);
+      case 'F': return toggleFavorite(state.current);
       default:
     }
   });
@@ -1916,7 +1916,7 @@ function guideKey(e) {
       return guideActivate();
     case 'i': case 'I': e.preventDefault(); return guideOpenActions();
     case 'r': e.preventDefault(); recordSelected('once'); return;
-    case 'f': e.preventDefault(); toggleFavorite(list[state.gRow]); return;
+    case 'F': e.preventDefault(); toggleFavorite(list[state.gRow]); return;
     case 'h': case 'H': e.preventDefault(); hideChannel(list[state.gRow]); return;
     case 'R': e.preventDefault(); recordSelected('series', false); return;
     case 'n': case 'N': e.preventDefault(); recordSelected('series', true); return;
@@ -2113,7 +2113,7 @@ function renderGuide() {
 // guideStatusHints names the guide's keys beside its filters.
 function guideStatusHints() {
   if (androidTV && !prompts.pad) return 'Filters: Left to the top bar, then Down';
-  return hints([['i', 'I', 'more'], ['f', 'F', 'favorite'], ['h', 'H', 'hide'], ['[', '[ ]', 'filter']]);
+  return hints([['i', 'I', 'more'], ['', 'Shift F', 'favorite'], ['h', 'H', 'hide'], ['[', '[ ]', 'filter']]);
 }
 
 // moveGuideSelection marks the selected row and program in rows already
@@ -2952,7 +2952,7 @@ function renderSettings() {
   if (settingsUI.sub === 'controls' && androidTV) {
     html += '<p class="s-note">On the remote: OK brings up the controls over the picture, with Guide first, so OK twice opens the guide. In them Left and Right move along a row, Up and Down between rows: the timeline (Left and Right skip), the buttons (play, captions, record, last channel and more), and the views at the top. On live TV Up and Down change channel, and Left and Right skip. In the guide OK watches what\'s on, and holding OK offers more: record, series, favorite, hide. Back goes back. Remotes with them: digits tune a channel, Channel up and down change channel, Play/Pause pauses.</p>';
   } else if (settingsUI.sub === 'controls') {
-    html += '<p class="s-note">Enter on TV brings up the controls, with the guide, captions, recording, the last channel and the views; Esc puts them away. Digits tune a channel. The remote\'s Fast forward and Rewind skip, Record records. Keyboard only: L last channel, C captions, V audio track, F favorite, R record, D recordings, A reception, Shift F full screen. In the guide hold Enter, or press I, for a program\'s actions. In Steam, give Airwaves the Gamepad controller layout, not a keyboard one.</p>';
+    html += '<p class="s-note">Enter on TV brings up the controls, with the guide, captions, recording, the last channel and the views; Esc puts them away. Digits tune a channel. The remote\'s Fast forward and Rewind skip, Record records. Keyboard only: L last channel, C captions, V audio track, Shift F favorite, R record, D recordings, A reception, F full screen. In the guide hold Enter, or press I, for a program\'s actions. In Steam, give Airwaves the Gamepad controller layout, not a keyboard one.</p>';
   }
   const keep = list.scrollTop;
   list.innerHTML = html;
