@@ -237,7 +237,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, "ok\n")
 	})
-	return s.auth(gzipJSON(mux))
+	// A page on another site can't make a browser here change anything:
+	// cross-site POSTs, PUTs and DELETEs are refused. The app's own page,
+	// the desktop app and other non-browser clients aren't affected.
+	return http.NewCrossOriginProtection().Handler(s.auth(gzipJSON(mux)))
 }
 
 // adminAuth asks for the admin password. Both sides are hashed before the

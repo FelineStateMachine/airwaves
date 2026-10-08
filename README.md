@@ -57,7 +57,8 @@ only. Tvheadend listens on 127.0.0.1 only; reach its admin UI with
 `ssh -L 9981:127.0.0.1:9981 nas`, then http://localhost:9981. Other `.env` settings:
 `AIRWAVES_LAT` / `AIRWAVES_LON` for the
 antenna's exact position (better than the ZIP centroid, since terrain decides
-reception); `AIRWAVES_TOKEN` (requires the same token in the app); `RECORDINGS` (host
+reception); `AIRWAVES_TOKEN` (requires the same token in the app);
+`AIRWAVES_ADMIN_PASSWORD` (for the admin page and `/admin/mcp`); `RECORDINGS` (host
 path for recordings, default `~/airwaves/recordings`); `MUSIC` and `CHANNELS` (host
 folders for the custom channels); `TZ`. Location is deployment
 configuration only; the app never shows or edits it.

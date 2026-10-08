@@ -42,6 +42,9 @@ services:
       AIRWAVES_LAT: ${AIRWAVES_LAT:-}
       AIRWAVES_LON: ${AIRWAVES_LON:-}
       AIRWAVES_TOKEN: ${AIRWAVES_TOKEN:-}
+      # The admin page's and /admin/mcp's password (recommended: backups
+      # downloaded there hold the Jellyfin account).
+      AIRWAVES_ADMIN_PASSWORD: ${AIRWAVES_ADMIN_PASSWORD:-}
       # The folders mounted below, as the admin page names them.
       AIRWAVES_HOST_CHANNELS: ${CHANNELS:-./channels}
       AIRWAVES_HOST_MUSIC: ${MUSIC:-./music}
