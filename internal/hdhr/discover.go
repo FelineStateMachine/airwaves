@@ -79,35 +79,64 @@ func u32(v uint32) []byte {
 	return b
 }
 
-// parseRequest reports whether pkt is a discover request this device should
-// answer (a tuner or wildcard search, for our ID or any ID).
-func parseRequest(pkt []byte, id uint32) bool {
-	if len(pkt) < 8 || binary.BigEndian.Uint16(pkt) != typeDiscoverRq {
-		return false
+// parsePacket checks a packet's length and CRC and returns its type and
+// payload.
+func parsePacket(pkt []byte) (typ uint16, payload []byte, ok bool) {
+	if len(pkt) < 8 {
+		return 0, nil, false
 	}
 	n := int(binary.BigEndian.Uint16(pkt[2:]))
 	if 4+n+4 > len(pkt) || crc32.ChecksumIEEE(pkt[:4+n]) != binary.LittleEndian.Uint32(pkt[4+n:]) {
-		return false
+		return 0, nil, false
 	}
-	p := pkt[4 : 4+n]
-	for len(p) >= 2 {
-		tag, l := p[0], int(p[1])
-		if len(p) < 2+l {
+	return binary.BigEndian.Uint16(pkt), pkt[4 : 4+n], true
+}
+
+// eachTag calls f with each tag of a payload and its value, whose length
+// takes one byte, or two from 128 on. It reports whether the payload was
+// well formed.
+func eachTag(p []byte, f func(tag byte, v []byte)) bool {
+	for len(p) > 0 {
+		if len(p) < 2 {
 			return false
 		}
-		v := p[2 : 2+l]
-		if l == 4 {
-			x := binary.BigEndian.Uint32(v)
-			if tag == tagDeviceType && x != wildcard && x != deviceTuner {
+		tag, l, hdr := p[0], int(p[1]), 2
+		if l&0x80 != 0 {
+			if len(p) < 3 {
 				return false
 			}
-			if tag == tagDeviceID && x != wildcard && x != id {
-				return false
-			}
+			l, hdr = l&0x7F|int(p[2])<<7, 3
 		}
-		p = p[2+l:]
+		if len(p) < hdr+l {
+			return false
+		}
+		f(tag, p[hdr:hdr+l])
+		p = p[hdr+l:]
 	}
 	return true
+}
+
+// parseRequest reports whether pkt is a discover request this device should
+// answer (a tuner or wildcard search, for our ID or any ID).
+func parseRequest(pkt []byte, id uint32) bool {
+	typ, p, ok := parsePacket(pkt)
+	if !ok || typ != typeDiscoverRq {
+		return false
+	}
+	answer := true
+	ok = eachTag(p, func(tag byte, v []byte) {
+		if len(v) != 4 {
+			return
+		}
+		x := binary.BigEndian.Uint32(v)
+		if tag == tagDeviceType && x != wildcard && x != deviceTuner {
+			answer = false
+		}
+		if tag == tagDeviceID && x != wildcard && x != id {
+			answer = false
+		}
+	})
+	return ok && answer
 }
 
 func reply(id uint32, tuners int, base string) []byte {
@@ -122,8 +151,8 @@ func reply(id uint32, tuners int, base string) []byte {
 
 // Discover answers HDHomeRun discovery broadcasts until ctx ends. port is
 // the HTTP port advertised in the base URL. Requests from this host's own
-// addresses are ignored, so Tvheadend on the same machine never mistakes
-// Airwaves for a tuner it should use.
+// addresses are ignored, so looking for the real tuner from this machine
+// (Find) never turns up Airwaves itself.
 func (s *Server) Discover(ctx context.Context, port int) error {
 	conn, err := net.ListenUDP("udp4", &net.UDPAddr{Port: discoverPort})
 	if err != nil {

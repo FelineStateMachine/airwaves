@@ -1,11 +1,15 @@
-// Package hdhr makes Airwaves look like a SiliconDust HDHomeRun network
-// tuner, so apps such as Channels DVR, Jellyfin, Emby, VLC and the
-// HDHomeRun app can use its channels, including custom ones that have no
-// tuner behind them.
+// Package hdhr speaks SiliconDust's HDHomeRun protocols both ways.
 //
-// It serves the HDHomeRun HTTP API (discover.json, lineup.json, /auto/v
+// Server makes Airwaves look like an HDHomeRun network tuner, so apps such
+// as Channels DVR, Jellyfin, Emby, VLC and the HDHomeRun app can use its
+// channels, including custom ones that have no tuner behind them. It
+// serves the HDHomeRun HTTP API (discover.json, lineup.json, /auto/v
 // streams) plus an M3U playlist and XMLTV guide, and answers the UDP
 // discovery broadcast on port 65001.
+//
+// Device is a real HDHomeRun, found by the same discovery broadcast and
+// reached over its HTTP API: its lineup and channel scan, its tuners'
+// status and signal, and streams of whole RF channels.
 package hdhr
 
 import (
@@ -91,8 +95,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /lineup_status.json", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"ScanInProgress": 0, "ScanPossible": 1, "Source": "Antenna", "SourceList": []string{"Antenna"}})
 	})
-	// Apps ask the tuner to rescan; Tvheadend owns scanning, so accept and
-	// do nothing.
+	// Apps ask the tuner to rescan. A scan takes every real tuner, so
+	// that's left to Reception's Scan for channels: accept and do nothing.
 	mux.HandleFunc("POST /lineup.post", func(w http.ResponseWriter, r *http.Request) {})
 	mux.HandleFunc("GET /lineup.json", func(w http.ResponseWriter, r *http.Request) {
 		lineup, err := s.Backend.Lineup(r.Context())
