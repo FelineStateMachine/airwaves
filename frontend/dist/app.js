@@ -2143,6 +2143,8 @@ function humanMinutes(m) {
 function renderGuideActions(ch, p) {
   const box = f($('#guide'), 'actions');
   if (!ch) { box.innerHTML = ''; return; }
+  // Laid out, it may need less shown beside it.
+  requestAnimationFrame(fitGuideDetail);
   const now = Date.now();
   const airing = !p || p._s <= now;
   const act = (name, label, cls = '') => `<button type="button" class="act fx${cls ? ` ${cls}` : ''}" data-act="${name}">${label}</button>`;
@@ -2169,6 +2171,27 @@ function renderGuideActions(ch, p) {
   parts.push(act('hide', 'Hide channel'));
   box.innerHTML = parts.join('');
   guideRefocus();
+}
+
+// fitGuideDetail leaves out what of the program's details doesn't fit
+// above the grid at this window and interface size: its description
+// first, then its tags, its episode line and the hint. The title and the
+// actions always show, the actions on one row that scrolls sideways when
+// even that isn't enough.
+function fitGuideDetail() {
+  const g = $('#guide');
+  const top = $('.g-top', g);
+  const box = $('.g-detail', g);
+  const parts = ['desc', 'meta', 'ep', 'hint'].map((k) => f(g, k));
+  for (const el of parts) el.classList.remove('gd-gone');
+  box.classList.remove('one-row');
+  const cs = getComputedStyle(top);
+  const room = top.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+  for (const el of parts) {
+    if (box.offsetHeight <= room) return;
+    el.classList.add('gd-gone');
+  }
+  if (box.offsetHeight > room) box.classList.add('one-row');
 }
 
 function recordSelected(kind, newOnly) {
@@ -3241,6 +3264,13 @@ function applyScale() {
     root.style.zoom = z === 1 ? '' : String(z);
     root.style.setProperty('--zoom', String(z));
   }
+  // The viewport in the root's own pixels, for style.css's --vw and --vh:
+  // engines differ on what vw and vh mean under CSS zoom (the Mac app's
+  // WebKit sizes the guide's floating TV and its grid differently), while
+  // pixels zoom alike everywhere.
+  const cssZoom = native ? 1 : z;
+  root.style.setProperty('--vw', `${innerWidth / cssZoom / 100}px`);
+  root.style.setProperty('--vh', `${innerHeight / cssZoom / 100}px`);
   // Larger sizes leave less room above the guide (.tight in style.css):
   // the size chosen, not the zoom, which on the Android TV app also fits a
   // 1080p screen's interface into the WebView.
