@@ -82,6 +82,19 @@ func autoScale() int {
 	return 100
 }
 
+// platform is the frontend's experience: a console's under gamescope, else
+// a desktop's, unless AIRWAVES_PLATFORM names one.
+func platform() string {
+	switch p := os.Getenv("AIRWAVES_PLATFORM"); p {
+	case "desktop", "console", "tv":
+		return p
+	}
+	if gamescope() {
+		return "console"
+	}
+	return "desktop"
+}
+
 // gamescope tells whether the app runs under gamescope: SteamOS Game Mode,
 // on a TV.
 func gamescope() bool {

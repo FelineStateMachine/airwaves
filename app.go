@@ -95,6 +95,10 @@ type Boot struct {
 	NativeZoom bool `json:"nativeZoom,omitempty"`
 	// Version is the app's.
 	Version string `json:"version"`
+	// Platform is which of the frontend's three experiences this is:
+	// "desktop", or "console" under gamescope; AIRWAVES_PLATFORM (desktop,
+	// console or tv) says otherwise.
+	Platform string `json:"platform"`
 }
 
 // Boot returns settings and the server's description. AIRWAVES_VIEW opens a
@@ -102,7 +106,7 @@ type Boot struct {
 func (a *App) Boot() Boot {
 	c, s, err := a.server()
 	out := Boot{Settings: s, View: os.Getenv("AIRWAVES_VIEW"), Lite: os.Getenv("AIRWAVES_LITE"),
-		AutoScale: autoScale(), NativeZoom: nativeZoom, Version: version}
+		AutoScale: autoScale(), NativeZoom: nativeZoom, Version: version, Platform: platform()}
 	if err != nil {
 		out.Error = err.Error()
 		return out

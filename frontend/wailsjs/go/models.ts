@@ -729,6 +729,7 @@ export namespace main {
 	    autoScale: number;
 	    nativeZoom?: boolean;
 	    version: string;
+	    platform: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Boot(source);
@@ -746,6 +747,7 @@ export namespace main {
 	        this.autoScale = source["autoScale"];
 	        this.nativeZoom = source["nativeZoom"];
 	        this.version = source["version"];
+	        this.platform = source["platform"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
