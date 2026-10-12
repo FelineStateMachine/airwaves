@@ -536,21 +536,7 @@ func (s *Service) custom() []CustomChannel {
 			}
 			c := customChannel(d, vchan.KindOf(f))
 			for _, p := range f.Programs(from, to) {
-				gp := guide.Program{
-					Start: p.Start, End: p.End, Title: p.Title, EpisodeTitle: p.Subtitle, Description: p.Description,
-					Season: p.Season, Episode: p.Episode, Image: p.Image, AudioLang: p.AudioLang,
-					OriginalAirDate: p.Aired, Cast: p.Cast, Rating: p.Rating, Genres: p.Genres,
-				}
-				if len(p.Date) >= 4 {
-					gp.Year = p.Date[:4]
-				}
-				if p.New {
-					gp.Flags = []string{"New"}
-				}
-				if p.Captions {
-					gp.Tags = []string{"CC"}
-				}
-				c.Programs = append(c.Programs, gp)
+				c.Programs = append(c.Programs, customProgram(p))
 			}
 			out = append(out, c)
 		}

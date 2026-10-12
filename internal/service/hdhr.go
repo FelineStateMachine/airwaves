@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/xml"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"log"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -128,32 +130,236 @@ type xmltvIcon struct {
 	Src string `xml:"src,attr"`
 }
 
+// xmltvProgramme is one airing, its elements in the order XMLTV's DTD
+// has them, with series-id and live (newer than the DTD) last.
 type xmltvProgramme struct {
-	Start    string     `xml:"start,attr"`
-	Stop     string     `xml:"stop,attr"`
-	Channel  string     `xml:"channel,attr"`
-	Title    string     `xml:"title"`
-	SubTitle string     `xml:"sub-title,omitempty"`
-	Desc     string     `xml:"desc,omitempty"`
-	Date     string     `xml:"date,omitempty"`
-	Category []string   `xml:"category,omitempty"`
-	Episode  string     `xml:"episode-num,omitempty"`
-	Icon     *xmltvIcon `xml:"icon,omitempty"`
-	New      *struct{}  `xml:"new,omitempty"`
-	// Subtitles are "teletext" for closed captions, "onscreen" for
-	// subtitles burned into the picture.
-	Subtitles *xmltvSubtitles `xml:"subtitles,omitempty"`
+	Start      string          `xml:"start,attr"`
+	Stop       string          `xml:"stop,attr"`
+	Channel    string          `xml:"channel,attr"`
+	Title      string          `xml:"title"`
+	SubTitle   string          `xml:"sub-title,omitempty"`
+	Desc       string          `xml:"desc,omitempty"`
+	Credits    *xmltvCredits   `xml:"credits,omitempty"`
+	Date       string          `xml:"date,omitempty"`
+	Category   []string        `xml:"category,omitempty"`
+	Length     *xmltvLength    `xml:"length,omitempty"`
+	Icon       *xmltvIcon      `xml:"icon,omitempty"`
+	Episodes   []xmltvSystem   `xml:"episode-num,omitempty"`
+	Video      *xmltvVideo     `xml:"video,omitempty"`
+	Previously *xmltvPrevious  `xml:"previously-shown,omitempty"`
+	Premiere   *struct{}       `xml:"premiere,omitempty"`
+	New        *struct{}       `xml:"new,omitempty"`
+	Subtitles  *xmltvSubtitles `xml:"subtitles,omitempty"`
+	Rating     *xmltvRating    `xml:"rating,omitempty"`
+	Stars      *xmltvRating    `xml:"star-rating,omitempty"`
+	SeriesID   *xmltvSystem    `xml:"series-id,omitempty"`
+	Live       *struct{}       `xml:"live,omitempty"`
+}
+
+// xmltvCredits are plain names: Jellyfin 10.11's reader fails a channel
+// whose credits hold anything else.
+type xmltvCredits struct {
+	Actors []xmltvActor `xml:"actor"`
+}
+
+type xmltvActor struct {
+	Role string `xml:"role,attr,omitempty"`
+	Name string `xml:",chardata"`
+}
+
+type xmltvLength struct {
+	Units string `xml:"units,attr"`
+	Value int    `xml:",chardata"`
+}
+
+type xmltvSystem struct {
+	System string `xml:"system,attr"`
+	Value  string `xml:",chardata"`
+}
+
+type xmltvVideo struct {
+	Quality string `xml:"quality"`
+}
+
+type xmltvPrevious struct {
+	Start string `xml:"start,attr,omitempty"`
 }
 
 type xmltvSubtitles struct {
 	Type string `xml:"type,attr"`
 }
 
+type xmltvRating struct {
+	System string `xml:"system,attr,omitempty"`
+	Value  string `xml:"value"`
+}
+
 const xmltvTime = "20060102150405 -0700"
 
-// XMLTV implements hdhr.Backend. A custom channel's call sign is one of
-// its display names, and its category is that of each of its programmes
-// that has none of its own ("Other" says nothing, so it's left out).
+// customProgram is a custom channel's program as the guide has it.
+func customProgram(p vchan.Program) guide.Program {
+	gp := guide.Program{
+		Start: p.Start, End: p.End, Title: p.Title, EpisodeTitle: p.Subtitle, Description: p.Description,
+		Season: p.Season, Episode: p.Episode, Image: p.Image, AudioLang: p.AudioLang,
+		OriginalAirDate: p.Aired, Cast: p.Cast, Rating: p.Rating, Genres: slices.Clone(p.Genres),
+	}
+	if len(p.Date) >= 4 {
+		gp.Year = p.Date[:4]
+	}
+	if p.New {
+		gp.Flags = []string{"New"}
+	}
+	if p.Captions {
+		gp.Tags = []string{"CC"}
+	}
+	return gp
+}
+
+// typeWords are the guide's genres (its own filter keys, any case) that
+// xmltvCategories says with a type word.
+var typeWords = []string{"movie", "movies", "sports", "sports event", "news", "kids", "children"}
+
+// xmltvCategories leads with the words players file by (Jellyfin's
+// defaults, and Channels DVR's): Movie, Series, Sports event and Sports,
+// News, Children; then the program's own genres.
+func xmltvCategories(p guide.Program) []string {
+	has := func(g string) bool {
+		return slices.ContainsFunc(p.Genres, func(x string) bool { return strings.EqualFold(x, g) })
+	}
+	movie := has("movie") || has("movies") || strings.HasPrefix(p.ProgramID, "MV")
+	var out []string
+	if movie {
+		out = append(out, "Movie")
+	} else if p.Season != "" || p.EpisodeTitle != "" || strings.HasPrefix(p.ProgramID, "EP") {
+		out = append(out, "Series")
+	}
+	if has("sports") || has("sports event") || strings.HasPrefix(p.ProgramID, "SP") {
+		out = append(out, "Sports event", "Sports")
+	}
+	if has("news") {
+		out = append(out, "News")
+	}
+	if has("kids") || has("children") {
+		out = append(out, "Children")
+	}
+	for _, g := range p.Genres {
+		if g == "" || slices.Contains(typeWords, strings.ToLower(g)) {
+			continue
+		}
+		if g == strings.ToLower(g) {
+			g = strings.ToUpper(g[:1]) + g[1:] // a filter key, as a genre
+		}
+		if !slices.ContainsFunc(out, func(x string) bool { return strings.EqualFold(x, g) }) {
+			out = append(out, g)
+		}
+	}
+	return out
+}
+
+// xmltvProgram is one airing for the XMLTV guide, with all that players
+// take from it; abs makes a path on this server an address, and
+// captions says how a custom channel's captions come ("" for an antenna
+// channel's, from its tags).
+func xmltvProgram(p guide.Program, channel string, abs func(string) string, captions string) xmltvProgramme {
+	x := xmltvProgramme{
+		Start: p.Start.Format(xmltvTime), Stop: p.End.Format(xmltvTime), Channel: channel,
+		Title: p.Title, SubTitle: p.EpisodeTitle, Desc: p.Description, Category: xmltvCategories(p),
+	}
+	if len(p.Cast) > 0 {
+		x.Credits = &xmltvCredits{}
+		for _, c := range p.Cast {
+			name, role := c, ""
+			if i := strings.LastIndex(c, " ("); i > 0 && strings.HasSuffix(c, ")") {
+				name, role = c[:i], c[i+2:len(c)-1]
+			}
+			x.Credits.Actors = append(x.Credits.Actors, xmltvActor{Name: name, Role: role})
+		}
+	}
+	movie := slices.Contains(x.Category, "Movie")
+	switch {
+	case p.OriginalAirDate != "" && !movie:
+		x.Date = strings.ReplaceAll(p.OriginalAirDate, "-", "")
+	case p.Year != "":
+		x.Date = p.Year
+	}
+	if p.Runtime > 0 {
+		x.Length = &xmltvLength{Units: "minutes", Value: p.Runtime}
+	}
+	if src := p.Image; src != "" {
+		if strings.HasPrefix(src, "/") && abs != nil {
+			src = abs(src)
+		}
+		x.Icon = &xmltvIcon{Src: src}
+	}
+	if p.Season != "" && p.Episode != "" {
+		s, _ := strconv.Atoi(p.Season)
+		e, _ := strconv.Atoi(p.Episode)
+		if s > 0 && e > 0 {
+			x.Episodes = append(x.Episodes,
+				xmltvSystem{System: "xmltv_ns", Value: fmt.Sprintf("%d.%d.", s-1, e-1)},
+				xmltvSystem{System: "onscreen", Value: fmt.Sprintf("S%02dE%02d", s, e)})
+		}
+	}
+	// One ID per program, so players tell episodes apart (and an airing
+	// of the same one twice is a repeat): Gracenote's, or one made from
+	// what the program is.
+	if id := p.ProgramID; len(id) == 14 {
+		x.Episodes = append(x.Episodes, xmltvSystem{System: "dd_progid", Value: id[:10] + "." + id[10:]})
+	} else {
+		h := fnv.New64a()
+		fmt.Fprintf(h, "%s\x00%s\x00%s\x00%s", p.Title, p.EpisodeTitle, p.Season, p.Episode)
+		x.Episodes = append(x.Episodes, xmltvSystem{System: "dd_progid", Value: fmt.Sprintf("AW%08x.%04x", h.Sum64()>>32, h.Sum64()&0xffff)})
+	}
+	if slices.Contains(p.Tags, "HD") {
+		x.Video = &xmltvVideo{Quality: "HDTV"}
+	}
+	isNew, live := slices.Contains(p.Flags, "New"), slices.Contains(p.Flags, "Live")
+	if !isNew && !live {
+		// A repeat, with when it first aired when that's another day.
+		x.Previously = &xmltvPrevious{}
+		if d := strings.ReplaceAll(p.OriginalAirDate, "-", ""); d != "" && d != p.Start.Format("20060102") {
+			x.Previously.Start = d
+		}
+	}
+	if slices.Contains(p.Flags, "Premiere") {
+		x.Premiere = &struct{}{}
+	}
+	if isNew {
+		x.New = &struct{}{}
+	}
+	switch {
+	case captions != "":
+		x.Subtitles = &xmltvSubtitles{Type: captions}
+	case slices.Contains(p.Tags, "CC"):
+		x.Subtitles = &xmltvSubtitles{Type: "teletext"}
+	}
+	if p.Rating != "" {
+		sys := "MPAA" // a film's, as TV's start "TV-"
+		if strings.HasPrefix(p.Rating, "TV-") {
+			sys = "VCHIP"
+		}
+		x.Rating = &xmltvRating{System: sys, Value: p.Rating}
+	}
+	if p.Stars > 0 {
+		x.Stars = &xmltvRating{Value: strconv.FormatFloat(p.Stars, 'f', -1, 64) + "/4"}
+	}
+	if p.SeriesID != "" {
+		x.SeriesID = &xmltvSystem{System: "airwaves", Value: p.SeriesID}
+	} else if !movie && (p.EpisodeTitle != "" || p.Season != "") {
+		h := fnv.New32a()
+		h.Write([]byte(p.Title))
+		x.SeriesID = &xmltvSystem{System: "airwaves", Value: fmt.Sprintf("AW%08x", h.Sum32())}
+	}
+	if live {
+		x.Live = &struct{}{}
+	}
+	return x
+}
+
+// XMLTV implements hdhr.Backend: every channel, with its programs as far
+// as the listings go (two days of Gracenote's grid, two weeks from
+// Schedules Direct), each with all that players take from it. A custom
+// channel's call sign is one of its display names.
 func (b hdhrBackend) XMLTV(ctx context.Context, w io.Writer, abs func(path string) string) error {
 	entries, err := b.Lineup(ctx)
 	if err != nil {
@@ -167,8 +373,6 @@ func (b hdhrBackend) XMLTV(ctx context.Context, w io.Writer, abs func(path strin
 	for _, v := range b.s.customChannels() {
 		custom[v.Number()] = v
 	}
-	// As far as the listings go: two days of Gracenote's grid, two weeks
-	// from Schedules Direct.
 	from, to := time.Now().Add(-time.Hour), time.Now().Add(sd.Days*24*time.Hour)
 	doc := xmltvDoc{Generator: "Airwaves"}
 	for _, e := range entries {
@@ -181,6 +385,7 @@ func (b hdhrBackend) XMLTV(ctx context.Context, w io.Writer, abs func(path strin
 				names = append(names, d.CallSign)
 			}
 		}
+		// The number last: Jellyfin matches channels by it.
 		ch := xmltvChannel{ID: id, Names: append(names, e.Number), LCN: e.Number}
 		if e.Logo != "" {
 			src := e.Logo
@@ -193,37 +398,21 @@ func (b hdhrBackend) XMLTV(ctx context.Context, w io.Writer, abs func(path strin
 
 		if v != nil {
 			for _, p := range v.Programs(from, to) {
-				x := xmltvProgramme{
-					Start: p.Start.Format(xmltvTime), Stop: p.End.Format(xmltvTime), Channel: id,
-					Title: p.Title, SubTitle: p.Subtitle, Desc: p.Description, Date: p.Date,
-				}
-				if p.Category != "" {
-					x.Category = []string{p.Category}
-				} else if d.Category != "" && d.Category != "Other" {
-					x.Category = []string{d.Category}
-				}
-				if p.Season != "" && p.Episode != "" {
-					x.Episode = fmt.Sprintf("S%sE%s", p.Season, p.Episode)
-				}
-				if p.Image != "" {
-					src := p.Image
-					if strings.HasPrefix(src, "/") {
-						src = abs(src)
-					}
-					x.Icon = &xmltvIcon{Src: src}
-				}
-				if p.New {
-					x.New = &struct{}{}
-				}
+				// Captions for sound not in English are burned in for
+				// HDHomeRun clients, which can't be told to show them.
+				captions := ""
 				if p.Captions {
-					// Subtitles for sound not in English are burned in for
-					// HDHomeRun clients, which can't be told to show captions.
-					x.Subtitles = &xmltvSubtitles{Type: "teletext"}
+					captions = "teletext"
 					if cc.Foreign(p.AudioLang) {
-						x.Subtitles.Type = "onscreen"
+						captions = "onscreen"
 					}
 				}
-				doc.Programmes = append(doc.Programmes, x)
+				// Filed under the program's category, else the channel's.
+				gp := customProgram(p)
+				if c := cmp.Or(p.Category, d.Category); c != "" && c != "Other" {
+					gp.Genres = append([]string{c}, gp.Genres...)
+				}
+				doc.Programmes = append(doc.Programmes, xmltvProgram(gp, id, abs, captions))
 			}
 			continue
 		}
@@ -235,20 +424,7 @@ func (b hdhrBackend) XMLTV(ctx context.Context, w io.Writer, abs func(path strin
 			if p.End.Before(from) || p.Start.After(to) {
 				continue
 			}
-			x := xmltvProgramme{
-				Start: p.Start.Format(xmltvTime), Stop: p.End.Format(xmltvTime), Channel: id,
-				Title: p.Title, SubTitle: p.EpisodeTitle, Desc: p.Description, Category: p.Genres,
-			}
-			if p.Season != "" && p.Episode != "" {
-				x.Episode = fmt.Sprintf("S%sE%s", p.Season, p.Episode)
-			}
-			if p.Image != "" {
-				x.Icon = &xmltvIcon{Src: p.Image}
-			}
-			if slices.Contains(p.Flags, "New") {
-				x.New = &struct{}{}
-			}
-			doc.Programmes = append(doc.Programmes, x)
+			doc.Programmes = append(doc.Programmes, xmltvProgram(p, id, abs, ""))
 		}
 	}
 	if _, err := io.WriteString(w, xml.Header); err != nil {

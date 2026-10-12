@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"airwaves/internal/guide"
 	"airwaves/internal/hdhr"
 	"airwaves/internal/jellyfin/jellyfintest"
 	"airwaves/internal/vchan"
@@ -109,7 +110,14 @@ type xmltvOut struct {
 	Programmes []struct {
 		Channel  string   `xml:"channel,attr"`
 		Title    string   `xml:"title"`
+		SubTitle string   `xml:"sub-title"`
 		Category []string `xml:"category"`
+		Date     string   `xml:"date"`
+		Episodes []struct {
+			System string `xml:"system,attr"`
+			Value  string `xml:",chardata"`
+		} `xml:"episode-num"`
+		Previously *struct{} `xml:"previously-shown"`
 	} `xml:"programme"`
 }
 
@@ -198,13 +206,31 @@ func TestHDHomeRunCustomChannels(t *testing.T) {
 		}
 	}
 	kinds := map[string]bool{}
+	ids := map[string]string{} // dd_progid: episode
 	for _, p := range doc.Programmes {
+		eps := map[string]string{}
+		for _, e := range p.Episodes {
+			eps[e.System] = e.Value
+		}
 		switch {
 		case p.Channel == "airwaves.1.1" && slices.Equal(p.Category, []string{"Weather"}):
-		case p.Channel == "airwaves.1.4" && p.Title == "The Iron Giant" && slices.Equal(p.Category, []string{"Movie"}):
-		case p.Channel == "airwaves.1.4" && p.Title == "Futurama" && slices.Equal(p.Category, []string{"Kids"}):
+		case p.Channel == "airwaves.1.4" && p.Title == "The Iron Giant" && slices.Equal(p.Category, []string{"Movie"}) && p.Date == "1999":
+		case p.Channel == "airwaves.1.4" && p.Title == "Futurama" && slices.Equal(p.Category, []string{"Series", "Children"}):
+			want := map[string][2]string{"Space Pilot 3000": {"0.0.", "S01E01"}, "The Series Has Landed": {"0.1.", "S01E02"}}[p.SubTitle]
+			if eps["xmltv_ns"] != want[0] || eps["onscreen"] != want[1] {
+				t.Errorf("%s episode-num: %v", p.SubTitle, eps)
+			}
 		default:
 			t.Errorf("programme: %+v", p)
+		}
+		// Players tell programs apart, and repeats, by dd_progid.
+		if id := eps["dd_progid"]; id == "" || ids[id] != "" && ids[id] != p.SubTitle+p.Title {
+			t.Errorf("%s %s dd_progid %q, also %q's", p.Title, p.SubTitle, id, ids[id])
+		} else {
+			ids[id] = p.SubTitle + p.Title
+		}
+		if p.Previously == nil {
+			t.Errorf("%s %s: not a repeat", p.Title, p.SubTitle)
 		}
 		kinds[p.Channel+" "+p.Title] = true
 	}
@@ -217,5 +243,68 @@ func TestHDHomeRunCustomChannels(t *testing.T) {
 	s.wxStreams = false
 	if _, raw := get("/lineup.json"); raw != "[]\n" {
 		t.Errorf("lineup with both off: %s", raw)
+	}
+}
+
+func TestXMLTVProgram(t *testing.T) {
+	start := time.Date(2026, 10, 12, 19, 0, 0, 0, time.FixedZone("MDT", -6*3600))
+	abs := func(p string) string { return "http://nas:8089" + p }
+	for _, c := range []struct {
+		name string
+		p    guide.Program
+		want []string
+		not  []string
+	}{{
+		name: "episode",
+		p: guide.Program{Start: start, End: start.Add(30 * time.Minute), Title: "Bluey", EpisodeTitle: "Keepy Uppy",
+			Season: "1", Episode: "4", Rating: "TV-Y", Flags: []string{"New"}, Tags: []string{"CC", "HD"}, Genres: []string{"kids", "Animated"},
+			ProgramID: "EP012345670004", SeriesID: "SH01234567", Image: "/guide-art/a.jpg", OriginalAirDate: "2026-10-12",
+			Cast: []string{"Dave McCormack (Bandit)", "Melanie Zanetti"}},
+		want: []string{
+			` start="20261012190000 -0600" stop="20261012193000 -0600" channel="airwaves.9.1">`,
+			`<credits><actor role="Bandit">Dave McCormack</actor><actor>Melanie Zanetti</actor></credits>`,
+			`<date>20261012</date>`,
+			`<category>Series</category><category>Children</category><category>Animated</category>`,
+			`<icon src="http://nas:8089/guide-art/a.jpg"></icon>`,
+			`<episode-num system="xmltv_ns">0.3.</episode-num><episode-num system="onscreen">S01E04</episode-num><episode-num system="dd_progid">EP01234567.0004</episode-num>`,
+			`<video><quality>HDTV</quality></video><new></new><subtitles type="teletext"></subtitles>`,
+			`<rating system="VCHIP"><value>TV-Y</value></rating>`,
+			`<series-id system="airwaves">SH01234567</series-id>`,
+		},
+		not: []string{"previously-shown", "<live>", "kids"},
+	}, {
+		name: "repeat",
+		p: guide.Program{Start: start, End: start.Add(time.Hour), Title: "Frasier", EpisodeTitle: "The Good Son",
+			ProgramID: "EP000001230001", OriginalAirDate: "1993-09-16"},
+		want: []string{`<previously-shown start="19930916"></previously-shown>`, `<date>19930916</date>`},
+		not:  []string{"<new>"},
+	}, {
+		name: "movie",
+		p: guide.Program{Start: start, End: start.Add(2 * time.Hour), Title: "Heat", Year: "1995", Rating: "R", Runtime: 170, Stars: 3.5,
+			ProgramID: "MV000123450000", Genres: []string{"movie", "Crime drama"}, OriginalAirDate: "2001-01-01"},
+		want: []string{`<date>1995</date><category>Movie</category><category>Crime drama</category><length units="minutes">170</length>`,
+			`<previously-shown start="20010101"></previously-shown>`, `<rating system="MPAA"><value>R</value></rating><star-rating><value>3.5/4</value></star-rating>`},
+		not: []string{"Series", "series-id"},
+	}, {
+		name: "game",
+		p: guide.Program{Start: start, End: start.Add(3 * time.Hour), Title: "NFL Football", ProgramID: "SP000456780000",
+			Flags: []string{"Live"}, Genres: []string{"sports", "Football"}},
+		want: []string{`<category>Sports event</category><category>Sports</category><category>Football</category>`, `<live></live>`},
+		not:  []string{"previously-shown", "<new>"},
+	}} {
+		raw, err := xml.Marshal(xmltvProgram(c.p, "airwaves.9.1", abs, ""))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, w := range c.want {
+			if !strings.Contains(string(raw), w) {
+				t.Errorf("%s: no %s in\n%s", c.name, w, raw)
+			}
+		}
+		for _, n := range c.not {
+			if strings.Contains(string(raw), n) {
+				t.Errorf("%s: %s in\n%s", c.name, n, raw)
+			}
+		}
 	}
 }
