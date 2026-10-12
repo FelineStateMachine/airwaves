@@ -212,10 +212,11 @@ body.mode-guide #guide, body.mode-antenna #antenna, body.mode-settings #settings
 .tight .gd-title { -webkit-line-clamp: 1; font-size: clamp(30px, calc(5.2 * var(--vh)), 48px); }
 .tight .gd-meta { margin: 6px 0; }
 .tight .gd-desc { -webkit-line-clamp: 2; }
-/* The program's picture makes way for its actions and the hint. */
-.tight .g-top { grid-template-columns: var(--pv-w) minmax(0, 1fr); }
-.tight .gd-art { display: none; }
-.tight .gd-desc, .tight .gd-hint { max-width: none; }
+/* A narrow window gives the program's picture's room to its details
+   (app.js decides, by width). */
+.g-top.no-art { grid-template-columns: var(--pv-w) minmax(0, 1fr); }
+.g-top.no-art .gd-art { display: none; }
+.g-top.no-art .gd-desc, .g-top.no-art .gd-hint { max-width: none; }
 
 .g-bar { height: 44px; padding: 0 28px; display: flex; align-items: center; justify-content: space-between; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .g-filters { display: flex; gap: 2px; height: 100%; }

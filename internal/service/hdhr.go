@@ -206,7 +206,11 @@ func (b hdhrBackend) XMLTV(ctx context.Context, w io.Writer, abs func(path strin
 					x.Episode = fmt.Sprintf("S%sE%s", p.Season, p.Episode)
 				}
 				if p.Image != "" {
-					x.Icon = &xmltvIcon{Src: p.Image}
+					src := p.Image
+					if strings.HasPrefix(src, "/") {
+						src = abs(src)
+					}
+					x.Icon = &xmltvIcon{Src: src}
 				}
 				if p.New {
 					x.New = &struct{}{}

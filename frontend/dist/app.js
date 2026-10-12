@@ -728,6 +728,10 @@ function chipsFor(p, ch) {
   return out.join('');
 }
 
+// imageURL is a picture's address: the server's own ("/guide-art/...")
+// relative to the server, others as they are.
+const imageURL = (u) => (u && u.startsWith('/') ? state.boot.serverUrl + u : u || '');
+
 // stars draws a rating out of 4 in stars, halves included.
 const stars = (n) => '\u2605'.repeat(Math.floor(n)) + (n % 1 >= 0.5 ? '\u00bd' : '');
 
@@ -2201,6 +2205,8 @@ function fitGuideDetail() {
   const g = $('#guide');
   const top = $('.g-top', g);
   const box = $('.g-detail', g);
+  // The picture needs the details to keep a readable width beside it.
+  top.classList.toggle('no-art', top.clientWidth < 1100);
   const parts = ['cast', 'desc', 'meta', 'ep', 'hint'].map((k) => f(g, k));
   for (const el of parts) el.classList.remove('gd-gone');
   box.classList.remove('one-row');
@@ -2287,7 +2293,7 @@ function renderGuideDetail(ch, p) {
   f(g, 'hint').innerHTML = `${when}${more ? `, ${more}` : ''}${rec}`;
   renderGuideActions(ch, p);
   const art = f(g, 'art');
-  if (p && p.image) { art.style.backgroundImage = `url('${p.image}')`; art.classList.add('has'); } else { art.style.backgroundImage = ''; art.classList.remove('has'); }
+  if (p && p.image) { art.style.backgroundImage = `url('${imageURL(p.image)}')`; art.classList.add('has'); } else { art.style.backgroundImage = ''; art.classList.remove('has'); }
 }
 
 // ---------- reception ----------
@@ -3461,11 +3467,11 @@ function renderRecordings() {
       <div class="rd-actions">${cur.status === 'failed' ? '' : act('play', resumable(cur) ? `Resume at ${mmss(cur.position)}` : 'Play', cur)}${resumable(cur) ? act('restart', 'From the start', cur) : ''}${cur.status === 'failed' ? '' : act('watched', cur.watched ? 'Mark unwatched' : 'Mark watched', cur)}${act('delete', 'Delete', cur)}</div>
       <div class="rd-hint">${recHint(cur)}</div>
     </div>
-    <div class="rd-art" style="${cur.image ? `background-image:url('${esc(cur.image)}')` : ''}"></div>`
+    <div class="rd-art" style="${cur.image ? `background-image:url('${esc(imageURL(cur.image))}')` : ''}"></div>`
     : '<div class="rd-empty">Nothing recorded yet. In the guide, OK on a program to come records it, or every episode.</div><div></div>';
   f(v, 'library').innerHTML = lib.map((it, i) => `
     <article class="r-card ${i === sel.library ? 'sel' : ''} ${it.status === 'failed' ? 'failed' : ''} ${it.watched ? 'watched' : ''}" data-i="${i}">
-      <div class="r-art" style="${it.image ? `background-image:url('${esc(it.image)}')` : ''}">${it.image ? '' : `<span>${esc(it.title)}</span>`}
+      <div class="r-art" style="${it.image ? `background-image:url('${esc(imageURL(it.image))}')` : ''}">${it.image ? '' : `<span>${esc(it.title)}</span>`}
         ${resumable(it) ? `<div class="r-prog"><i style="width:${Math.min(100, (it.position / it.duration) * 100)}%"></i></div>` : ''}
         ${it.watched ? '<b class="r-badge">Watched</b>' : ''}</div>
       <div class="r-meta">
@@ -4633,13 +4639,13 @@ function updateMediaSession() {
   const it = state.recording;
   let m = null;
   if (it) {
-    m = { title: it.title, artist: 'Recording', album: it.subtitle || 'Airwaves', art: it.image };
+    m = { title: it.title, artist: 'Recording', album: it.subtitle || 'Airwaves', art: imageURL(it.image) };
   } else if (ch && ch.weather) {
     m = { title: 'Local Forecast', artist: `${ch.number} ${ch.name}`, album: 'Airwaves', art: ch.logo };
   } else if (ch) {
     const p = airingAt(ch, Date.now());
     const name = ch.network || displayCall(ch);
-    m = { title: p ? p.title : name, artist: `${ch.number} ${name}`, album: (p && p.episodeTitle) || 'Airwaves', art: (p && p.image) || ch.logo };
+    m = { title: p ? p.title : name, artist: `${ch.number} ${name}`, album: (p && p.episodeTitle) || 'Airwaves', art: imageURL(p && p.image) || ch.logo };
   }
   const key = JSON.stringify(m);
   if (key === mediaShown) return;

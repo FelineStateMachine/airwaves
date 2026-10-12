@@ -185,7 +185,7 @@ func (c *client) login(ctx context.Context, fresh bool) error {
 
 // update brings the state up to date: the account, the antenna lineup of
 // zip, the schedules that changed and the programs they air.
-func (c *client) update(ctx context.Context, zip string, now time.Time) error {
+func (c *client) update(ctx context.Context, zip, dir string, now time.Time) error {
 	if err := c.login(ctx, false); err != nil {
 		return err
 	}
@@ -213,6 +213,7 @@ func (c *client) update(ctx context.Context, zip string, now time.Time) error {
 		return err
 	}
 	c.st.prune(now)
+	c.artwork(ctx, dir, now)
 	return nil
 }
 
@@ -577,7 +578,11 @@ type sdProgram struct {
 			IsHome bool   `json:"isHome"`
 		} `json:"teams"`
 	} `json:"eventDetails"`
-	HasImageArtwork bool `json:"hasImageArtwork"`
+	HasImageArtwork   bool `json:"hasImageArtwork"`
+	HasSeriesArtwork  bool `json:"hasSeriesArtwork"`
+	HasMovieArtwork   bool `json:"hasMovieArtwork"`
+	HasSportsArtwork  bool `json:"hasSportsArtwork"`
+	HasEpisodeArtwork bool `json:"hasEpisodeArtwork"`
 }
 
 type sdDescription struct {
@@ -608,7 +613,8 @@ func parseProgram(raw json.RawMessage) (string, program, bool) {
 	}
 	p := program{
 		MD5: sp.MD5, EpisodeTitle: sp.EpisodeTitle150, OriginalAirDate: sp.OriginalAirDate,
-		Genres: sp.Genres, Kind: sp.EntityType, Art: sp.HasImageArtwork,
+		Genres: sp.Genres, Kind: sp.EntityType,
+		Art:         sp.HasImageArtwork || sp.HasSeriesArtwork || sp.HasMovieArtwork || sp.HasSportsArtwork || sp.HasEpisodeArtwork,
 		Description: cmp.Or(english(sp.Descriptions.Long), english(sp.Descriptions.Short)),
 	}
 	if len(sp.Titles) > 0 {

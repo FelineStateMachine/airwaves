@@ -51,8 +51,9 @@ type Server struct {
 	DeviceID     uint32
 	FriendlyName string
 	Tuners       func() int
-	// Logos serves /channel-logos/, the custom channels' logos the
-	// lineup's paths point at; optional.
+	// Logos serves /channel-logos/ and /guide-art/, the custom channels'
+	// logos and the programs' pictures the lineup's and guide's paths
+	// point at; optional.
 	Logos http.Handler
 	// FromHost takes the address clients reach the device at from their
 	// requests' Host header, not the connection's local address. Set it
@@ -142,6 +143,7 @@ func (s *Server) Handler() http.Handler {
 	})
 	if s.Logos != nil {
 		mux.Handle("GET /channel-logos/{number}", s.Logos)
+		mux.Handle("GET /guide-art/{name}", s.Logos)
 	}
 	stream := func(w http.ResponseWriter, r *http.Request) {
 		number := strings.TrimPrefix(r.PathValue("ch"), "v")

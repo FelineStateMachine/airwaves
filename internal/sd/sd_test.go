@@ -23,6 +23,8 @@ type fakeSD struct {
 	added    bool
 	expire   bool // the next request gets 4006 once
 	md5      string
+	images   []string // pictures downloaded
+	capped   bool     // pictures answer with the daily cap
 }
 
 func (f *fakeSD) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -60,7 +62,35 @@ func (f *fakeSD) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	today := time.Now().UTC().Format(time.DateOnly)
+	if uri, ok := strings.CutPrefix(path, "image/"); ok {
+		if f.capped {
+			reply(map[string]any{"code": 5002, "response": "MAX_IMAGE_DOWNLOADS", "message": "cap"})
+			return
+		}
+		f.images = append(f.images, uri)
+		w.Header().Set("Content-Type", "image/jpeg")
+		fmt.Fprint(w, "JPEG "+uri)
+		return
+	}
 	switch path {
+	case "metadata/programs/":
+		var ids []string
+		_ = json.NewDecoder(r.Body).Decode(&ids)
+		pics := map[string][]any{
+			"SH013657560000": {
+				map[string]any{"uri": "banner43.jpg", "width": "720", "height": "540", "aspect": "4x3", "category": "Banner-L1"},
+				map[string]any{"uri": "iconic169small.jpg", "width": 240, "height": 135, "aspect": "16x9", "category": "Iconic"},
+				map[string]any{"uri": "iconic169.jpg", "width": 960, "height": 540, "aspect": "16x9", "category": "Iconic"},
+				map[string]any{"uri": "poster.jpg", "width": 720, "height": 1080, "aspect": "2x3", "category": "Iconic"},
+			},
+			"MV000087710000": {map[string]any{"uri": "movie.jpg", "width": 720, "height": 405, "aspect": "16x9", "category": "Iconic"}},
+		}
+		var out []any
+		for _, id := range ids {
+			out = append(out, map[string]any{"programID": id, "data": pics[id]})
+		}
+		reply(out)
+		return
 	case "status":
 		lineups := []map[string]any{}
 		if f.added {
@@ -123,9 +153,9 @@ func (f *fakeSD) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				"descriptions": map[string]any{"description100": []any{map[string]any{"descriptionLanguage": "en", "description": "Short."}},
 					"description1000": []any{map[string]any{"descriptionLanguage": "en", "description": "The knockouts continue, longer."}}},
 				"cast":     []any{map[string]any{"billingOrder": "02", "name": "Second"}, map[string]any{"billingOrder": "01", "name": "First", "characterName": "Coach"}},
-				"metadata": []any{map[string]any{"Gracenote": map[string]any{"season": 28, "episode": 12}}}, "entityType": "Episode"},
+				"metadata": []any{map[string]any{"Gracenote": map[string]any{"season": 28, "episode": 12}}}, "entityType": "Episode", "hasSeriesArtwork": true},
 			"MV000087710000": map[string]any{"programID": "MV000087710000", "md5": "p2", "titles": []any{map[string]any{"title120": "The Wizard of Oz"}},
-				"entityType": "Movie", "contentRating": []any{map[string]any{"body": "Motion Picture Association", "code": "PG"}},
+				"entityType": "Movie", "hasMovieArtwork": true, "contentRating": []any{map[string]any{"body": "Motion Picture Association", "code": "PG"}},
 				"movie": map[string]any{"year": "1939", "duration": 6120, "qualityRating": []any{map[string]any{"ratingsBody": "Gracenote", "rating": "4"}}}},
 			"SP003190180000": map[string]any{"programID": "SP003190180000", "md5": "p3", "titles": []any{map[string]any{"title120": "NFL Football"}},
 				"entityType": "Sports", "genres": []string{"Sports event", "Football"},
@@ -366,5 +396,64 @@ func TestOldLogos(t *testing.T) {
 	again.update(context.Background(), a)
 	if g := again.Guide(); g.Channels[0].Logo != "https://example.com/kwgn-light.png" || len(f.asked) != asked || f.count("GET lineups/USA-OTA-80302") != 2 {
 		t.Fatalf("after: logo %q, %d schedules asked, calls %v", g.Channels[0].Logo, len(f.asked)-asked, f.calls)
+	}
+}
+
+// TestArtwork: pictures are picked (landscape, without the title on it,
+// near 720 wide), downloaded once, served, and paused by the daily cap.
+func TestArtwork(t *testing.T) {
+	s, f := newSource(t)
+	_ = s.SetAccount("viewer", "hunter2")
+	a, _ := LoadAccount(s.accountPath())
+	s.update(context.Background(), a)
+	ps := s.Guide().Programs["20370"]
+	if ps[0].Image != ArtPath+"iconic169.jpg" || ps[1].Image != ArtPath+"movie.jpg" {
+		t.Fatalf("images %q, %q", ps[0].Image, ps[1].Image)
+	}
+	if len(f.images) != 2 {
+		t.Fatalf("downloaded %v", f.images)
+	}
+	rec := httptest.NewRecorder()
+	s.ArtHandler().ServeHTTP(rec, httptest.NewRequest("GET", ArtPath+"iconic169.jpg", nil))
+	if rec.Code != 200 || rec.Body.String() != "JPEG iconic169.jpg" {
+		t.Fatalf("served %d %q", rec.Code, rec.Body.String())
+	}
+	for _, bad := range []string{ArtPath + "../account.json", ArtPath + ".hidden", ArtPath} {
+		rec := httptest.NewRecorder()
+		s.ArtHandler().ServeHTTP(rec, httptest.NewRequest("GET", bad, nil))
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("%s: %d", bad, rec.Code)
+		}
+	}
+
+	// Kept: nothing is downloaded again, nor looked up.
+	f.mu.Lock()
+	f.md5 = "day9"
+	f.mu.Unlock()
+	s.update(context.Background(), a)
+	if len(f.images) != 2 || f.count("POST metadata/programs/") != 1 {
+		t.Fatalf("again: downloaded %v, %d lookups", f.images, f.count("POST metadata/programs/"))
+	}
+}
+
+// TestArtworkCap: the daily cap pauses downloads until midnight UTC; the
+// listings update anyway.
+func TestArtworkCap(t *testing.T) {
+	s, f := newSource(t)
+	f.capped = true
+	_ = s.SetAccount("viewer", "hunter2")
+	a, _ := LoadAccount(s.accountPath())
+	s.update(context.Background(), a)
+	if st := s.Status(); !st.OK {
+		t.Fatalf("status %+v", st)
+	}
+	s.mu.Lock()
+	paused := s.st.ImagesPaused
+	s.mu.Unlock()
+	if !paused.After(time.Now()) || paused.Hour() != 0 || paused.Sub(time.Now()) > 24*time.Hour {
+		t.Fatalf("paused until %s", paused)
+	}
+	if s.Guide().Programs["20370"][0].Image != "" {
+		t.Fatal("a picture without a download")
 	}
 }

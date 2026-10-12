@@ -68,8 +68,8 @@ type Server struct {
 	// Extra serves other unauthenticated paths (weather images, the
 	// WeatherStar redirect).
 	Extra http.Handler
-	// Logos serves custom channels' logos at /channel-logos/<number>,
-	// unauthenticated like Extra.
+	// Logos serves custom channels' logos at /channel-logos/<number>, and
+	// the guide's pictures at /guide-art/, unauthenticated like Extra.
 	Logos http.Handler
 	// Token, when set, must be sent as "Authorization: Bearer <token>" on
 	// /api/ requests. Stream URLs are unguessable and stay open so native
@@ -247,6 +247,7 @@ func (s *Server) Handler() http.Handler {
 	}
 	if s.Logos != nil {
 		mux.Handle("/channel-logos/", s.Logos)
+		mux.Handle("/guide-art/", s.Logos)
 	}
 	if s.Admin != nil {
 		admin := s.Admin

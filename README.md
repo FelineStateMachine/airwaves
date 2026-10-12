@@ -197,7 +197,11 @@ ZIP code's antenna lineup to the account, updates about once a day at a minute o
 for the station-days that changed, and stops asking altogether when the account is refused
 (a wrong password, a locked or expired account) until it's saved again, as Schedules Direct
 requires. The app's guide still shows its listing hours; recording rules look the two weeks
-ahead, and the emulated HDHomeRun's XMLTV carries them all. Airwaves identifies itself as
+ahead, and the emulated HDHomeRun's XMLTV carries them all. Pictures come from there too: one
+landscape picture per series or movie, picked without the title written on it where there's
+one, downloaded once and kept in `<data>/schedulesdirect/images` (served at `/guide-art/`),
+up to 500 an update, the shows on soonest first, pausing until midnight UTC when Schedules
+Direct's daily cap is reached. Airwaves identifies itself as
 `airwaves/<version>`; it is used under Schedules Direct's personal research terms, for one
 household.
 

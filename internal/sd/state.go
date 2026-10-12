@@ -34,9 +34,16 @@ type state struct {
 	Days map[string]map[string]day `json:"days,omitempty"`
 	// Programs are the programs aired, by program ID.
 	Programs map[string]program `json:"programs,omitempty"`
-	// Art is the best picture of each series or program, by the ID it was
-	// asked for: a program's, or its series' first 10 characters.
-	Art map[string]string `json:"art,omitempty"`
+	// Art is the picture kept for each series or program, by artKey: its
+	// file in the images folder. ArtWanted are those picked and not yet
+	// downloaded (their URIs), ArtChecked when each key was last looked
+	// up, BadArt URIs Schedules Direct hasn't got, and ImagesPaused when
+	// downloads may start again after the daily cap.
+	Art          map[string]string    `json:"art,omitempty"`
+	ArtWanted    map[string]string    `json:"artWanted,omitempty"`
+	ArtChecked   map[string]time.Time `json:"artChecked,omitempty"`
+	BadArt       map[string]bool      `json:"badArt,omitempty"`
+	ImagesPaused time.Time            `json:"imagesPaused,omitzero"`
 }
 
 type station struct {
@@ -169,12 +176,15 @@ func (st *state) clone() *state {
 		c.Days[id] = maps.Clone(days)
 	}
 	c.Programs = maps.Clone(st.Programs)
-	c.Art = maps.Clone(st.Art)
+	c.Art, c.ArtWanted, c.ArtChecked, c.BadArt = maps.Clone(st.Art), maps.Clone(st.ArtWanted), maps.Clone(st.ArtChecked), maps.Clone(st.BadArt)
 	if c.Programs == nil {
 		c.Programs = map[string]program{}
 	}
 	if c.Art == nil {
 		c.Art = map[string]string{}
+	}
+	if c.ArtWanted == nil {
+		c.ArtWanted = map[string]string{}
 	}
 	return &c
 }
@@ -203,20 +213,22 @@ func (st *state) prune(now time.Time) {
 			delete(st.Programs, id)
 		}
 	}
-	for id := range st.Art {
-		if !used[id] && !slices.ContainsFunc(slices.Collect(maps.Keys(used)), func(p string) bool { return seriesKey(p) == id }) {
-			delete(st.Art, id)
+	// Pictures are kept (they're files, and a series comes back); what
+	// was only being looked up for programs gone is dropped.
+	keys := map[string]bool{}
+	for id := range used {
+		keys[artKey(id)] = true
+	}
+	for k := range st.ArtWanted {
+		if !keys[k] {
+			delete(st.ArtWanted, k)
 		}
 	}
-}
-
-// seriesKey is what a program's series pictures are kept under: its ID's
-// first 10 characters.
-func seriesKey(programID string) string {
-	if len(programID) < 10 {
-		return programID
+	for k, t := range st.ArtChecked {
+		if !keys[k] && now.Sub(t) > artRecheck {
+			delete(st.ArtChecked, k)
+		}
 	}
-	return programID[:10]
 }
 
 // SeriesID is a program's series as the guide's grid gives it, so series
@@ -228,10 +240,6 @@ func SeriesID(programID string) string {
 	}
 	return "SH" + programID[2:10]
 }
-
-// imageBase is where Gracenote's pictures are served, the same files
-// Schedules Direct names.
-const imageBase = "https://zpmc.tmsimg.com/assets/"
 
 // guide is the listings as the guide has them, from a day before now on;
 // nil while there are none.
@@ -288,8 +296,8 @@ func (st *state) program(a airing, end time.Time) guide.Program {
 		}
 	}
 	slices.Sort(out.Flags)
-	if img := cmp.Or(st.Art[a.ProgramID], st.Art[seriesKey(a.ProgramID)]); img != "" {
-		out.Image = imageBase + img + "?w=360"
+	if img := st.Art[artKey(a.ProgramID)]; img != "" {
+		out.Image = ArtPath + img
 	}
 	return out
 }

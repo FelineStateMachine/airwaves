@@ -93,6 +93,9 @@ func (s *Source) init() {
 			st.LineupModified = "" // read the lineup again, for its logos
 			st.Updated = time.Time{}
 		}
+		if len(st.Programs) > 0 && len(st.ArtChecked) == 0 {
+			st.Updated = time.Time{} // kept before pictures were: fetch them
+		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		s.st = st
@@ -253,7 +256,7 @@ func (s *Source) update(ctx context.Context, a Account) {
 	s.mu.Unlock()
 
 	c := &client{base: s.BaseURL, http: s.HTTP, ua: s.UserAgent, account: a, st: st}
-	err := c.update(ctx, s.ZIP, time.Now())
+	err := c.update(ctx, s.ZIP, filepath.Join(s.Dir, "images"), time.Now())
 	var stop *StopError
 	if errors.As(err, &stop) {
 		st.Stopped = stop.Error()

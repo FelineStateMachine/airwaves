@@ -576,9 +576,13 @@ func logoPath(d vchan.Details) string {
 }
 
 // LogoHandler serves /channel-logos/<number>: custom channels' logos, off
-// or on, for the app and HDHomeRun clients.
+// or on, for the app and HDHomeRun clients; and /guide-art/<name>, the
+// programs' pictures from Schedules Direct.
 func (s *Service) LogoHandler() http.Handler {
 	mux := http.NewServeMux()
+	if s.listings != nil {
+		mux.Handle("GET "+sd.ArtPath+"{name}", s.listings.ArtHandler())
+	}
 	mux.HandleFunc("GET /channel-logos/{number}", func(w http.ResponseWriter, r *http.Request) {
 		number := r.PathValue("number")
 		var chans []vchan.Channel
