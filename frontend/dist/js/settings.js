@@ -18,13 +18,13 @@ const settingsUI = { tab: 'display', zone: 'tabs', at: 0, sub: null, from: 0, ro
 // SETTINGS_TABS are the areas in the rail's order, [id, label]; a row's
 // section is its tab's label.
 const SETTINGS_TABS = [['display', 'Display'], ['watching', 'Watching'], ['channels', 'Channels'], ['reception', 'Reception'],
-  ['recordings', 'Recordings'], ['server', 'Server'], ['about', 'About']];
+  ['recordings', 'Recordings'], ['podcasts', 'Podcasts'], ['server', 'Server'], ['about', 'About']];
 
 const AUDIO_LANGS = [['', 'As broadcast'], ['en', 'English'], ['es', 'Spanish'], ['fr', 'French'], ['ko', 'Korean'],
   ['vi', 'Vietnamese'], ['zh', 'Chinese'], ['ru', 'Russian'], ['pt', 'Portuguese']];
 const GUIDE_HOURS = [6, 12, 24, 36, 48, 72];
 const WATCHED = [[0, 'Keep them'], [1, 'Delete after a day'], [7, 'Delete after a week'], [30, 'Delete after a month']];
-const SETTINGS_LISTS = { hidden: 'Hidden channels', controls: 'Remote, controller and keys', sources: 'Data sources' };
+const SETTINGS_LISTS = { hidden: 'Hidden channels', controls: 'Remote, controller and keys', sources: 'Data sources', podfound: 'Shows found' };
 // How to hide a channel, with the keys there are.
 const HIDE_HOW = () => (onRemote() ? 'In the guide, hold OK on a channel\'s program: Hide channel' : 'In the guide, H hides a channel');
 
@@ -80,6 +80,7 @@ function wireSettings() {
   });
   list.addEventListener('change', (e) => {
     if (e.target.name === 'server' || e.target.name === 'token') saveServer(e.target.name, e.target.value);
+    if (e.target.name === 'podsearch') searchShows(e.target.value);
   });
   list.addEventListener('focusout', () => setTimeout(renderSettings));
   f(v, 'tabs').addEventListener('click', (e) => {
@@ -113,6 +114,7 @@ function pickSettingsTab(tab, zone = settingsUI.zone) {
   }
   settingsUI.tab = tab;
   const reception = tab === 'reception';
+  if (tab === 'podcasts' && Date.now() - podUI.at > MIN) loadPodcasts();
   $('#settings').dataset.tab = tab;
   f($('#settings'), 'list').hidden = reception;
   $('#antenna').hidden = !reception;
@@ -204,6 +206,8 @@ function settingsRows() {
     });
   }
 
+  podcastRows(add);
+
   const hidden = (s.hidden || []).length;
   add('Channels', { id: 'hidden', kind: 'open', label: 'Hidden channels', sub: HIDE_HOW(), value: hidden ? `${hidden} hidden` : 'None', open: 'hidden' });
   add('Channels', { id: 'hideshop', kind: 'action', verb: 'hides them', label: 'Hide shopping channels', sub: 'QVC, HSN, Jewelry TV and the like', value: 'Hide', run: hideShopping });
@@ -253,6 +257,7 @@ function settingsList(name) {
       add({ id: label, kind: 'info', label: what, html: `<span class="s-glyphs" title="${esc(padNames(pad))}">${keys.split(' ').map((k) => glyph(k === 'Space' ? ' ' : k, pad)).join('')}</span><kbd>${esc(label)}</kbd>` });
     }
   }
+  if (name === 'podfound') podFoundRows(add);
   if (name === 'sources') {
     for (const x of (state.report && state.report.sources) || []) {
       add({ id: x.url, kind: 'action', verb: 'opens it', label: x.name, sub: x.use, value: 'Open', run: () => api().OpenURL(x.url) });

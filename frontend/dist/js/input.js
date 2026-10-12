@@ -79,7 +79,8 @@ function wireKeys() {
       return openSettings('reception', 'list');
     }
     if ((k === 'd' || k === 'D') && state.info.dvr) return setView(state.view === 'recordings' ? 'tv' : 'recordings');
-    if ((k === 'w' || k === 'W') && state.view !== 'recordings') return setView(state.view === 'weather' ? 'tv' : 'weather');
+    if ((k === 'w' || k === 'W') && state.view !== 'recordings' && state.view !== 'podcasts') return setView(state.view === 'weather' ? 'tv' : 'weather');
+    if ((k === 'p' || k === 'P') && state.info.podcasts) return setView(state.view === 'podcasts' ? 'tv' : 'podcasts');
     if (k === ',' || k === 's' || k === 'S') return setView(state.view === 'settings' ? 'tv' : 'settings');
     if (k === 'm' || k === 'M') {
       const onWX = state.current && state.current.weather;
@@ -98,6 +99,7 @@ function wireKeys() {
 
     if (state.view === 'guide') return guideKey(e);
     if (state.view === 'recordings') return recordingsKey(e);
+    if (state.view === 'podcasts') return podcastsKey(e);
     if (state.view === 'weather') return weatherKey(e);
     if (state.view !== 'tv') return;
 
@@ -343,6 +345,7 @@ function restoreFocus() {
   if (state.view === 'tv' && osd.open) osdFocus(osd.last);
   else if (state.view === 'guide') guideZone(guideUI.zone);
   else if (state.view === 'recordings') recZone(recUI.zone);
+  else if (state.view === 'podcasts') podZone(podUI.zone);
   else if (state.view === 'settings') settingsRefocus();
   else if (state.view === 'weather') wxFocus();
 }
@@ -354,6 +357,7 @@ function viewBack() {
   if (state.view === 'guide' && state.recPick) { closeRecordPick(); return true; }
   if (state.view === 'guide' && guideUI.zone !== 'grid') { guideZone('grid'); return true; }
   if (state.view === 'recordings' && recUI.zone === 'actions') { recZone('list'); return true; }
+  if (state.view === 'podcasts' && podUI.zone === 'actions') { podZone('grid'); return true; }
   // In a tab of Settings, Back goes to the tabs, as on Android TV.
   if (state.view === 'settings' && settingsUI.zone === 'list') { settingsZone('tabs'); return true; }
   return false;

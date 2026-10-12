@@ -200,6 +200,7 @@ const state = {
   info: null,      // backend: local engine or a server
   config: null,    // location the lineup is built for
   dvr: null,       // recording state from the server
+  podcasts: null,  // the Podcasts app's shows and episodes
   dvrKeys: new Map(), // "7.1@1791058239" -> upcoming item
   recPick: '',        // the airing whose Record is open to its choices
   recording: null, // recording being played instead of live TV
@@ -412,6 +413,7 @@ async function init() {
   wireAntenna();
   wireSettings();
   wireRecordings();
+  wirePodcasts();
   wireWeather();
   wirePads();
   wireMediaSession();
@@ -467,6 +469,8 @@ async function init() {
   setInterval(signalTick, 2000);
   loadDVR();
   loadWeather();
+  loadPodcasts();
+  setInterval(loadPodcasts, 15 * MIN);
 }
 
 document.addEventListener('DOMContentLoaded', init);
@@ -503,6 +507,7 @@ function applyBoot(b) {
   state.info = b.info || { name: '', tuner: {}, dvr: false };
   state.config = b.config || {};
   document.body.classList.toggle('has-dvr', !!state.info.dvr);
+  document.body.classList.toggle('has-podcasts', !!state.info.podcasts);
   if (b.lite === '1' || b.lite === '0') setLite(b.lite === '1');
   applyPlatform(b.platform || (androidTV ? 'tv' : 'desktop'));
   applyScale();
@@ -612,6 +617,7 @@ function setView(v) {
     if (!(state.current && state.current.weather)) showWX(false);
   }
   if (v === 'settings') openSettings();
+  if (v === 'podcasts') openPodcasts();
   if (v === 'tv' && state.staleStream) restartStream();
   if (v === 'recordings') seeFailed();
   return undefined;

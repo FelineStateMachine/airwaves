@@ -65,7 +65,7 @@ function restartStream() {
   state.staleStream = false;
   if (state.recording) {
     const it = state.recording;
-    return playRecording(it, (state.recOffset || 0) + (video.currentTime || 0));
+    return playOnDemand(it, (state.recOffset || 0) + (video.currentTime || 0));
   }
   return state.current ? tune(state.current, { quiet: true }) : undefined;
 }
@@ -112,6 +112,32 @@ function showTimeshift() {
   if (el.textContent !== text) el.textContent = text;
 }
 
+// playOnDemand plays a recording, or a podcast's episode (kind 'episode'),
+// from a point in it, on TV; the player shows positions in the whole.
+async function playOnDemand(it, from = 0) {
+  if (!it || it.status === 'failed') return toast('That recording failed and cannot be played');
+  const token = ++state.tuneToken;
+  state.staleStream = false;
+  state.recording = it;
+  showWX(false);
+  setView('tv');
+  stage.classList.add('tuning');
+  $('#nosignal').hidden = true;
+  showBanner();
+  if (state.hls) state.hls.stopLoad();
+  try {
+    const pb = await (it.kind === 'episode' ? api().PlayEpisode(it.id, from) : api().PlayRecording(it.id, from));
+    if (token !== state.tuneToken) return;
+    state.recOffset = pb.offset || 0;
+    await play(pb, token);
+  } catch (e) {
+    if (token !== state.tuneToken) return;
+    showNoSignal({ number: it.kind === 'episode' ? 'POD' : 'REC', callSign: it.title, network: '' }, String(e && e.message ? e.message : e));
+  } finally {
+    if (token === state.tuneToken) setTimeout(() => stage.classList.remove('tuning'), 200);
+  }
+}
+
 // ---------- recording progress ----------
 let progressTimer = 0;
 function saveRecordingProgress() {
@@ -120,7 +146,10 @@ function saveRecordingProgress() {
   const pos = (state.recOffset || 0) + video.currentTime;
   if (pos < 1) return;
   it.position = pos;
-  api().SaveProgress(it.id, pos, it.duration || 0).catch((e) => log('warn', `progress: ${e}`));
+  const saved = it.kind === 'episode'
+    ? api().EpisodeProgress(it.id, pos, it.duration || 0, !!it.duration && pos > it.duration - 60)
+    : api().SaveProgress(it.id, pos, it.duration || 0);
+  saved.catch((e) => log('warn', `progress: ${e}`));
 }
 
 video.addEventListener('timeupdate', () => {

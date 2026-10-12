@@ -197,7 +197,7 @@ function renderBanner() {
   renderOSD();
   const ch = state.current;
   const b = $('#banner');
-  if (state.recording) return renderRecordingBanner(b, state.recording);
+  if (state.recording) return (state.recording.kind === 'episode' ? renderEpisodeBanner : renderRecordingBanner)(b, state.recording);
   if (!ch) return;
   if (ch.weather) return renderWXBanner(b, ch);
   const now = Date.now();

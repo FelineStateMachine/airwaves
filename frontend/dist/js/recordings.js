@@ -203,7 +203,7 @@ function wireRecordings() {
     const card = e.target.closest('[data-i]');
     if (card) {
       const it = recLists().library[Number(card.dataset.i)];
-      playRecording(it, resumable(it) ? it.position : 0);
+      playOnDemand(it, resumable(it) ? it.position : 0);
     }
   });
 }
@@ -215,12 +215,12 @@ function recAct(act) {
   if (!it) return null;
   const fail = (err) => toast(String(err && err.message ? err.message : err), 6000);
   switch (act) {
-    case 'play': return playRecording(it, it.status === 'recording' ? 0 : resumable(it) ? it.position : 0);
+    case 'play': return playOnDemand(it, it.status === 'recording' ? 0 : resumable(it) ? it.position : 0);
     case 'extend': return api().ExtendRecording(it.id, 30).then((until) => {
       toast(`Recording ${it.title} until ${clock(Date.parse(until))}`);
       return loadDVR();
     }).catch(fail);
-    case 'restart': return playRecording(it, 0);
+    case 'restart': return playOnDemand(it, 0);
     case 'watched': return api().MarkWatched(it.id, !it.watched).then(loadDVR).catch(fail);
     case 'keep': case 'newonly': {
       const steps = [0, 3, 5, 10];
@@ -277,7 +277,7 @@ function recordingsKey(e) {
     case 'Enter':
       e.preventDefault();
       // Shift Enter, on a keyboard, plays a recording from its start.
-      if (tab === 'library' && e.shiftKey) return playRecording(list[sel[tab]], 0);
+      if (tab === 'library' && e.shiftKey) return playOnDemand(list[sel[tab]], 0);
       return recZone('actions', '-');
     case 'w': case 'W': return tab === 'library' ? recAct('watched') : undefined;
     case 'k': case 'K': return tab === 'series' ? recAct('keep') : undefined;
@@ -350,26 +350,3 @@ function recActionsKey(e) {
 
 const resumable = (it) => !!it && !it.watched && it.position > 30 && it.duration > 0 && it.position < it.duration - 60;
 
-async function playRecording(it, from = 0) {
-  if (!it || it.status === 'failed') return toast('That recording failed and cannot be played');
-  const token = ++state.tuneToken;
-  state.staleStream = false;
-  state.recording = it;
-  showWX(false);
-  setView('tv');
-  stage.classList.add('tuning');
-  $('#nosignal').hidden = true;
-  showBanner();
-  if (state.hls) state.hls.stopLoad();
-  try {
-    const pb = await api().PlayRecording(it.id, from);
-    if (token !== state.tuneToken) return;
-    state.recOffset = pb.offset || 0;
-    await play(pb, token);
-  } catch (e) {
-    if (token !== state.tuneToken) return;
-    showNoSignal({ number: 'REC', callSign: it.title, network: '' }, String(e && e.message ? e.message : e));
-  } finally {
-    if (token === state.tuneToken) setTimeout(() => stage.classList.remove('tuning'), 200);
-  }
-}

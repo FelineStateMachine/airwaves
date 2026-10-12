@@ -126,6 +126,16 @@
     </div>
   </section>
 
+  <!-- Podcasts, an app: video podcasts from YouTube, played on demand, laid
+       out as Recordings' library is (js/podcasts.js). -->
+  <section id="podcasts" class="view railed" aria-label="Podcasts">
+    <nav class="rail"><div class="rail-menu p-menu" data-f="menu"></div></nav>
+    <div class="main p-main">
+      <article class="r-detail" data-f="detail"></article>
+      <div class="r-grid" data-f="grid"></div>
+    </div>
+  </section>
+
   <!-- More: Settings, a tab for each area, in the rail; most are a list of
        rows for a remote or a controller, Reception is what the tuners
        measured (js/settings.js, js/reception.js). -->
@@ -174,6 +184,7 @@
     <button data-view="guide"><kbd data-key="g" data-label="G">G</kbd>Guide</button>
     <button data-view="recordings"><kbd data-key="d" data-label="D">D</kbd>Recordings</button>
     <button data-view="weather"><kbd data-key="w" data-label="W">W</kbd>Weather</button>
+    <button data-view="podcasts"><kbd data-key="p" data-label="P">P</kbd>Podcasts</button>
     <button data-view="settings"><kbd data-key="," data-label=",">,</kbd>More</button>
   </nav>
 
@@ -209,6 +220,7 @@
   <script src="js/reception.js"></script>
   <script src="js/settings.js"></script>
   <script src="js/recordings.js"></script>
+  <script src="js/podcasts.js"></script>
   <script src="js/captions.js"></script>
   <script src="js/playback.js"></script>
   <script src="js/weather.js"></script>
