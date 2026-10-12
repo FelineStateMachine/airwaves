@@ -89,6 +89,10 @@ func (s *Source) init() {
 		if err != nil {
 			log.Printf("listings: %v; starting afresh", err)
 		}
+		if st.oldLogos() {
+			st.LineupModified = "" // read the lineup again, for its logos
+			st.Updated = time.Time{}
+		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		s.st = st

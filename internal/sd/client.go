@@ -318,17 +318,13 @@ func (c *client) lineup(ctx context.Context, id string) error {
 		if n == "" {
 			continue
 		}
-		sta := station{ID: s.StationID, Number: n, CallSign: s.CallSign, Name: s.Name, Affiliate: s.Affiliate}
-		// The logo for a light background (the guide's logo chips), else
-		// any.
-		for _, want := range []string{"dark", "gray", ""} {
-			for _, l := range s.Logos {
-				if sta.Logo == "" && (want == "" || l.Category == want) {
-					sta.Logo = l.URL
-				}
+		sta := station{ID: s.StationID, Number: n, CallSign: s.CallSign, Name: s.Name, Affiliate: s.Affiliate, Logos: map[string]string{}}
+		for _, l := range s.Logos {
+			if l.URL != "" && l.Category != "" {
+				sta.Logos[l.Category] = l.URL
 			}
 		}
-		if sta.Logo == "" && s.Logo != nil {
+		if s.Logo != nil {
 			sta.Logo = s.Logo.URL
 		}
 		stations = append(stations, sta)

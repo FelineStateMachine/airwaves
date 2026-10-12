@@ -81,7 +81,7 @@ func (f *fakeSD) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			},
 			"stations": []any{
 				map[string]any{"stationID": "20370", "callsign": "KWGNDT", "name": "KWGNDT (KWGN-DT)", "affiliate": "CW",
-					"stationLogo": []any{map[string]any{"URL": "https://example.com/kwgn-white.png", "category": "white"}, map[string]any{"URL": "https://example.com/kwgn-dark.png", "category": "dark"}}},
+					"stationLogo": []any{map[string]any{"URL": "https://example.com/kwgn-dark.png", "category": "dark"}, map[string]any{"URL": "https://example.com/kwgn-light.png", "category": "light"}}},
 				map[string]any{"stationID": "21252", "callsign": "KCNCDT", "affiliate": "CBS"},
 			},
 		})
@@ -195,7 +195,7 @@ func TestUpdate(t *testing.T) {
 	}
 
 	g := s.Guide()
-	if g == nil || len(g.Channels) != 2 || g.Channels[0].Number != "2.1" || g.Channels[0].CallSign != "KWGNDT" || g.Channels[0].Logo != "https://example.com/kwgn-dark.png" {
+	if g == nil || len(g.Channels) != 2 || g.Channels[0].Number != "2.1" || g.Channels[0].CallSign != "KWGNDT" || g.Channels[0].Logo != "https://example.com/kwgn-light.png" {
 		t.Fatalf("guide channels = %+v", g)
 	}
 	ps := g.Programs["20370"]
@@ -341,5 +341,30 @@ func TestRunOncePerDay(t *testing.T) {
 	}
 	if next := s.Status().Next; time.Until(next) < 11*time.Hour || time.Until(next) > 37*time.Hour {
 		t.Fatalf("next update %s", next)
+	}
+}
+
+// TestOldLogos: stations kept before their logos' variants were have the
+// lineup read again at the next start, without the schedules.
+func TestOldLogos(t *testing.T) {
+	s, f := newSource(t)
+	_ = s.SetAccount("viewer", "hunter2")
+	a, _ := LoadAccount(s.accountPath())
+	s.update(context.Background(), a)
+	st, _ := loadState(s.statePath())
+	for i := range st.Stations {
+		st.Stations[i].Logos, st.Stations[i].Logo = nil, "https://example.com/white.png"
+	}
+	if err := st.save(s.statePath()); err != nil {
+		t.Fatal(err)
+	}
+	again := &Source{Dir: s.Dir, ZIP: "80302", HTTP: s.HTTP, UserAgent: "airwaves/test", BaseURL: s.BaseURL}
+	if g := again.Guide(); g == nil || g.Channels[0].Logo != "https://example.com/white.png" {
+		t.Fatalf("before: %+v", g)
+	}
+	asked := len(f.asked)
+	again.update(context.Background(), a)
+	if g := again.Guide(); g.Channels[0].Logo != "https://example.com/kwgn-light.png" || len(f.asked) != asked || f.count("GET lineups/USA-OTA-80302") != 2 {
+		t.Fatalf("after: logo %q, %d schedules asked, calls %v", g.Channels[0].Logo, len(f.asked)-asked, f.calls)
 	}
 }

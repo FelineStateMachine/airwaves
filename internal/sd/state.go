@@ -45,7 +45,41 @@ type station struct {
 	CallSign  string `json:"callSign"`
 	Name      string `json:"name,omitempty"`
 	Affiliate string `json:"affiliate,omitempty"`
-	Logo      string `json:"logo,omitempty"`
+	// Logos are the station's logo by the background it's drawn for:
+	// "light" (the colored one), "gray", "dark" and "white" (white ones);
+	// Logo is the one Schedules Direct gives without saying.
+	Logos map[string]string `json:"logos,omitempty"`
+	Logo  string            `json:"logo,omitempty"`
+}
+
+// logo is the station's logo for the guide's light logo chips: the one
+// drawn for a light background, else gray, else any.
+func (s station) logo() string {
+	for _, c := range []string{"light", "gray"} {
+		if u := s.Logos[c]; u != "" {
+			return u
+		}
+	}
+	if s.Logo != "" {
+		return s.Logo
+	}
+	for _, c := range []string{"white", "dark"} {
+		if u := s.Logos[c]; u != "" {
+			return u
+		}
+	}
+	return ""
+}
+
+// oldLogos reports whether the stations were kept before their logos'
+// variants were, so the lineup should be read again for them.
+func (st *state) oldLogos() bool {
+	for _, s := range st.Stations {
+		if len(s.Logos) > 0 {
+			return false
+		}
+	}
+	return len(st.Stations) > 0
 }
 
 type day struct {
@@ -206,7 +240,7 @@ func (st *state) guide(zip string, now time.Time) *guide.Guide {
 	from := now.Add(-24 * time.Hour)
 	for _, sta := range st.Stations {
 		g.Channels = append(g.Channels, guide.Channel{
-			ID: sta.ID, Number: sta.Number, CallSign: sta.CallSign, Network: guide.NetworkName(sta.Affiliate), Logo: sta.Logo,
+			ID: sta.ID, Number: sta.Number, CallSign: sta.CallSign, Network: guide.NetworkName(sta.Affiliate), Logo: sta.logo(),
 		})
 		for _, d := range st.Days[sta.ID] {
 			for _, a := range d.Airings {
