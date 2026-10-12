@@ -20,6 +20,7 @@ import (
 	"unicode/utf8"
 
 	"airwaves/internal/vchan"
+	"airwaves/internal/youtube"
 )
 
 const (
@@ -47,7 +48,7 @@ var (
 	// ytErrPrefix is how yt-dlp starts its errors: "[youtube:tab] @name: ".
 	ytErrPrefix = regexp.MustCompile(`^yt-dlp: \[[^\]]+\] (\S+: )?`)
 	// pathYtDlp runs yt-dlp from PATH when the library has none of its own.
-	pathYtDlp = &vchan.YtDlp{}
+	pathYtDlp = &youtube.YtDlp{}
 )
 
 var (
@@ -116,7 +117,7 @@ type ytChannelJSON struct {
 	Videos      int    `json:"videos,omitempty"` // roughly, from a lookup
 }
 
-func channelOut(c vchan.YouTubeChannel) ytChannelJSON {
+func channelOut(c youtube.Channel) ytChannelJSON {
 	return ytChannelJSON{ID: c.ID, URL: c.URL, Handle: c.Handle, Name: c.Name, Subscribers: c.Subscribers,
 		Description: c.Description, Image: c.Image, Videos: c.Videos}
 }
@@ -137,7 +138,7 @@ type ytPlaylistJSON struct {
 	Image    string `json:"image,omitempty"`
 }
 
-func playlistOut(p vchan.YouTubePlaylistInfo) ytPlaylistJSON {
+func playlistOut(p youtube.PlaylistInfo) ytPlaylistJSON {
 	return ytPlaylistJSON{ID: p.ID, URL: p.URL, Title: p.Title, Owner: p.Owner, OwnerURL: ownerURL(p.OwnerID), Videos: p.Videos, Image: p.Image}
 }
 
@@ -358,7 +359,7 @@ func ytSettings(r *ytReq, cur ytConfigJSON) (ytConfigJSON, error) {
 		if len(list) > 0 {
 			return c, errBoth
 		}
-		page, err := vchan.YouTubePlaylist(playlist)
+		page, err := youtube.Playlist(playlist)
 		if err != nil {
 			return c, fmt.Errorf("%q: %w", strings.TrimSpace(playlist), err)
 		}
@@ -434,7 +435,7 @@ func writeYtConfig(path string, c ytConfigJSON) error {
 }
 
 // ytdlp is the yt-dlp the library's YouTube channels use.
-func (s *Server) ytdlp() *vchan.YtDlp {
+func (s *Server) ytdlp() *youtube.YtDlp {
 	if s.Library.YtDlp != nil {
 		return s.Library.YtDlp
 	}
@@ -443,7 +444,7 @@ func (s *Server) ytdlp() *vchan.YtDlp {
 
 // ytRun runs f with yt-dlp once it's ready and a run is free, and answers
 // for it when it can't.
-func (s *Server) ytRun(w http.ResponseWriter, r *http.Request, limit time.Duration, f func(context.Context, *vchan.YtDlp) error) bool {
+func (s *Server) ytRun(w http.ResponseWriter, r *http.Request, limit time.Duration, f func(context.Context, *youtube.YtDlp) error) bool {
 	tool := s.ytdlp()
 	if err := tool.Ready(); err != nil {
 		writeErr(w, http.StatusServiceUnavailable, err)
@@ -494,7 +495,7 @@ func (s *Server) searchYouTube(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Unlock()
 	var found []ytChannelJSON
-	if !s.ytRun(w, r, searchTime, func(ctx context.Context, tool *vchan.YtDlp) error {
+	if !s.ytRun(w, r, searchTime, func(ctx context.Context, tool *youtube.YtDlp) error {
 		list, err := tool.SearchChannels(ctx, q, searchCount)
 		for _, c := range list {
 			found = append(found, channelOut(c))
@@ -536,9 +537,9 @@ func (s *Server) lookupYouTube(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	var found vchan.YouTubeChannel
+	var found youtube.Channel
 	var failed error
-	ok := s.ytRun(w, r, lookupTime, func(ctx context.Context, tool *vchan.YtDlp) error {
+	ok := s.ytRun(w, r, lookupTime, func(ctx context.Context, tool *youtube.YtDlp) error {
 		found, failed = tool.LookupChannel(ctx, page)
 		return failed
 	})
@@ -582,7 +583,7 @@ func (s *Server) keep(l lookedUp, keys ...string) {
 // lookupPlaylist finds a YouTube playlist from its link or ID: its title,
 // whose it is, and how many videos it has.
 func (s *Server) lookupPlaylist(w http.ResponseWriter, r *http.Request) {
-	page, err := vchan.YouTubePlaylist(r.URL.Query().Get("u"))
+	page, err := youtube.Playlist(r.URL.Query().Get("u"))
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
@@ -595,9 +596,9 @@ func (s *Server) lookupPlaylist(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	var found vchan.YouTubePlaylistInfo
+	var found youtube.PlaylistInfo
 	var failed error
-	ok := s.ytRun(w, r, lookupTime, func(ctx context.Context, tool *vchan.YtDlp) error {
+	ok := s.ytRun(w, r, lookupTime, func(ctx context.Context, tool *youtube.YtDlp) error {
 		found, failed = tool.LookupPlaylist(ctx, page)
 		return failed
 	})

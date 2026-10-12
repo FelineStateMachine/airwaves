@@ -8,19 +8,16 @@ import (
 	"hash/fnv"
 	"io"
 	"log"
-	"net/http"
-	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"airwaves/internal/web"
+	"airwaves/internal/youtube"
 )
 
 // YouTube is a channel of uploads from YouTube channels, set up by a
@@ -35,7 +32,7 @@ type YouTube struct {
 	Title  string
 	Dir    string
 	FFmpeg string
-	YtDlp  *YtDlp // yt-dlp from PATH when nil
+	YtDlp  *youtube.YtDlp // yt-dlp from PATH when nil
 	// Loudness is the level the videos' sound is evened out to, in LUFS;
 	// 0 leaves it as it is.
 	Loudness float64
@@ -141,7 +138,7 @@ func (y *YouTube) Programs(from, to time.Time) []Program {
 			break
 		}
 		p := Program{Start: a.Start.Local(), End: a.End.Local(), Title: a.Title, Subtitle: y.names[a.Channel],
-			Image: ytThumbnail(a.ID), New: a.First}
+			Image: youtube.Thumbnail(a.ID), New: a.First}
 		if v := y.videos[a.ID]; v != nil {
 			p.Description = v.Description
 			p.Subtitle, p.Date = ytDated(p.Subtitle, v, y.clock())
@@ -209,14 +206,14 @@ func (y *YouTube) clock() time.Time {
 	return time.Now()
 }
 
-func (y *YouTube) tool() *YtDlp {
+func (y *YouTube) tool() *youtube.YtDlp {
 	if y.YtDlp != nil {
 		return y.YtDlp
 	}
 	return defaultYtDlp
 }
 
-var defaultYtDlp = &YtDlp{}
+var defaultYtDlp = &youtube.YtDlp{}
 
 // tend loads the channel's files on first use, keeps the schedule two days
 // ahead, and starts a refresh of the catalog when one is due. y.mu is
@@ -283,11 +280,11 @@ func (y *YouTube) readConfig(cat ytCatalog) {
 	}
 	var sources []*ytSource
 	if y.cfg.Playlist != "" {
-		url, _ := YouTubePlaylist(y.cfg.Playlist) // as readYtConfig checked
+		url, _ := youtube.Playlist(y.cfg.Playlist) // as readYtConfig checked
 		sources = append(sources, cat.source(url))
 	}
 	for _, c := range y.cfg.Channels {
-		url := ytVideosURL(c)
+		url := youtube.VideosURL(c)
 		if !slices.ContainsFunc(sources, func(s *ytSource) bool { return s.URL == url }) {
 			sources = append(sources, cat.source(url))
 		}
@@ -506,9 +503,9 @@ func (y *YouTube) refresh() {
 		if j.list && playlist {
 			y.listPlaylist(ctx, j.url)
 		} else if j.list {
-			tool.jobs.Lock()
-			raw, err := tool.run(ctx, slices.Concat(ytListingArgs, []string{j.url})...)
-			tool.jobs.Unlock()
+			tool.Jobs.Lock()
+			raw, err := tool.Run(ctx, slices.Concat(youtube.ListingArgs, []string{j.url})...)
+			tool.Jobs.Unlock()
 			var l ytListing
 			if err == nil {
 				l, err = parseYtListing(raw)
@@ -542,12 +539,12 @@ func (y *YouTube) refresh() {
 			case <-time.After(ytLookupGap):
 			}
 		}
-		tool.jobs.Lock()
-		raw, err := tool.run(ctx, "-J", "--skip-download", "--no-playlist", "--ignore-no-formats-error", ytWatchURL(id))
-		tool.jobs.Unlock()
-		var info ytInfo
+		tool.Jobs.Lock()
+		raw, err := tool.Run(ctx, "-J", "--skip-download", "--no-playlist", "--ignore-no-formats-error", youtube.WatchURL(id))
+		tool.Jobs.Unlock()
+		var info youtube.Info
 		if err == nil {
-			info, err = parseYtInfo(raw)
+			info, err = youtube.ParseInfo(raw)
 		}
 		y.mu.Lock()
 		y.learn(id, info, err)
@@ -567,17 +564,17 @@ func (y *YouTube) refresh() {
 // listed in full. Only changes between the two are logged.
 func (y *YouTube) checkFeed(ctx context.Context, url, id string, listed bool) {
 	tool := y.tool()
-	raw, err := web.Get(ctx, tool.client(), ytFeedURL(id))
-	var entries []ytFeedEntry
+	raw, err := web.Get(ctx, tool.Client(), youtube.FeedURL(id))
+	var entries []youtube.FeedEntry
 	if err == nil {
-		entries, err = parseYtFeed(raw)
+		entries, err = youtube.ParseFeed(raw)
 	}
 	var newest ytListing
 	ferr := err
 	if err != nil && !listed {
-		tool.jobs.Lock()
-		raw, ferr = tool.run(ctx, slices.Concat(ytListingArgs, []string{"--playlist-end", strconv.Itoa(ytNewAtTop), url})...)
-		tool.jobs.Unlock()
+		tool.Jobs.Lock()
+		raw, ferr = tool.Run(ctx, slices.Concat(youtube.ListingArgs, []string{"--playlist-end", strconv.Itoa(ytNewAtTop), url})...)
+		tool.Jobs.Unlock()
 		if ferr == nil {
 			newest, ferr = parseYtListing(raw)
 		}
@@ -664,7 +661,7 @@ func (y *YouTube) lookupsDue(now time.Time) []string {
 }
 
 // learn takes in a lookup of one video. y.mu is held.
-func (y *YouTube) learn(id string, info ytInfo, err error) {
+func (y *YouTube) learn(id string, info youtube.Info, err error) {
 	y.index()
 	v := y.videos[id]
 	if v == nil {
@@ -674,7 +671,7 @@ func (y *YouTube) learn(id string, info ytInfo, err error) {
 	switch {
 	case err == nil:
 		y.learnVideo(v, info)
-	case gone(err):
+	case youtube.Gone(err):
 		v.Skip, v.New, v.Looked = "gone", false, now
 		log.Printf("%s: %s can't play: %v", y.label(), id, err)
 	default:
@@ -778,7 +775,7 @@ func (y *YouTube) open(ctx context.Context, a ytAiring, offset time.Duration, fr
 	info := r.info
 	y.mu.Lock()
 	if err != nil {
-		if v := y.videos[a.ID]; v != nil && gone(err) {
+		if v := y.videos[a.ID]; v != nil && youtube.Gone(err) {
 			v.Skip, v.New, v.Looked = "gone", false, y.clock()
 			y.changed() // and so off the unlocked schedule
 		}
@@ -794,129 +791,10 @@ func (y *YouTube) open(ctx context.Context, a ytAiring, offset time.Duration, fr
 	if next.ID != "" {
 		go y.prefetch(ctx, next)
 	}
-	in := info.inputs()
-	o := opened{AudioLang: info.audioLang(), Captions: r.caps}
-	o.Args, o.Audio = ytInputArgs(in, offset, httpChunks(y.FFmpeg))
+	in := info.Inputs()
+	o := opened{AudioLang: info.AudioLang(), Captions: r.caps}
+	o.Args, o.Audio = youtube.InputArgs(in, offset, youtube.HTTPChunks(y.FFmpeg))
 	log.Printf("%s: on air %s %s in (format %s, %dp, found in %s)", y.label(), a.ID, offset.Round(time.Second),
 		info.FormatID, in[0].Height, time.Since(began).Round(100*time.Millisecond))
 	return o, nil
-}
-
-// ytCaptions fetches a caption track: a json3, WebVTT or SRT file, or a
-// playlist of WebVTT pieces, joined.
-func ytCaptions(ctx context.Context, client *http.Client, sub ytSubtitle) ([]byte, error) {
-	raw, err := ytGet(ctx, client, sub.URL)
-	if err != nil || !strings.HasPrefix(sub.Protocol, "m3u8") {
-		return raw, err
-	}
-	base, err := url.Parse(sub.URL)
-	if err != nil {
-		return nil, errors.New("captions: bad address")
-	}
-	var all []byte
-	pieces := 0
-	for line := range strings.Lines(string(raw)) {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		if pieces++; pieces > 500 {
-			break
-		}
-		u, err := base.Parse(line)
-		if err != nil {
-			return nil, errors.New("captions: bad address")
-		}
-		piece, err := ytGet(ctx, client, u.String())
-		if err != nil {
-			return nil, err
-		}
-		all = append(append(all, piece...), "\n\n"...)
-	}
-	return all, nil
-}
-
-// ytGet fetches captions, leaving their address, which is signed, out of
-// errors.
-func ytGet(ctx context.Context, client *http.Client, address string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
-	if err != nil {
-		return nil, errors.New("captions: bad address")
-	}
-	resp, err := client.Do(req)
-	if uerr := (*url.Error)(nil); errors.As(err, &uerr) {
-		return nil, fmt.Errorf("captions: %w", uerr.Err)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("captions: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("captions: HTTP %d", resp.StatusCode)
-	}
-	return io.ReadAll(io.LimitReader(resp.Body, 16<<20))
-}
-
-// ytFormatSpec picks H.264 picture up to height and AAC sound, English
-// sound of a video dubbed in several languages, else the best single file
-// up to height.
-func ytFormatSpec(height int) string {
-	return fmt.Sprintf("bv*[height<=%[1]d][vcodec^=avc1]+ba[ext=m4a][language^=en]/bv*[height<=%[1]d][vcodec^=avc1]+ba[ext=m4a]/b[height<=%[1]d]", height)
-}
-
-// ytInputArgs are ffmpeg's inputs for a resolved video, played from
-// offset in: picture first, with yt-dlp's headers, reconnecting
-// when a connection drops. A stream that fails for good stops ffmpeg
-// (-xerror) rather than ending the video early, so it can be reopened.
-// chunked fetches in 10 MB ranges as yt-dlp does, which YouTube serves
-// without throttling.
-func ytInputArgs(fs []ytFormat, offset time.Duration, chunked bool) (args []string, audio string) {
-	args = []string{"-xerror"}
-	for i, f := range fs {
-		args = append(args, "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_on_network_error", "1",
-			"-reconnect_delay_max", "4", "-rw_timeout", "15000000")
-		if chunked {
-			args = append(args, "-request_size", "10485760", "-multiple_requests", "1")
-		}
-		if len(f.HTTPHeaders) > 0 {
-			var h strings.Builder
-			for _, k := range sortedKeys(f.HTTPHeaders) {
-				h.WriteString(k + ": " + f.HTTPHeaders[k] + "\r\n")
-			}
-			args = append(args, "-headers", h.String())
-		}
-		if offset > 0 {
-			args = append(args, "-ss", strconv.FormatFloat(offset.Seconds(), 'f', 3, 64))
-		}
-		args = append(args, "-i", f.URL)
-		if audio == "" && f.ACodec != "none" && f.ACodec != "" {
-			audio = fmt.Sprintf("%d:a:0", i)
-		}
-	}
-	return args, audio
-}
-
-func sortedKeys(m map[string]string) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-var chunks sync.Map // ffmpeg path: bool
-
-// httpChunks reports whether ffmpeg can fetch HTTP in ranges
-// (-request_size, FFmpeg 8).
-func httpChunks(ffmpeg string) bool {
-	if ok, found := chunks.Load(ffmpeg); found {
-		return ok.(bool)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	out, _ := exec.CommandContext(ctx, ffmpeg, "-hide_banner", "-h", "protocol=http").Output()
-	ok := strings.Contains(string(out), "-request_size")
-	chunks.Store(ffmpeg, ok)
-	return ok
 }

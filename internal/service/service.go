@@ -41,6 +41,7 @@ import (
 	"airwaves/internal/vchan"
 	"airwaves/internal/weather"
 	"airwaves/internal/web"
+	"airwaves/internal/youtube"
 )
 
 // Version is reported to clients.
@@ -178,7 +179,7 @@ type Options struct {
 	// ChannelsDir holds folder channels, a subfolder of videos each.
 	ChannelsDir string
 	// YtDlp runs yt-dlp for YouTube channels; yt-dlp from PATH when nil.
-	YtDlp *vchan.YtDlp
+	YtDlp *youtube.YtDlp
 	// Loudness is the level custom channels' sound is evened out to as
 	// it streams, in LUFS (vchan.DefaultLoudness is antenna TV's); 0
 	// leaves it as it is.

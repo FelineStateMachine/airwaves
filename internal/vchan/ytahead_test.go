@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"airwaves/internal/phase"
+	"airwaves/internal/youtube"
 )
 
 // TestYouTubeFindsAhead: the videos on now and next are found ahead,
@@ -27,7 +28,7 @@ func TestYouTubeFindsAhead(t *testing.T) {
 	t0 := time.Now().UTC().Truncate(time.Second)
 	stub := &feedStub{down: true}
 	y := &YouTube{Num: "1.8", Dir: t.TempDir(), loaded: true, now: func() time.Time { return t0 },
-		YtDlp: &YtDlp{Path: os.Args[0], HTTP: &http.Client{Transport: stub}},
+		YtDlp: &youtube.YtDlp{Path: os.Args[0], HTTP: &http.Client{Transport: stub}},
 		cfg:   ytConfig{MaxHeight: 720},
 		pool:  &ytPool{Basis: "test", Lock: time.Hour}, plan: ytPlayout{Basis: "test", Airings: []ytAiring{
 			{ID: "aaaaaaaaaaa", Channel: "UCa", Title: "A", Start: t0.Add(-time.Minute), End: t0.Add(10 * time.Minute)},
@@ -59,7 +60,7 @@ func TestYouTubeFindsAhead(t *testing.T) {
 	// Tuning in uses what was found.
 	timer := phase.New("tune", "youtube")
 	r, err := y.resolve(phase.NewContext(context.Background(), timer), "aaaaaaaaaaa", false)
-	if err != nil || len(r.info.inputs()) == 0 {
+	if err != nil || len(r.info.Inputs()) == 0 {
 		t.Fatalf("resolve: %v %+v", err, r)
 	}
 	if n := runs(); n != 2 || !timer.Has("found ahead") {
@@ -116,16 +117,16 @@ func TestAddressesUntil(t *testing.T) {
 	exp := func(d time.Duration) string {
 		return "https://rr1.example/videoplayback?expire=" + strconv.FormatInt(at.Add(d).Unix(), 10) + "&sig=x"
 	}
-	two := ytInfo{RequestedFormats: []ytFormat{{URL: exp(6 * time.Hour), VCodec: "avc1"}, {URL: exp(5 * time.Hour), VCodec: "none", ACodec: "mp4a"}}}
-	if got, want := addressesUntil(two, at), at.Add(5*time.Hour-10*time.Minute); !got.Equal(want) {
+	two := youtube.Info{RequestedFormats: []youtube.Format{{URL: exp(6 * time.Hour), VCodec: "avc1"}, {URL: exp(5 * time.Hour), VCodec: "none", ACodec: "mp4a"}}}
+	if got, want := youtube.AddressesUntil(two, at), at.Add(5*time.Hour-10*time.Minute); !got.Equal(want) {
 		t.Errorf("two addresses: until %v, want %v", got, want)
 	}
-	none := ytInfo{ytFormat: ytFormat{URL: "https://example.com/v.mp4", VCodec: "avc1", ACodec: "mp4a"}}
-	if got, want := addressesUntil(none, at), at.Add(time.Hour); !got.Equal(want) {
+	none := youtube.Info{Format: youtube.Format{URL: "https://example.com/v.mp4", VCodec: "avc1", ACodec: "mp4a"}}
+	if got, want := youtube.AddressesUntil(none, at), at.Add(time.Hour); !got.Equal(want) {
 		t.Errorf("no expiry: until %v, want %v", got, want)
 	}
-	far := ytInfo{ytFormat: ytFormat{URL: exp(48 * time.Hour), VCodec: "avc1", ACodec: "mp4a"}}
-	if got, want := addressesUntil(far, at), at.Add(6*time.Hour); !got.Equal(want) {
+	far := youtube.Info{Format: youtube.Format{URL: exp(48 * time.Hour), VCodec: "avc1", ACodec: "mp4a"}}
+	if got, want := youtube.AddressesUntil(far, at), at.Add(6*time.Hour); !got.Equal(want) {
 		t.Errorf("far expiry: until %v, want %v", got, want)
 	}
 }

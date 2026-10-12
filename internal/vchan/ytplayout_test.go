@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"airwaves/internal/cc"
+	"airwaves/internal/youtube"
 )
 
 func TestYtConfigDefaultsAndMix(t *testing.T) {
@@ -279,7 +280,7 @@ func TestYouTubeTakesInEdits(t *testing.T) {
 	if err := os.WriteFile(cfg, []byte(`{"channels": ["@a"]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	s := &ytSource{URL: ytVideosURL("@a"), ID: "UCa", Name: "A", Listed: now, Checked: now, Dated: true}
+	s := &ytSource{URL: youtube.VideosURL("@a"), ID: "UCa", Name: "A", Listed: now, Checked: now, Dated: true}
 	for j := range 300 {
 		s.Videos = append(s.Videos, &ytVideo{ID: fmt.Sprintf("v%03d", j), Title: fmt.Sprintf("Video %d", j),
 			Seconds: 3600, Published: now.AddDate(0, 0, -3*j), Approx: true, Looked: now})
@@ -318,7 +319,7 @@ func maxAgeChannel(t *testing.T, now time.Time, cfg string) *YouTube {
 	if err := os.WriteFile(filepath.Join(dir, youtubeConfig), []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	s := &ytSource{URL: ytVideosURL("@a"), ID: "UCa", Name: "A", Listed: now, Checked: now, Dated: true}
+	s := &ytSource{URL: youtube.VideosURL("@a"), ID: "UCa", Name: "A", Listed: now, Checked: now, Dated: true}
 	add := func(id string, published time.Time, approx bool) {
 		s.Videos = append(s.Videos, &ytVideo{ID: id, Title: "Video " + id, Seconds: 1800,
 			Published: published, Approx: approx, Looked: now})
@@ -536,11 +537,11 @@ func TestYtAgingOutKeepsThePlan(t *testing.T) {
 // app turns captions on for a Spanish video.
 func TestYtAudioLangAndCaptions(t *testing.T) {
 	now := time.Date(2026, 10, 3, 18, 0, 0, 0, time.UTC)
-	es, err := parseYtInfo(readTestdata(t, "yt_video_es.json"))
+	es, err := youtube.ParseInfo(readTestdata(t, "yt_video_es.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	en, err := parseYtInfo(readTestdata(t, "yt_video.json"))
+	en, err := youtube.ParseInfo(readTestdata(t, "yt_video.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

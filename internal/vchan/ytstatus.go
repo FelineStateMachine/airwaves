@@ -4,6 +4,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"airwaves/internal/youtube"
 )
 
 // YouTubeConfig is a YouTube channel's youtube.json, with the settings it
@@ -79,13 +81,13 @@ func (y *YouTube) Status() YouTubeStatus {
 		st.Sources = append(st.Sources, src)
 	}
 	if y.isPlaylist() {
-		url, _ := YouTubePlaylist(y.cfg.Playlist)
+		url, _ := youtube.Playlist(y.cfg.Playlist)
 		if s := y.source(url); s != nil {
 			seq, _ := y.sequence()
 			src := YouTubeSource{Channel: y.cfg.Playlist, URL: s.URL, ID: s.ID, Name: s.Name, Videos: len(s.Videos),
 				Playable: len(seq), Owner: s.Owner, OwnerID: s.OwnerID, Listed: s.Listed, Listing: y.listDue(s, now)}
 			if len(seq) > 0 {
-				src.Image = ytThumbnail(seq[0].ID)
+				src.Image = youtube.Thumbnail(seq[0].ID)
 			}
 			add(src)
 		}
@@ -93,7 +95,7 @@ func (y *YouTube) Status() YouTubeStatus {
 	}
 	seen := map[string]bool{}
 	for _, c := range y.cfg.Channels {
-		s := y.source(ytVideosURL(c))
+		s := y.source(youtube.VideosURL(c))
 		if s == nil || seen[s.URL] {
 			continue
 		}

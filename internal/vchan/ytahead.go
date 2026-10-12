@@ -4,11 +4,10 @@ import (
 	"context"
 	"errors"
 	"log"
-	"net/url"
-	"strconv"
 	"time"
 
 	"airwaves/internal/phase"
+	"airwaves/internal/youtube"
 )
 
 // Finding where to stream a video from takes yt-dlp seconds, too long to
@@ -19,7 +18,7 @@ import (
 
 // ytResolved is a video's details with its addresses, found ahead.
 type ytResolved struct {
-	info ytInfo
+	info youtube.Info
 	// caps are its English captions, fetched as soon as it's found, so
 	// tuning in doesn't wait for them either; nil when it has none.
 	caps   *captions
@@ -118,21 +117,21 @@ func (y *YouTube) lookAhead(id string) {
 	height := y.cfg.MaxHeight
 	y.mu.Unlock()
 	tool := y.tool()
-	tool.ahead.Lock()
+	tool.Ahead.Lock()
 	y.mu.Lock()
 	f.started = true
 	y.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), ytResolveTime)
 	info, err := y.fetch(ctx, id, height)
 	cancel()
-	tool.ahead.Unlock()
+	tool.Ahead.Unlock()
 	y.mu.Lock()
 	delete(y.ahead, id)
 	switch {
 	case err == nil:
 		delete(y.missed, id)
 		y.keep(id, info, height)
-	case gone(err):
+	case youtube.Gone(err):
 		if v := y.videos[id]; v != nil {
 			v.Skip, v.New, v.Looked = "gone", false, y.clock()
 			y.changed()
@@ -148,45 +147,17 @@ func (y *YouTube) lookAhead(id string) {
 
 // keep remembers a video's addresses until they expire, and starts
 // fetching its captions. y.mu is held.
-func (y *YouTube) keep(id string, info ytInfo, height int) ytResolved {
-	r := ytResolved{info: info, height: height, until: addressesUntil(info, time.Now())}
+func (y *YouTube) keep(id string, info youtube.Info, height int) ytResolved {
+	r := ytResolved{info: info, height: height, until: youtube.AddressesUntil(info, time.Now())}
 	if old, ok := y.resolved[id]; ok && old.caps != nil && !old.caps.failed() {
 		r.caps = old.caps // the same captions, fetched already or under way
-	} else if sub, ok := info.captions(); ok {
-		client := y.tool().client()
-		r.caps = newCaptions(id, func(ctx context.Context) ([]byte, error) { return ytCaptions(ctx, client, sub) })
+	} else if sub, ok := info.Captions(); ok {
+		client := y.tool().Client()
+		r.caps = newCaptions(id, func(ctx context.Context) ([]byte, error) { return youtube.FetchCaptions(ctx, client, sub) })
 		r.caps.start()
 	}
 	y.resolved[id] = r
 	return r
-}
-
-// addressesUntil is when a video's addresses, found at, may stop working:
-// ten minutes before the earliest "expire" they carry (YouTube's last six
-// hours), or an hour after they were found when they carry none.
-func addressesUntil(info ytInfo, at time.Time) time.Time {
-	until := at.Add(time.Hour)
-	var earliest time.Time
-	for _, f := range info.inputs() {
-		u, err := url.Parse(f.URL)
-		if err != nil {
-			return until
-		}
-		sec, err := strconv.ParseInt(u.Query().Get("expire"), 10, 64)
-		if err != nil || sec <= 0 {
-			return until
-		}
-		if t := time.Unix(sec, 0); earliest.IsZero() || t.Before(earliest) {
-			earliest = t
-		}
-	}
-	if earliest.IsZero() {
-		return until
-	}
-	if latest := at.Add(6 * time.Hour); earliest.After(latest) {
-		return latest
-	}
-	return earliest.Add(-10 * time.Minute)
 }
 
 // resolve finds where to stream a video from, and its captions: what was
@@ -233,15 +204,15 @@ func (y *YouTube) resolve(ctx context.Context, id string, fresh bool) (ytResolve
 }
 
 // fetch asks yt-dlp where to stream a video from.
-func (y *YouTube) fetch(ctx context.Context, id string, height int) (ytInfo, error) {
+func (y *YouTube) fetch(ctx context.Context, id string, height int) (youtube.Info, error) {
 	ctx, cancel := context.WithTimeout(ctx, ytResolveTime)
 	defer cancel()
-	raw, err := y.tool().run(ctx, "-J", "--no-playlist", "-f", ytFormatSpec(height), ytWatchURL(id))
+	raw, err := y.tool().Run(ctx, "-J", "--no-playlist", "-f", youtube.FormatSpec(height), youtube.WatchURL(id))
 	if err != nil {
-		return ytInfo{}, err
+		return youtube.Info{}, err
 	}
-	info, err := parseYtInfo(raw)
-	if err == nil && len(info.inputs()) == 0 {
+	info, err := youtube.ParseInfo(raw)
+	if err == nil && len(info.Inputs()) == 0 {
 		err = errors.New("yt-dlp found no stream")
 	}
 	return info, err

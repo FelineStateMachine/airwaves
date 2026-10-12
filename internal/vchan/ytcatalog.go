@@ -2,16 +2,13 @@ package vchan
 
 import (
 	"encoding/json"
-	"encoding/xml"
-	"errors"
 	"fmt"
 	"math"
 	"os"
 	"path/filepath"
-	"regexp"
-	"slices"
-	"strings"
 	"time"
+
+	"airwaves/internal/youtube"
 )
 
 // ytConfig is a YouTube channel's youtube.json.
@@ -71,7 +68,7 @@ func readYtConfig(path string) (ytConfig, error) {
 	case c.Playlist != "" && len(c.Channels) > 0:
 		return c, fmt.Errorf("%s names both channels and a playlist; it plays one or the other", filepath.Base(path))
 	case c.Playlist != "":
-		if _, err := YouTubePlaylist(c.Playlist); err != nil {
+		if _, err := youtube.Playlist(c.Playlist); err != nil {
 			return c, fmt.Errorf("%s: playlist %q: %w", filepath.Base(path), c.Playlist, err)
 		}
 	case len(c.Channels) == 0:
@@ -180,34 +177,8 @@ func (c *ytCatalog) source(url string) *ytSource {
 	return s
 }
 
-// ytVideosURL turns a configured channel into its uploads tab.
-func ytVideosURL(s string) string {
-	s = strings.TrimSpace(s)
-	switch {
-	case strings.HasPrefix(s, "@"):
-		s = "https://www.youtube.com/" + s
-	case strings.HasPrefix(s, "UC") && !strings.Contains(s, "/"):
-		s = "https://www.youtube.com/channel/" + s
-	case !strings.Contains(s, "://"):
-		s = "https://" + s
-	}
-	s = strings.TrimRight(s, "/")
-	for _, tab := range []string{"/videos", "/featured", "/streams", "/shorts", "/playlists", "/about"} {
-		s = strings.TrimSuffix(s, tab)
-	}
-	return s + "/videos"
-}
-
-func ytFeedURL(channelID string) string {
-	return "https://www.youtube.com/feeds/videos.xml?channel_id=" + channelID
-}
-
-func ytWatchURL(id string) string { return "https://www.youtube.com/watch?v=" + id }
-
-func ytThumbnail(id string) string { return "https://i.ytimg.com/vi/" + id + "/hqdefault.jpg" }
-
 // ytListing is a channel's uploads tab, from yt-dlp --flat-playlist -J
-// with ytListingArgs.
+// with youtube.ListingArgs.
 type ytListing struct {
 	ID, Name string
 	Videos   []*ytVideo // newest first; a playlist's in its order
@@ -216,46 +187,23 @@ type ytListing struct {
 }
 
 func parseYtListing(raw []byte) (ytListing, error) {
-	var p struct {
-		Channel   string `json:"channel"`
-		ChannelID string `json:"channel_id"`
-		Entries   []struct {
-			ID         string  `json:"id"`
-			Title      string  `json:"title"`
-			Duration   float64 `json:"duration"`
-			Timestamp  float64 `json:"timestamp"`
-			LiveStatus string  `json:"live_status"`
-		} `json:"entries"`
-	}
-	if err := json.Unmarshal(raw, &p); err != nil {
-		return ytListing{}, err
-	}
-	if p.ChannelID == "" {
-		return ytListing{}, errors.New("not a YouTube channel")
-	}
-	l := ytListing{ID: p.ChannelID, Name: p.Channel}
-	for _, e := range p.Entries {
-		if e.ID == "" {
-			continue
-		}
-		v := &ytVideo{ID: e.ID, Title: e.Title, Seconds: int(math.Round(e.Duration))}
-		if e.Timestamp > 0 {
-			v.Published, v.Approx = time.Unix(int64(e.Timestamp), 0).UTC(), true
-		}
-		switch e.LiveStatus {
-		case "is_upcoming":
-			v.Skip = "upcoming"
-		case "is_live", "post_live", "was_live":
-			v.Skip = "live"
-		}
-		l.Videos = append(l.Videos, v)
-	}
-	return l, nil
+	l, err := youtube.ParseListing(raw)
+	return listingOf(l, true), err
 }
 
-// ytListingArgs list a channel's uploads tab with approximate upload dates
-// (from YouTube's "3 years ago"; no extra requests).
-var ytListingArgs = []string{"--flat-playlist", "-J", "--extractor-args", "youtubetab:approximate_date"}
+// listingOf is a listing as the catalog keeps it: dated, its upload
+// dates, rough as they are.
+func listingOf(l youtube.Listing, dated bool) ytListing {
+	out := ytListing{ID: l.ID, Name: l.Name, Owner: l.Owner, OwnerID: l.OwnerID}
+	for _, e := range l.Entries {
+		v := &ytVideo{ID: e.ID, Title: e.Title, Seconds: e.Seconds, Skip: e.Skip, Channel: e.Channel}
+		if dated && !e.Published.IsZero() {
+			v.Published, v.Approx = e.Published, true
+		}
+		out.Videos = append(out.Videos, v)
+	}
+	return out
+}
 
 // ytNewAtTop is how far down a listing a video it didn't have before
 // counts as a new upload, due a first run, rather than an old one that
@@ -341,32 +289,12 @@ func (s *ytSource) mergeNewest(l ytListing, now time.Time) (added int, changed b
 	return added, changed || len(fresh) > 0
 }
 
-// ytFeedEntry is an upload in a channel's feed: the newest 15, Shorts and
-// streams included, without lengths.
-type ytFeedEntry struct {
-	ID          string    `xml:"videoId"`
-	Title       string    `xml:"title"`
-	Published   time.Time `xml:"published"`
-	Description string    `xml:"group>description"`
-	Link        struct {
-		Href string `xml:"href,attr"`
-	} `xml:"link"`
-}
-
-func parseYtFeed(raw []byte) ([]ytFeedEntry, error) {
-	var f struct {
-		Entries []ytFeedEntry `xml:"entry"`
-	}
-	err := xml.Unmarshal(raw, &f)
-	return f.Entries, err
-}
-
 // mergeFeed adds the feed's uploads the source doesn't have yet, as new
 // videos due a first run once their details are looked up, and fills in
 // the dates and descriptions of ones it has. Shorts are recognized by
 // their links, and kept only so they aren't looked at again. added counts
 // the new uploads.
-func (s *ytSource) mergeFeed(entries []ytFeedEntry, now time.Time) (added int, changed bool) {
+func (s *ytSource) mergeFeed(entries []youtube.FeedEntry, now time.Time) (added int, changed bool) {
 	known := map[string]*ytVideo{}
 	for _, v := range s.Videos {
 		known[v.ID] = v
@@ -380,14 +308,14 @@ func (s *ytSource) mergeFeed(entries []ytFeedEntry, now time.Time) (added int, c
 			if (v.Published.IsZero() || v.Approx) && !e.Published.IsZero() {
 				v.Published, v.Approx, changed = e.Published, false, true
 			}
-			if d := ytDescription(e.Description); v.Description == "" && d != "" {
+			if d := youtube.Description(e.Description); v.Description == "" && d != "" {
 				v.Description, changed = d, true
 			}
 			continue
 		}
 		v := &ytVideo{ID: e.ID, Title: e.Title, Published: e.Published,
-			Description: ytDescription(e.Description), Found: now, New: true}
-		if strings.Contains(e.Link.Href, "/shorts/") {
+			Description: youtube.Description(e.Description), Found: now, New: true}
+		if e.Short() {
 			v.Skip, v.New = "short", false
 		} else {
 			added++
@@ -400,55 +328,8 @@ func (s *ytSource) mergeFeed(entries []ytFeedEntry, now time.Time) (added int, c
 	return added, changed || len(fresh) > 0
 }
 
-// ytInfo is a video's details from yt-dlp -J, and with a format chosen,
-// where to stream it from.
-type ytInfo struct {
-	ID          string  `json:"id"`
-	Title       string  `json:"title"`
-	Duration    float64 `json:"duration"`
-	Timestamp   float64 `json:"timestamp"`
-	Description string  `json:"description"`
-	Language    string  `json:"language"`
-	LiveStatus  string  `json:"live_status"`
-	MediaType   string  `json:"media_type"`
-	FormatID    string  `json:"format_id"`
-	ytFormat
-	RequestedFormats []ytFormat `json:"requested_formats"`
-	// Subtitles are the uploader's, AutoCaptions YouTube's speech
-	// recognition, by language ("en", "en-US", "en-orig").
-	Subtitles    map[string][]ytSubtitle `json:"subtitles"`
-	AutoCaptions map[string][]ytSubtitle `json:"automatic_captions"`
-}
-
-type ytFormat struct {
-	URL         string            `json:"url"`
-	VCodec      string            `json:"vcodec"`
-	ACodec      string            `json:"acodec"`
-	Height      int               `json:"height"`
-	Language    string            `json:"language"`
-	HTTPHeaders map[string]string `json:"http_headers"`
-}
-
-// ytSubtitle is a subtitle track in one format.
-type ytSubtitle struct {
-	Ext      string `json:"ext"`
-	URL      string `json:"url"`
-	Protocol string `json:"protocol"` // "m3u8_native" for a playlist of pieces
-}
-
-func parseYtInfo(raw []byte) (ytInfo, error) {
-	var i ytInfo
-	if err := json.Unmarshal(raw, &i); err != nil {
-		return i, err
-	}
-	if i.ID == "" {
-		return i, errors.New("no video in yt-dlp's output")
-	}
-	return i, nil
-}
-
 // learn takes in a video's looked-up details.
-func (v *ytVideo) learn(i ytInfo, now time.Time) {
+func (v *ytVideo) learn(i youtube.Info, now time.Time) {
 	v.Looked = now
 	if i.Title != "" {
 		v.Title = i.Title
@@ -459,13 +340,13 @@ func (v *ytVideo) learn(i ytInfo, now time.Time) {
 	if i.Timestamp > 0 {
 		v.Published, v.Approx = time.Unix(int64(i.Timestamp), 0).UTC(), false
 	}
-	if d := ytDescription(i.Description); d != "" {
+	if d := youtube.Description(i.Description); d != "" {
 		v.Description = d
 	}
-	if l := i.audioLang(); l != "" {
+	if l := i.AudioLang(); l != "" {
 		v.AudioLang = l
 	}
-	_, v.Captions = i.captions()
+	_, v.Captions = i.Captions()
 	switch {
 	case i.MediaType == "short":
 		v.Skip = "short"
@@ -479,90 +360,4 @@ func (v *ytVideo) learn(i ytInfo, now time.Time) {
 	if v.Skip != "" {
 		v.New = false
 	}
-}
-
-var (
-	separator = regexp.MustCompile(`(?m)^\s*[=\-_*~#]{5,}\s*$`)
-	label     = regexp.MustCompile(`^.{0,40}:$`)
-)
-
-// ytDescription makes a guide description of a YouTube description: its
-// first paragraph that says something, before the links section, without
-// addresses or the labels left of them ("Game on Steam:").
-func ytDescription(s string) string {
-	if i := separator.FindStringIndex(s); i != nil {
-		s = s[:i[0]]
-	}
-	for para := range strings.SplitSeq(strings.ReplaceAll(s, "\r", ""), "\n\n") {
-		var keep []string
-		for line := range strings.SplitSeq(para, "\n") {
-			line = strings.TrimSpace(urls.ReplaceAllString(line, ""))
-			if line != "" && !label.MatchString(line) {
-				keep = append(keep, strings.TrimSuffix(line, ":"))
-			}
-		}
-		if len(keep) > 0 {
-			return firstParagraph(strings.Join(keep, "\n"), 300)
-		}
-	}
-	return ""
-}
-
-// inputs are the ffmpeg inputs for a resolved video, picture first.
-func (i ytInfo) inputs() []ytFormat {
-	fs := i.RequestedFormats
-	if len(fs) == 0 && i.URL != "" {
-		fs = []ytFormat{i.ytFormat}
-	}
-	out := make([]ytFormat, 0, len(fs))
-	for _, f := range fs {
-		if f.VCodec != "none" && f.VCodec != "" {
-			out = append(out, f)
-		}
-	}
-	for _, f := range fs {
-		if f.VCodec == "none" || f.VCodec == "" {
-			out = append(out, f)
-		}
-	}
-	return out
-}
-
-// audioLang is the sound's language, "" when YouTube doesn't say.
-func (i ytInfo) audioLang() string {
-	for _, f := range i.inputs() {
-		if f.ACodec != "none" && f.ACodec != "" && f.Language != "" {
-			return f.Language
-		}
-	}
-	return i.Language
-}
-
-// captions picks the video's English captions: the uploader's, else
-// YouTube's automatic ones, as json3, which times each word of automatic
-// captions, else WebVTT or SRT. ok is false when there are none.
-func (i ytInfo) captions() (sub ytSubtitle, ok bool) {
-	pick := func(tracks map[string][]ytSubtitle, langs ...string) (ytSubtitle, bool) {
-		for _, l := range langs {
-			for _, ext := range []string{"json3", "vtt", "srt"} {
-				for _, s := range tracks[l] {
-					if s.Ext == ext && s.URL != "" {
-						return s, true
-					}
-				}
-			}
-		}
-		return ytSubtitle{}, false
-	}
-	var others []string
-	for l := range i.Subtitles {
-		if strings.HasPrefix(l, "en-") {
-			others = append(others, l)
-		}
-	}
-	slices.Sort(others)
-	if s, ok := pick(i.Subtitles, append([]string{"en"}, others...)...); ok {
-		return s, true
-	}
-	return pick(i.AutoCaptions, "en-orig", "en")
 }

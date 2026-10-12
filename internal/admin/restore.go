@@ -43,6 +43,7 @@ import (
 	"airwaves/internal/guide"
 	"airwaves/internal/jellyfin"
 	"airwaves/internal/vchan"
+	"airwaves/internal/youtube"
 )
 
 // weatherKey is the weather channel among a backup's channels.
@@ -181,7 +182,7 @@ func sourceOf(files map[string][]byte) string {
 			return ""
 		}
 		if c.Playlist != "" {
-			page, err := vchan.YouTubePlaylist(c.Playlist)
+			page, err := youtube.Playlist(c.Playlist)
 			if err != nil {
 				page = strings.TrimSpace(c.Playlist)
 			}

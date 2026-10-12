@@ -15,6 +15,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"airwaves/internal/youtube"
 )
 
 func readTestdata(t *testing.T, name string) []byte {
@@ -55,7 +57,7 @@ func TestYtCatalogFromListingAndFeed(t *testing.T) {
 	}
 
 	now := time.Date(2026, 10, 3, 15, 0, 0, 0, time.UTC)
-	s := &ytSource{URL: ytVideosURL("@TheLibraryofLetourneau")}
+	s := &ytSource{URL: youtube.VideosURL("@TheLibraryofLetourneau")}
 	if added := s.mergeListing(l, now); added != 0 {
 		t.Errorf("the first listing found %d new videos; it should take them all as the back catalog", added)
 	}
@@ -65,7 +67,7 @@ func TestYtCatalogFromListingAndFeed(t *testing.T) {
 		}
 	}
 
-	entries, err := parseYtFeed(readTestdata(t, "yt_feed.xml"))
+	entries, err := youtube.ParseFeed(readTestdata(t, "yt_feed.xml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +98,7 @@ func TestYtCatalogFromListingAndFeed(t *testing.T) {
 	}
 
 	// Its lookup gives the length; it's playable and still due a first run.
-	info, err := parseYtInfo(readTestdata(t, "yt_video.json"))
+	info, err := youtube.ParseInfo(readTestdata(t, "yt_video.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,15 +120,15 @@ func TestYtCatalogFromListingAndFeed(t *testing.T) {
 }
 
 func TestYtInfoInputs(t *testing.T) {
-	info, err := parseYtInfo(readTestdata(t, "yt_video.json"))
+	info, err := youtube.ParseInfo(readTestdata(t, "yt_video.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	in := info.inputs()
+	in := info.Inputs()
 	if len(in) != 2 || in[0].VCodec == "none" || in[1].ACodec == "none" || in[0].Height != 720 {
 		t.Fatalf("inputs: %+v", in)
 	}
-	args, audio := ytInputArgs(in, 90*time.Second, true)
+	args, audio := youtube.InputArgs(in, 90*time.Second, true)
 	if audio != "1:a:0" || countInputs(args) != 2 || args[0] != "-xerror" {
 		t.Errorf("audio %q, %d inputs: %q", audio, countInputs(args), args)
 	}
@@ -138,12 +140,12 @@ func TestYtInfoInputs(t *testing.T) {
 		}
 	}
 	// One file with picture and sound.
-	single := ytInfo{ID: "x", ytFormat: ytFormat{URL: "https://example.com/v.mp4", VCodec: "avc1", ACodec: "mp4a.40.2"}}
-	if args, audio := ytInputArgs(single.inputs(), 0, false); audio != "0:a:0" || countInputs(args) != 1 ||
+	single := youtube.Info{ID: "x", Format: youtube.Format{URL: "https://example.com/v.mp4", VCodec: "avc1", ACodec: "mp4a.40.2"}}
+	if args, audio := youtube.InputArgs(single.Inputs(), 0, false); audio != "0:a:0" || countInputs(args) != 1 ||
 		slices.Contains(args, "-ss") || slices.Contains(args, "-request_size") {
 		t.Errorf("single file: %q %q", args, audio)
 	}
-	if got := ytFormatSpec(480); got != "bv*[height<=480][vcodec^=avc1]+ba[ext=m4a][language^=en]/bv*[height<=480][vcodec^=avc1]+ba[ext=m4a]/b[height<=480]" {
+	if got := youtube.FormatSpec(480); got != "bv*[height<=480][vcodec^=avc1]+ba[ext=m4a][language^=en]/bv*[height<=480][vcodec^=avc1]+ba[ext=m4a]/b[height<=480]" {
 		t.Errorf("format %s", got)
 	}
 }
@@ -155,8 +157,8 @@ func TestYtDescription(t *testing.T) {
 		"Lego Party on Steam: https://x.com\n\nApollo: http://twitch.tv/a\nJustin: http://twitch.tv/b\n\nFun with friends.": "Fun with friends.",
 		"https://only.links/here": "",
 	} {
-		if got := ytDescription(in); got != want {
-			t.Errorf("ytDescription(%q) = %q, want %q", in, got, want)
+		if got := youtube.Description(in); got != want {
+			t.Errorf("youtube.Description(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
@@ -194,8 +196,8 @@ func TestYtVideosURL(t *testing.T) {
 		"UC3tNpTOHsTnkmbwztCs30sA":                     "https://www.youtube.com/channel/UC3tNpTOHsTnkmbwztCs30sA/videos",
 		"https://www.youtube.com/@Northernlion/videos": "https://www.youtube.com/@Northernlion/videos",
 	} {
-		if got := ytVideosURL(in); got != want {
-			t.Errorf("ytVideosURL(%q) = %q, want %q", in, got, want)
+		if got := youtube.VideosURL(in); got != want {
+			t.Errorf("youtube.VideosURL(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
@@ -432,7 +434,7 @@ func TestYouTubeGuide(t *testing.T) {
 	write(youtubeConfig, `{"channels": ["@Northernlion", "https://www.youtube.com/@TheLibraryofLetourneau"], "minMinutes": 5}`)
 	cat := ytCatalog{}
 	for i, name := range []string{"Northernlion", "The Library of Letourneau"} {
-		s := &ytSource{URL: ytVideosURL([]string{"@Northernlion", "@TheLibraryofLetourneau"}[i]),
+		s := &ytSource{URL: youtube.VideosURL([]string{"@Northernlion", "@TheLibraryofLetourneau"}[i]),
 			ID: fmt.Sprintf("UC%d", i), Name: name, Listed: now, Checked: now}
 		for j := range 40 {
 			s.Videos = append(s.Videos, &ytVideo{ID: fmt.Sprintf("v%d-%02d", i, j), Title: fmt.Sprintf("%s video %d", name, j),
@@ -581,7 +583,7 @@ func TestYouTubeLive(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, youtubeConfig), []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	tool := &YtDlp{Path: os.Getenv("AIRWAVES_YTDLP")}
+	tool := &youtube.YtDlp{Path: os.Getenv("AIRWAVES_YTDLP")}
 	if tool.Path == "" {
 		tool.Path, tool.Update = filepath.Join(root, "tools", "yt-dlp"), true
 	}

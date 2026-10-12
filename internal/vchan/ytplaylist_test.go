@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"airwaves/internal/youtube"
 )
 
 const csList = "PL8dPuuaLjXtNlUrzyH5r6jN9ulIgZBpdo"
@@ -26,11 +28,11 @@ func TestYouTubePlaylistLinks(t *testing.T) {
 		"http://www.youtube.com/embed/videoseries?list=" + csList,
 		csList,
 	} {
-		if got, err := YouTubePlaylist(in); got != page || err != nil {
-			t.Errorf("YouTubePlaylist(%q) = %q, %v", in, got, err)
+		if got, err := youtube.Playlist(in); got != page || err != nil {
+			t.Errorf("youtube.Playlist(%q) = %q, %v", in, got, err)
 		}
 	}
-	if got, err := YouTubePlaylist("UU3tNpTOHsTnkmbwztCs30sA"); got != "https://www.youtube.com/playlist?list=UU3tNpTOHsTnkmbwztCs30sA" || err != nil {
+	if got, err := youtube.Playlist("UU3tNpTOHsTnkmbwztCs30sA"); got != "https://www.youtube.com/playlist?list=UU3tNpTOHsTnkmbwztCs30sA" || err != nil {
 		t.Errorf("uploads playlist: %q, %v", got, err)
 	}
 	for in, want := range map[string]string{
@@ -43,8 +45,8 @@ func TestYouTubePlaylistLinks(t *testing.T) {
 		"crash course": "isn't a YouTube playlist",
 		"https://www.youtube.com/playlist?list=PL<script>": "isn't a YouTube playlist",
 	} {
-		if got, err := YouTubePlaylist(in); err == nil || !strings.Contains(err.Error(), want) {
-			t.Errorf("YouTubePlaylist(%q) = %q, %v; want an error saying %q", in, got, err, want)
+		if got, err := youtube.Playlist(in); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("youtube.Playlist(%q) = %q, %v; want an error saying %q", in, got, err, want)
 		}
 	}
 }
@@ -100,7 +102,7 @@ func TestYtPlaylistListing(t *testing.T) {
 	// Listed again: the playlist's new order, what's known kept, a video
 	// taken out gone, and one found unplayable still so.
 	now := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
-	s := &ytSource{URL: ytPlaylistURL(csList)}
+	s := &ytSource{URL: youtube.PlaylistURL(csList)}
 	if added := s.mergePlaylist(l, now); added != 0 || s.Name != "Computer Science" || s.Owner != "CrashCourse" || len(s.Videos) != 9 {
 		t.Fatalf("first listing: %d added, %+v", added, s)
 	}
@@ -150,7 +152,7 @@ func testPlaylist(t *testing.T, clock time.Time, schedule string) *YouTube {
 	if schedule != "" {
 		write(DetailsFile, `{"schedule": `+schedule+`}`)
 	}
-	s := &ytSource{URL: ytPlaylistURL("PLtestplaylist01"), ID: "PLtestplaylist01", Name: "A course", Owner: "Teacher",
+	s := &ytSource{URL: youtube.PlaylistURL("PLtestplaylist01"), ID: "PLtestplaylist01", Name: "A course", Owner: "Teacher",
 		Listed: clock, Checked: clock, Dated: true}
 	for i := range 5 {
 		s.Videos = append(s.Videos, &ytVideo{ID: fmt.Sprintf("part%07d", i+1), Title: fmt.Sprintf("Part %d", i+1),
@@ -161,7 +163,7 @@ func testPlaylist(t *testing.T, clock time.Time, schedule string) *YouTube {
 	}
 	s.Videos[1].Channel = "Guest"
 	y := &YouTube{Num: "1.9", Title: "Course", Dir: dir, now: func() time.Time { return clock },
-		YtDlp: &YtDlp{Path: os.Args[0], HTTP: &http.Client{Transport: &feedStub{down: true}}}}
+		YtDlp: &youtube.YtDlp{Path: os.Args[0], HTTP: &http.Client{Transport: &feedStub{down: true}}}}
 	y.save(ytCatalogFile, ytCatalog{Sources: []*ytSource{s}})
 	return y
 }
@@ -187,7 +189,7 @@ func TestYtPlaylistAroundTheClock(t *testing.T) {
 		t.Errorf("programs %v, want %v", titles, want)
 	}
 	if p := progs[0]; !p.Start.Equal(scheduleEpoch.Add(100*loop+600*time.Second)) || p.Subtitle != "Guest" ||
-		p.Description != "About part 2" || p.Image != ytThumbnail("part0000002") {
+		p.Description != "About part 2" || p.Image != youtube.Thumbnail("part0000002") {
 		t.Errorf("part 2: %+v", p)
 	}
 	if p := progs[1]; p.Subtitle != "Teacher" {
@@ -300,7 +302,7 @@ func TestYtPlaylistListedWithYtDlp(t *testing.T) {
 	}
 	clock := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
 	y := &YouTube{Num: "1.9", Title: "CS", Dir: dir, now: func() time.Time { return clock },
-		YtDlp: &YtDlp{Path: os.Args[0], HTTP: &http.Client{Transport: &feedStub{down: true}}}}
+		YtDlp: &youtube.YtDlp{Path: os.Args[0], HTTP: &http.Client{Transport: &feedStub{down: true}}}}
 	refresh := func() {
 		y.mu.Lock()
 		y.tend()
@@ -351,8 +353,8 @@ func TestYtPlaylistListedWithYtDlp(t *testing.T) {
 	if len(st.Sources) != 1 || st.Config.Playlist != given {
 		t.Fatalf("status: %+v", st)
 	}
-	if s := st.Sources[0]; s.Channel != given || s.URL != ytPlaylistURL(csList) || s.Name != "Computer Science" || s.Owner != "CrashCourse" ||
-		s.Videos != 9 || s.Playable != 7 || s.Listing || !s.Listed.Equal(clock) || s.Image != ytThumbnail("tpIctyqH29Q") {
+	if s := st.Sources[0]; s.Channel != given || s.URL != youtube.PlaylistURL(csList) || s.Name != "Computer Science" || s.Owner != "CrashCourse" ||
+		s.Videos != 9 || s.Playable != 7 || s.Listing || !s.Listed.Equal(clock) || s.Image != youtube.Thumbnail("tpIctyqH29Q") {
 		t.Errorf("status: %+v", s)
 	}
 	if y.Empty() {

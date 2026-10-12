@@ -28,8 +28,8 @@ import (
 	"airwaves/internal/api"
 	"airwaves/internal/hdhr"
 	"airwaves/internal/service"
-	"airwaves/internal/vchan"
 	"airwaves/internal/web"
+	"airwaves/internal/youtube"
 )
 
 func main() {
@@ -109,7 +109,7 @@ func run() error {
 
 	// YouTube changes faster than images are rebuilt, so by default
 	// airwavesd keeps the latest yt-dlp release itself.
-	yt := &vchan.YtDlp{Path: *ytdlp, HTTP: web.NewClient()}
+	yt := &youtube.YtDlp{Path: *ytdlp, HTTP: web.NewClient()}
 	if yt.Path == "" {
 		yt.Path, yt.Update = filepath.Join(*data, "tools", "yt-dlp"), true
 	}

@@ -1,4 +1,9 @@
-package vchan
+// Package youtube is YouTube as a source: yt-dlp, kept up to date, to
+// list channels and playlists, find videos' details and where to stream
+// them from, and search for channels; and YouTube's feeds. The custom
+// channels (internal/vchan) and the podcasts (internal/podcast) both use
+// it.
+package youtube
 
 import (
 	"bytes"
@@ -15,12 +20,13 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 )
 
-// YtDlp runs yt-dlp for YouTube channels. With Update, it keeps its own
+// YtDlp runs yt-dlp. With Update, it keeps its own
 // copy at Path: the latest release is downloaded on first use and replaced
 // about daily, so YouTube's changes don't wait for a new image. The release
 // is a Python zipapp, so python3 must be installed, and YouTube needs a
@@ -32,11 +38,14 @@ type YtDlp struct {
 	// when nil.
 	HTTP *http.Client
 
+	// Jobs is held for a listing job, one at a time across its users;
+	// Ahead while finding where to stream a video from ahead of time,
+	// likewise.
+	Jobs, Ahead sync.Mutex
+
 	mu       sync.Mutex
 	checked  time.Time // the last install or update check
 	updating bool
-	jobs     sync.Mutex // one catalog job at a time, across channels
-	ahead    sync.Mutex // one video found ahead of time at a time, likewise
 }
 
 const (
@@ -44,7 +53,8 @@ const (
 	ytdlpUpdateEvery = 24 * time.Hour
 )
 
-func (t *YtDlp) client() *http.Client { return cmp.Or(t.HTTP, http.DefaultClient) }
+// Client is the HTTP client t reads with, for feeds and captions.
+func (t *YtDlp) Client() *http.Client { return cmp.Or(t.HTTP, http.DefaultClient) }
 
 // command returns the yt-dlp to run, installing it first when it's
 // missing, and starts the daily update when one is due.
@@ -138,7 +148,7 @@ func (t *YtDlp) latest(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	c := *t.client()
+	c := *t.Client()
 	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	resp, err := c.Do(req)
 	if err != nil {
@@ -157,7 +167,7 @@ func (t *YtDlp) get(ctx context.Context, url string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	resp, err := t.client().Do(req)
+	resp, err := t.Client().Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -175,9 +185,9 @@ func ytdlpVersion(ctx context.Context, p string) (string, error) {
 	return strings.TrimSpace(string(out)), err
 }
 
-// run runs yt-dlp with args and returns what it writes to stdout. Errors
+// Run runs yt-dlp with args and returns what it writes to stdout. Errors
 // carry yt-dlp's own error message, without addresses.
-func (t *YtDlp) run(ctx context.Context, args ...string) ([]byte, error) {
+func (t *YtDlp) Run(ctx context.Context, args ...string) ([]byte, error) {
 	p, err := t.command(ctx)
 	if err != nil {
 		return nil, err
@@ -195,17 +205,18 @@ func (t *YtDlp) run(ctx context.Context, args ...string) ([]byte, error) {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		return nil, &ytdlpError{msg: ytdlpMessage(stderr.String(), err)}
+		return nil, &Error{msg: message(stderr.String(), err)}
 	}
 	return out, nil
 }
 
-type ytdlpError struct{ msg string }
+// Error is yt-dlp's error message.
+type Error struct{ msg string }
 
-func (e *ytdlpError) Error() string { return "yt-dlp: " + e.msg }
+func (e *Error) Error() string { return "yt-dlp: " + e.msg }
 
-// ytdlpMessage picks yt-dlp's error line out of its output.
-func ytdlpMessage(stderr string, err error) string {
+// message picks yt-dlp's error line out of its output.
+func message(stderr string, err error) string {
 	msg := ""
 	for line := range strings.Lines(stderr) {
 		if s, ok := strings.CutPrefix(strings.TrimSpace(line), "ERROR: "); ok {
@@ -227,10 +238,10 @@ func ytdlpMessage(stderr string, err error) string {
 	return msg
 }
 
-// gone reports whether a yt-dlp error says the video can't be played
+// Gone reports whether a yt-dlp error says the video can't be played
 // here at all, rather than for now.
-func gone(err error) bool {
-	var e *ytdlpError
+func Gone(err error) bool {
+	var e *Error
 	if !errors.As(err, &e) {
 		return false
 	}
@@ -245,4 +256,54 @@ func gone(err error) bool {
 		}
 	}
 	return false
+}
+
+// urls are addresses in text, left out of errors and descriptions.
+var urls = regexp.MustCompile(`https?://\S+`)
+
+// ErrInstalling is Ready's answer while yt-dlp is being installed.
+var ErrInstalling = errors.New("yt-dlp is being installed; try again in a minute")
+
+// installing is Ready's install of a managed yt-dlp.
+type installing struct {
+	mu      sync.Mutex
+	running bool
+	err     error // the last try's
+}
+
+var installs sync.Map // *YtDlp: *installing
+
+// Ready reports whether yt-dlp is there to run. When t keeps its own copy
+// and hasn't installed it yet, Ready starts installing it and reports
+// ErrInstalling, or why the last try failed.
+func (t *YtDlp) Ready() error {
+	if !t.Update {
+		if _, err := exec.LookPath(cmp.Or(t.Path, "yt-dlp")); err != nil {
+			return fmt.Errorf("yt-dlp isn't installed on the server: %w", err)
+		}
+		return nil
+	}
+	if _, err := os.Stat(t.Path); err == nil {
+		return nil
+	}
+	v, _ := installs.LoadOrStore(t, &installing{})
+	in := v.(*installing)
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	failed := in.err
+	if !in.running {
+		in.running = true
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+			_, err := t.command(ctx)
+			in.mu.Lock()
+			in.running, in.err = false, err
+			in.mu.Unlock()
+		}()
+	}
+	if failed != nil {
+		return fmt.Errorf("couldn't install yt-dlp (%v); trying again", failed)
+	}
+	return ErrInstalling
 }

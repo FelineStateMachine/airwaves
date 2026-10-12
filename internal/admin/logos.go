@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"airwaves/internal/vchan"
+	"airwaves/internal/youtube"
 )
 
 const (
@@ -327,7 +328,7 @@ func (s *Server) youtubeAvatar(w http.ResponseWriter, r *http.Request, dir strin
 	}
 	l, ok := s.lookedUp(page, "")
 	if !ok {
-		if !s.ytRun(w, r, lookupTime, func(ctx context.Context, tool *vchan.YtDlp) error {
+		if !s.ytRun(w, r, lookupTime, func(ctx context.Context, tool *youtube.YtDlp) error {
 			found, err := tool.LookupChannel(ctx, page)
 			l = lookedUp{ch: channelOut(found), err: err, at: time.Now()}
 			return err

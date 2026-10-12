@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"airwaves/internal/guide"
+	"airwaves/internal/youtube"
 )
 
 // Library finds folder channels: each subfolder of Root is a channel named
@@ -30,7 +31,7 @@ type Library struct {
 	// when they change.
 	Reserved func() []string
 	// YtDlp runs yt-dlp for YouTube channels; yt-dlp from PATH when nil.
-	YtDlp *YtDlp
+	YtDlp *youtube.YtDlp
 	// Loudness is the level the channels' sound is evened out to, in LUFS
 	// (see DefaultLoudness); 0 leaves it as it is.
 	Loudness float64

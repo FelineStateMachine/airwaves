@@ -14,6 +14,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"airwaves/internal/youtube"
 )
 
 // TestMain lets the test binary stand in for yt-dlp: run with
@@ -129,14 +131,14 @@ func TestYtFeedFallback(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, youtubeConfig), []byte(`{"channels": ["@a"]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	s := &ytSource{URL: ytVideosURL("@a"), ID: "UCa", Name: "A", Listed: clock, Dated: true}
+	s := &ytSource{URL: youtube.VideosURL("@a"), ID: "UCa", Name: "A", Listed: clock, Dated: true}
 	for i := range 100 {
 		s.Videos = append(s.Videos, &ytVideo{ID: fmt.Sprintf("v%03d", i), Title: fmt.Sprintf("Video %d", i),
 			Seconds: 1200, Published: clock.AddDate(0, 0, -i-1), Approx: true, Looked: clock})
 	}
 	feed := &feedStub{down: true, feed: []byte(strings.ReplaceAll(string(readTestdata(t, "yt_feed.xml")), "NewUpload01", "fromfeed001"))}
 	y := &YouTube{Num: "1.8", Title: "A", Dir: dir, now: func() time.Time { return clock },
-		YtDlp: &YtDlp{Path: os.Args[0], HTTP: &http.Client{Transport: feed}}}
+		YtDlp: &youtube.YtDlp{Path: os.Args[0], HTTP: &http.Client{Transport: feed}}}
 	y.save(ytCatalogFile, ytCatalog{Sources: []*ytSource{s}})
 	refresh := func() {
 		y.mu.Lock()

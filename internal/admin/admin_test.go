@@ -20,6 +20,7 @@ import (
 
 	"airwaves/internal/jellyfin/jellyfintest"
 	"airwaves/internal/vchan"
+	"airwaves/internal/youtube"
 )
 
 // TestMain lets the test binary stand in for yt-dlp: run with
@@ -159,7 +160,7 @@ func newHarness(t *testing.T, opts ...func(*Server)) *harness {
 	ytlog := filepath.Join(t.TempDir(), "yt-dlp.log")
 	t.Setenv("AIRWAVES_FAKE_YTDLP", ytlog)
 	lib := &vchan.Library{Root: root, FFmpeg: "ffmpeg", FFprobe: "ffprobe", Reserved: func() []string { return []string{"1.1"} },
-		YtDlp: &vchan.YtDlp{Path: exe, HTTP: &http.Client{Transport: noNetwork{}}}}
+		YtDlp: &youtube.YtDlp{Path: exe, HTTP: &http.Client{Transport: noNetwork{}}}}
 	a := &Server{Library: lib, HTTP: jf.Client()}
 	for _, o := range opts {
 		o(a)
@@ -657,7 +658,7 @@ func TestAdminYouTubeSearchAndLookup(t *testing.T) {
 }
 
 func TestAdminYouTubeWithoutYtDlp(t *testing.T) {
-	lib := &vchan.Library{Root: t.TempDir(), YtDlp: &vchan.YtDlp{Path: filepath.Join(t.TempDir(), "yt-dlp")}}
+	lib := &vchan.Library{Root: t.TempDir(), YtDlp: &youtube.YtDlp{Path: filepath.Join(t.TempDir(), "yt-dlp")}}
 	srv := httptest.NewServer((&Server{Library: lib}).Handler())
 	defer srv.Close()
 	resp, err := http.Get(srv.URL + "/admin/api/youtube/search?q=dj+sets")
@@ -678,7 +679,7 @@ func TestAdminYouTubeLive(t *testing.T) {
 	if tool == "" {
 		t.Skip("set AIRWAVES_YTDLP to a yt-dlp to search YouTube")
 	}
-	lib := &vchan.Library{Root: t.TempDir(), YtDlp: &vchan.YtDlp{Path: tool, Update: os.Getenv("AIRWAVES_YTDLP_UPDATE") != ""}}
+	lib := &vchan.Library{Root: t.TempDir(), YtDlp: &youtube.YtDlp{Path: tool, Update: os.Getenv("AIRWAVES_YTDLP_UPDATE") != ""}}
 	srv := httptest.NewServer((&Server{Library: lib}).Handler())
 	defer srv.Close()
 	get := func(path string) map[string]any {

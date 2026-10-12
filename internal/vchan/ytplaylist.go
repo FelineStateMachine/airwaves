@@ -12,124 +12,20 @@ package vchan
 import (
 	"cmp"
 	"context"
-	"encoding/json"
-	"errors"
 	"log"
-	"math"
-	"net/url"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
-)
 
-var (
-	errNotPlaylist      = errors.New("that isn't a YouTube playlist: use its link (youtube.com/playlist?list=...) or its ID")
-	errVideoNotPlaylist = errors.New("that's a link to a video: use the playlist's link, with list= in it")
-	errMix              = errors.New("that's one of YouTube's mixes, which change as they play: use a playlist's link")
-	// ytListID is a playlist's ID in a link, and ytBareList one given on
-	// its own: "PL…", a channel's uploads ("UU…") or an album ("OLAK5uy_…").
-	ytListID   = regexp.MustCompile(`^[A-Za-z0-9_-]{2,64}$`)
-	ytBareList = regexp.MustCompile(`^(PL|UU|UL|FL|OLAK5uy_)[A-Za-z0-9_-]{10,62}$`)
-)
-
-// YouTubePlaylist checks a playlist as youtube.json or the admin page give
-// it, its link (or the link of a video in it) or its ID, and returns its
-// page: https://www.youtube.com/playlist?list= and the ID.
-func YouTubePlaylist(s string) (string, error) {
-	s = strings.TrimSpace(s)
-	id := s
-	if !ytBareList.MatchString(s) {
-		raw := s
-		if !strings.Contains(s, "://") {
-			raw = "https://" + s
-		}
-		u, err := url.Parse(raw)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
-			return "", errNotPlaylist
-		}
-		host := strings.ToLower(u.Hostname())
-		for _, p := range []string{"www.", "m.", "music."} {
-			host = strings.TrimPrefix(host, p)
-		}
-		if host != "youtube.com" && host != "youtu.be" {
-			return "", errNotPlaylist
-		}
-		id = u.Query().Get("list")
-		switch {
-		case id != "":
-		case host == "youtu.be", u.Path == "/watch", strings.HasPrefix(u.Path, "/shorts/"), strings.HasPrefix(u.Path, "/live/"):
-			return "", errVideoNotPlaylist
-		default:
-			return "", errNotPlaylist
-		}
-	}
-	switch {
-	case !ytListID.MatchString(id):
-		return "", errNotPlaylist
-	case strings.HasPrefix(id, "RD"):
-		return "", errMix
-	}
-	return ytPlaylistURL(id), nil
-}
-
-func ytPlaylistURL(id string) string { return "https://www.youtube.com/playlist?list=" + id }
-
-// ytPlaylistArgs list a playlist: its videos in order, with their lengths.
-var ytPlaylistArgs = []string{"--flat-playlist", "-J"}
-
-var (
-	// ytHidden are the titles YouTube lists videos that can't play under.
-	ytHidden = map[string]bool{"[Private video]": true, "[Deleted video]": true, "[Unavailable video]": true}
-	// ytLocked are the availabilities of videos that only some can watch.
-	ytLocked = map[string]bool{"private": true, "premium_only": true, "subscriber_only": true, "needs_auth": true}
+	"airwaves/internal/youtube"
 )
 
 // parseYtPlaylist reads a playlist's listing, from yt-dlp --flat-playlist
-// -J with ytPlaylistArgs: its videos in its order, each once. Videos that
-// can't play here (private, deleted, members only) are left out; live and
-// upcoming ones are kept, marked, to join once they can play.
+// -J with youtube.PlaylistArgs (see youtube.ParsePlaylist), undated as a
+// playlist channel has it.
 func parseYtPlaylist(raw []byte) (ytListing, error) {
-	var p struct {
-		Type      string `json:"_type"`
-		ID        string `json:"id"`
-		Title     string `json:"title"`
-		Channel   string `json:"channel"`
-		ChannelID string `json:"channel_id"`
-		Uploader  string `json:"uploader"`
-		Entries   []struct {
-			ID           string  `json:"id"`
-			Title        string  `json:"title"`
-			Duration     float64 `json:"duration"`
-			Channel      string  `json:"channel"`
-			Uploader     string  `json:"uploader"`
-			LiveStatus   string  `json:"live_status"`
-			Availability string  `json:"availability"`
-		} `json:"entries"`
-	}
-	if err := json.Unmarshal(raw, &p); err != nil {
-		return ytListing{}, err
-	}
-	if p.Type != "playlist" || p.ID == "" || p.ID == p.ChannelID { // not a channel's tab
-		return ytListing{}, errors.New("not a YouTube playlist")
-	}
-	l := ytListing{ID: p.ID, Name: p.Title, Owner: cmp.Or(p.Channel, p.Uploader), OwnerID: p.ChannelID}
-	seen := map[string]bool{}
-	for _, e := range p.Entries {
-		if e.ID == "" || seen[e.ID] || ytHidden[e.Title] || ytLocked[e.Availability] {
-			continue
-		}
-		seen[e.ID] = true
-		v := &ytVideo{ID: e.ID, Title: e.Title, Seconds: int(math.Round(e.Duration)), Channel: cmp.Or(e.Channel, e.Uploader)}
-		switch e.LiveStatus {
-		case "is_upcoming":
-			v.Skip = "upcoming"
-		case "is_live", "post_live":
-			v.Skip = "live"
-		}
-		l.Videos = append(l.Videos, v)
-	}
-	return l, nil
+	l, err := youtube.ParsePlaylist(raw)
+	return listingOf(l, false), err
 }
 
 // mergePlaylist takes in a listing of the playlist: its videos in its
@@ -244,7 +140,7 @@ func (y *YouTube) playlistPrograms(from, to time.Time) []Program {
 	for k, sl := range slots {
 		if sl.I >= 0 {
 			v := seq[sl.I]
-			p := Program{Start: sl.Start.Local(), End: sl.End.Local(), Title: v.Title, Image: ytThumbnail(v.ID),
+			p := Program{Start: sl.Start.Local(), End: sl.End.Local(), Title: v.Title, Image: youtube.Thumbnail(v.ID),
 				Description: v.Description, AudioLang: v.AudioLang, Captions: v.Captions}
 			p.Subtitle, p.Date = ytDated(y.channelOf(v), v, now)
 			out = append(out, p)
@@ -314,9 +210,9 @@ func playlistAiring(v *ytVideo, sl slot) ytAiring {
 // listPlaylist lists the playlist at url again. y.mu isn't held.
 func (y *YouTube) listPlaylist(ctx context.Context, url string) {
 	tool := y.tool()
-	tool.jobs.Lock()
-	raw, err := tool.run(ctx, slices.Concat(ytPlaylistArgs, []string{url})...)
-	tool.jobs.Unlock()
+	tool.Jobs.Lock()
+	raw, err := tool.Run(ctx, slices.Concat(youtube.PlaylistArgs, []string{url})...)
+	tool.Jobs.Unlock()
 	var l ytListing
 	if err == nil {
 		l, err = parseYtPlaylist(raw)
@@ -369,42 +265,9 @@ func (y *YouTube) playlistLookups(now time.Time) []string {
 
 // learnVideo takes in a video's looked-up details. A playlist's Shorts
 // and recorded streams play like any other video. y.mu is held.
-func (y *YouTube) learnVideo(v *ytVideo, i ytInfo) {
+func (y *YouTube) learnVideo(v *ytVideo, i youtube.Info) {
 	v.learn(i, y.clock())
 	if y.isPlaylist() && (v.Skip == "short" || v.Skip == "live" && i.LiveStatus == "was_live") {
 		v.Skip = ""
 	}
-}
-
-// YouTubePlaylistInfo is a playlist as a lookup finds it.
-type YouTubePlaylistInfo struct {
-	ID, URL        string
-	Title          string
-	Owner, OwnerID string // the channel that made it
-	// Videos is how many it has, as YouTube counts them, ones that can't
-	// play included.
-	Videos int
-	Image  string // its first video's thumbnail
-}
-
-// LookupPlaylist finds the playlist at page (as YouTubePlaylist gives
-// it): its title, whose it is, and how many videos it has.
-func (t *YtDlp) LookupPlaylist(ctx context.Context, page string) (YouTubePlaylistInfo, error) {
-	raw, err := t.run(ctx, "--flat-playlist", "-J", "--playlist-end", "1", page)
-	if err != nil {
-		return YouTubePlaylistInfo{}, err
-	}
-	l, err := parseYtPlaylist(raw)
-	if err != nil {
-		return YouTubePlaylistInfo{}, err
-	}
-	var p struct {
-		Count int `json:"playlist_count"`
-	}
-	_ = json.Unmarshal(raw, &p)
-	info := YouTubePlaylistInfo{ID: l.ID, URL: ytPlaylistURL(l.ID), Title: l.Name, Owner: l.Owner, OwnerID: l.OwnerID, Videos: p.Count}
-	if len(l.Videos) > 0 {
-		info.Image = ytThumbnail(l.Videos[0].ID)
-	}
-	return info, nil
 }

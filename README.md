@@ -671,6 +671,7 @@ internal/stream           ffmpeg to HLS, one session per client
 internal/hdhr             the HDHomeRun's HTTP API and discovery (hdhrtest fakes it); the emulated one
 internal/vchan            custom channels: Airwaves Weather, folder, Jellyfin and YouTube channels
 internal/jellyfin         Jellyfin client: sign-in, Quick Connect, browsing, stream URLs
+internal/youtube          YouTube as a source: yt-dlp kept up to date, listings, feeds, search, where to stream from
 deploy/, scripts/         Docker files for the server and the deploy script
 deploy/standalone         Docker Compose for custom channels only, built from source (docs/self-hosting.md)
 frontend/dist             the UI: plain HTML, CSS and JS, no build step; also served at /tv/

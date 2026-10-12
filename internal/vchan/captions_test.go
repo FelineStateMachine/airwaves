@@ -24,6 +24,7 @@ import (
 	"airwaves/internal/phase"
 	"airwaves/internal/stream"
 	"airwaves/internal/tuner"
+	"airwaves/internal/youtube"
 )
 
 func srtCaptions(srt string) *captions {
@@ -402,50 +403,50 @@ func TestYouTubeCaptions(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	info := ytInfo{
-		Subtitles: map[string][]ytSubtitle{
+	info := youtube.Info{
+		Subtitles: map[string][]youtube.Subtitle{
 			"de":    {{Ext: "vtt", URL: srv.URL + "/de.vtt"}},
 			"en-GB": {{Ext: "srv3", URL: srv.URL + "/x"}, {Ext: "vtt", URL: srv.URL + "/manual.vtt"}, {Ext: "json3", URL: srv.URL + "/manual.json3"}},
 		},
-		AutoCaptions: map[string][]ytSubtitle{"en": {{Ext: "vtt", URL: srv.URL + "/auto.m3u8", Protocol: "m3u8_native"}}},
+		AutoCaptions: map[string][]youtube.Subtitle{"en": {{Ext: "vtt", URL: srv.URL + "/auto.m3u8", Protocol: "m3u8_native"}}},
 	}
-	sub, ok := info.captions()
+	sub, ok := info.Captions()
 	if !ok || sub.URL != srv.URL+"/manual.json3" {
 		t.Fatalf("picked %+v", sub)
 	}
-	raw, err := ytCaptions(context.Background(), srv.Client(), sub)
+	raw, err := youtube.FetchCaptions(context.Background(), srv.Client(), sub)
 	if cues, _ := cc.Parse(raw); err != nil || len(cues) != 1 || cues[0].Text != "By hand" {
 		t.Errorf("manual captions %q, %v", raw, err)
 	}
 	info.Subtitles = nil
-	sub, ok = info.captions()
+	sub, ok = info.Captions()
 	if !ok || sub.Protocol != "m3u8_native" {
 		t.Fatalf("picked %+v", sub)
 	}
-	raw, err = ytCaptions(context.Background(), srv.Client(), sub)
+	raw, err = youtube.FetchCaptions(context.Background(), srv.Client(), sub)
 	cues, _ := cc.Parse(raw)
 	if err != nil || len(cues) != 2 || cues[0].Text != "Piece 1" || cues[1].Start != 20*time.Minute {
 		t.Errorf("automatic captions %q, %v", cues, err)
 	}
 	// Speech recognition's, as json3, time each word.
-	info.AutoCaptions["en-orig"] = []ytSubtitle{{Ext: "vtt", URL: srv.URL + "/x"}, {Ext: "json3", URL: srv.URL + "/asr.json3"}}
-	sub, _ = info.captions()
-	raw, err = ytCaptions(context.Background(), srv.Client(), sub)
+	info.AutoCaptions["en-orig"] = []youtube.Subtitle{{Ext: "vtt", URL: srv.URL + "/x"}, {Ext: "json3", URL: srv.URL + "/asr.json3"}}
+	sub, _ = info.Captions()
+	raw, err = youtube.FetchCaptions(context.Background(), srv.Client(), sub)
 	cues, _ = cc.Parse(raw)
 	if err != nil || len(cues) != 1 || cues[0].Text != "all right" || len(cues[0].Words) != 2 || cues[0].Words[1].Start != 1400*time.Millisecond {
 		t.Errorf("speech recognition's captions %+v, %v", cues, err)
 	}
-	if _, ok := (ytInfo{AutoCaptions: map[string][]ytSubtitle{"fr": {{Ext: "vtt", URL: "x"}}}}).captions(); ok {
+	if _, ok := (youtube.Info{AutoCaptions: map[string][]youtube.Subtitle{"fr": {{Ext: "vtt", URL: "x"}}}}).Captions(); ok {
 		t.Error("picked French captions")
 	}
-	if _, err := ytCaptions(context.Background(), srv.Client(), ytSubtitle{URL: srv.URL + "/gone?signature=secret"}); err == nil || strings.Contains(err.Error(), "secret") {
+	if _, err := youtube.FetchCaptions(context.Background(), srv.Client(), youtube.Subtitle{URL: srv.URL + "/gone?signature=secret"}); err == nil || strings.Contains(err.Error(), "secret") {
 		t.Errorf("error %v", err)
 	}
-	dubbed := ytInfo{Language: "ja", RequestedFormats: []ytFormat{{URL: "v", VCodec: "avc1", ACodec: "none"}, {URL: "a", VCodec: "none", ACodec: "mp4a", Language: "en-US"}}}
-	if l := dubbed.audioLang(); l != "en-US" {
+	dubbed := youtube.Info{Language: "ja", RequestedFormats: []youtube.Format{{URL: "v", VCodec: "avc1", ACodec: "none"}, {URL: "a", VCodec: "none", ACodec: "mp4a", Language: "en-US"}}}
+	if l := dubbed.AudioLang(); l != "en-US" {
 		t.Errorf("dubbed sound %q", l)
 	}
-	if l := (ytInfo{Language: "ja"}).audioLang(); l != "ja" {
+	if l := (youtube.Info{Language: "ja"}).AudioLang(); l != "ja" {
 		t.Errorf("sound %q", l)
 	}
 }

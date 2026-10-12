@@ -17,9 +17,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"airwaves/internal/youtube"
 
-	"airwaves/internal/vchan"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // agent connects to the harness's agent endpoint as an MCP client would.
@@ -405,7 +405,7 @@ func TestAgentDemoServer(t *testing.T) {
 	}
 	h := newHarness(t)
 	if tool := os.Getenv("AIRWAVES_YTDLP"); tool != "" {
-		h.lib.YtDlp = &vchan.YtDlp{Path: tool, HTTP: http.DefaultClient}
+		h.lib.YtDlp = &youtube.YtDlp{Path: tool, HTTP: http.DefaultClient}
 	}
 	h.withWeather()
 	h.admin.Antenna = func(context.Context) map[string]string {
