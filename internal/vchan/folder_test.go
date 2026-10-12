@@ -282,6 +282,19 @@ func TestScheduledCue(t *testing.T) {
 		t.Errorf("after the block: %+v", c)
 	}
 
+	// Running late, the next episode starts at its top and loses its end;
+	// much later, it's joined part way through.
+	cue = scheduled("test", f.lineup)
+	run(cue, at(5, 20, 0, 0), true)
+	if c := run(cue, at(5, 21, 1, 30), true); c != (cued{false, "Episode 1", 3510, 0}) {
+		t.Errorf("late: %+v", c)
+	}
+	cue = scheduled("test", f.lineup)
+	run(cue, at(5, 20, 0, 0), true)
+	if c := run(cue, at(5, 21, 5, 0), true); c != (cued{false, "Episode 1", 3300, 300}) {
+		t.Errorf("very late: %+v", c)
+	}
+
 	// Tuning in part way through.
 	cue = scheduled("test", f.lineup)
 	if c := run(cue, at(5, 20, 10, 0), true); c != (cued{false, "Episode 3", 3000, 600}) {

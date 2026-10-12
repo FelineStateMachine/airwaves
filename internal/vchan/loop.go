@@ -284,8 +284,12 @@ func play(ctx context.Context, w io.Writer, ffmpeg, label string, get lineup) er
 
 const (
 	// cueSlack is how far a scheduled stream may fall behind the clock
-	// before it skips ahead to catch up.
+	// before it catches up.
 	cueSlack = 5 * time.Second
+	// maxCatchUp is how late a stream may be and still catch up as a
+	// broadcaster does, playing the next airing from its top and cutting
+	// its end (the credits), rather than cutting into it (its cold open).
+	maxCatchUp = 2 * time.Minute
 	// slateChunk is the longest a slate plays before the schedule is
 	// looked at again, so changes to it show.
 	slateChunk = time.Minute
@@ -355,8 +359,13 @@ func scheduled(label string, get lineup) cueFunc {
 		if next := items[(on.I+1)%len(items)].Captions; next != nil {
 			next.start()
 		}
+		it, skip := items[on.I], max(framesIn(t.Sub(on.Start)), 0)
+		if late := t.Sub(on.Start); skip > 0 && on.Start.Equal(end) && late <= maxCatchUp && late < frameDuration(it.Frames)/2 {
+			log.Printf("%s: %s late, cutting the end of %s to catch up", label, late.Round(time.Second), airingName(it))
+			it.Frames, skip = it.Frames-skip, 0
+		}
 		last, end = on, on.End
-		return items[on.I], max(framesIn(t.Sub(on.Start)), 0), nil
+		return it, skip, nil
 	}
 }
 
