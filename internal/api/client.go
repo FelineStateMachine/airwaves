@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"airwaves/internal/dvr"
+	"airwaves/internal/podcast"
 	"airwaves/internal/service"
 	"airwaves/internal/stream"
 	"airwaves/internal/weather"
@@ -219,4 +220,46 @@ func (c *Client) call(ctx context.Context, method, path string, in, out any) err
 		return nil
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+// Podcasts implements Backend.
+func (c *Client) Podcasts(ctx context.Context) (*podcast.State, error) {
+	var s podcast.State
+	return &s, c.call(ctx, http.MethodGet, "/api/podcasts", nil, &s)
+}
+
+// SearchPodcasts implements Backend.
+func (c *Client) SearchPodcasts(ctx context.Context, query string) ([]podcast.Found, error) {
+	var out []podcast.Found
+	return out, c.call(ctx, http.MethodGet, "/api/podcasts/search?q="+url.QueryEscape(query), nil, &out)
+}
+
+// AddPodcast implements Backend.
+func (c *Client) AddPodcast(ctx context.Context, u string, minMinutes float64) (*podcast.Show, error) {
+	var s podcast.Show
+	if err := c.call(ctx, http.MethodPost, "/api/podcasts/shows", showReq{URL: u, MinMinutes: minMinutes}, &s); err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
+// RemovePodcast implements Backend.
+func (c *Client) RemovePodcast(ctx context.Context, id string) error {
+	return c.call(ctx, http.MethodDelete, "/api/podcasts/shows/"+url.PathEscape(id), nil, nil)
+}
+
+// PlayEpisode implements Backend.
+func (c *Client) PlayEpisode(ctx context.Context, client, id string, from float64) (*stream.Playback, error) {
+	var pb stream.Playback
+	if err := c.call(ctx, http.MethodPost, "/api/podcasts/play", clientReq{Client: client, ID: id, From: from}, &pb); err != nil {
+		return nil, err
+	}
+	pb.URL = c.Base + pb.Path
+	return &pb, nil
+}
+
+// EpisodeProgress implements Backend.
+func (c *Client) EpisodeProgress(ctx context.Context, id string, position, duration float64, watched bool) error {
+	return c.call(ctx, http.MethodPost, "/api/podcasts/progress",
+		episodeProgressReq{ID: id, Position: position, Duration: duration, Watched: watched}, nil)
 }

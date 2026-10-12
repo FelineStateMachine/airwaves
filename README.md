@@ -260,6 +260,38 @@ images are served from `/wximg/`, so the app never handles coordinates.
 - **W page**: the weather report in the app.
 - **Alert crawl**: NWS watches and warnings for the location crawl across live TV.
 
+## Podcasts
+
+The Podcasts app is video podcasts on demand, from YouTube, where they are: their public
+RSS feeds carry only the sound. A show is a YouTube channel's videos, its past live streams
+(its `/streams` tab, where full shows that air live end up) or a playlist, added by its
+link, `@handle` or a search for channels. Videos shorter than the show's minimum (10
+minutes unless it's added with another) are clips, not episodes; Shorts, and streams to
+come, on now or not yet processed, are left out.
+
+`airwavesd` keeps each show's newest 30 episodes in `<data>/podcasts.json`, with how far
+each was watched (and any older ones part watched), backed up like the recordings:
+
+- every 6 hours it lists the show's newest 40 videos with yt-dlp, and every 30 minutes reads
+  its channel's feed for new uploads in between;
+- a video new to a show is looked up (its length, date, description and picture), a dozen
+  an update, a few seconds apart, so YouTube isn't asked too much;
+- the newest unwatched episode of each show has where it streams from found ahead, so it
+  starts at once.
+
+Nothing is downloaded: an episode streams from YouTube while it's watched, H.264 up to
+1080p with English sound, its picture copied rather than transcoded, and played like a
+recording, from where it was left. One show failing to list says so on that show alone.
+
+| | |
+| --- | --- |
+| `GET /api/podcasts` | `{"shows": [{"id", "title", "url", "thumbnail", "minMinutes", "error", "episodes": [{"id", "showId", "title", "description", "published", "duration", "thumbnail", "position", "watched"}]}], "updating"}`, episodes newest first |
+| `GET /api/podcasts/search?q=` | YouTube channels: `[{"id", "title", "url", "thumbnail", "description", "subscribers"}]` |
+| `POST /api/podcasts/shows` | `{"url", "minMinutes"}`: adds a show, listed before the reply, which is the show; 400 for what isn't one |
+| `DELETE /api/podcasts/shows/{id}` | Takes a show out |
+| `POST /api/podcasts/play` | `{"client", "id", "from"}`: plays an episode, as `/api/dvr/play` plays a recording |
+| `POST /api/podcasts/progress` | `{"id", "position", "duration", "watched"}`; within a minute of the end is watched |
+
 ## HDHomeRun emulation
 
 `airwavesd` also appears on the home network as an HDHomeRun network tuner, so other
@@ -672,6 +704,7 @@ internal/hdhr             the HDHomeRun's HTTP API and discovery (hdhrtest fakes
 internal/vchan            custom channels: Airwaves Weather, folder, Jellyfin and YouTube channels
 internal/jellyfin         Jellyfin client: sign-in, Quick Connect, browsing, stream URLs
 internal/youtube          YouTube as a source: yt-dlp kept up to date, listings, feeds, search, where to stream from
+internal/podcast          the Podcasts app's library: shows, their newest episodes, how far each was watched
 deploy/, scripts/         Docker files for the server and the deploy script
 deploy/standalone         Docker Compose for custom channels only, built from source (docs/self-hosting.md)
 frontend/dist             the UI: plain HTML, CSS and JS, no build step; also served at /tv/

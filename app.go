@@ -12,6 +12,7 @@ import (
 
 	"airwaves/internal/api"
 	"airwaves/internal/dvr"
+	"airwaves/internal/podcast"
 	"airwaves/internal/service"
 	"airwaves/internal/store"
 	"airwaves/internal/stream"
@@ -335,6 +336,66 @@ func (a *App) PlayRecording(id string, from float64) (*stream.Playback, error) {
 		return nil, errors.New("no recording selected")
 	}
 	return c.PlayRecording(a.ctx, s.ClientID, id, from)
+}
+
+// Podcasts returns the Podcasts app's shows and their episodes.
+func (a *App) Podcasts() (*podcast.State, error) {
+	c, _, err := a.server()
+	if err != nil {
+		return nil, err
+	}
+	return c.Podcasts(a.ctx)
+}
+
+// SearchPodcasts finds YouTube channels to add as shows.
+func (a *App) SearchPodcasts(query string) ([]podcast.Found, error) {
+	c, _, err := a.server()
+	if err != nil {
+		return nil, err
+	}
+	return c.SearchPodcasts(a.ctx, query)
+}
+
+// AddPodcast adds a show: a YouTube channel, its live streams' tab or a
+// playlist; minMinutes is the shortest video that's an episode, 0 for the
+// default.
+func (a *App) AddPodcast(url string, minMinutes float64) (*podcast.Show, error) {
+	c, _, err := a.server()
+	if err != nil {
+		return nil, err
+	}
+	return c.AddPodcast(a.ctx, url, minMinutes)
+}
+
+// RemovePodcast takes a show out of the library.
+func (a *App) RemovePodcast(id string) error {
+	c, _, err := a.server()
+	if err != nil {
+		return err
+	}
+	return c.RemovePodcast(a.ctx, id)
+}
+
+// PlayEpisode streams an episode from from seconds in, in place of TV.
+func (a *App) PlayEpisode(id string, from float64) (*stream.Playback, error) {
+	c, s, err := a.server()
+	if err != nil {
+		return nil, err
+	}
+	if id == "" {
+		return nil, errors.New("no episode selected")
+	}
+	return c.PlayEpisode(a.ctx, s.ClientID, id, from)
+}
+
+// EpisodeProgress records how far an episode has been watched, and
+// whether it has.
+func (a *App) EpisodeProgress(id string, position, duration float64, watched bool) error {
+	c, _, err := a.server()
+	if err != nil {
+		return err
+	}
+	return c.EpisodeProgress(a.ctx, id, position, duration, watched)
 }
 
 // SaveProgress records how far a recording has been watched.

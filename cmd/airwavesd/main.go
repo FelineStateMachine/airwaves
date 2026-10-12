@@ -133,6 +133,7 @@ func run() error {
 		MusicDir:        *music,
 		ChannelsDir:     *channels,
 		YtDlp:           yt,
+		PodcastsPath:    filepath.Join(*data, "podcasts.json"),
 		Loudness:        loudness,
 		Progress:        func(s string) { log.Print(s) },
 	}
@@ -210,6 +211,11 @@ func run() error {
 	}
 	log.Printf("app API token: %s", onOrOff(*token != ""))
 	log.Print("TV app: /tv/, for browsers and the Android TV app")
+	if info, _ := svc.Info(ctx); info.Podcasts {
+		log.Printf("podcasts: on, shows in %s", opt.PodcastsPath)
+	} else {
+		log.Print("podcasts: off, they need ffmpeg")
+	}
 	if yt.Update {
 		log.Printf("yt-dlp: %s, kept up to date", yt.Path)
 	}

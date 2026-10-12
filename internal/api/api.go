@@ -19,6 +19,7 @@ import (
 
 	"airwaves/internal/dvr"
 	"airwaves/internal/phase"
+	"airwaves/internal/podcast"
 	"airwaves/internal/service"
 	"airwaves/internal/stream"
 	"airwaves/internal/tuner"
@@ -56,6 +57,15 @@ type Backend interface {
 	MarkWatched(ctx context.Context, id string, watched bool) error
 	UpdateRule(ctx context.Context, id string, u dvr.RuleUpdate) (*dvr.Rule, error)
 	SetDVRPrefs(ctx context.Context, p dvr.Prefs) (dvr.Prefs, error)
+	// The Podcasts app: shows and their episodes, YouTube channels found
+	// to add, and an episode played from a point, with how far it was
+	// watched.
+	Podcasts(ctx context.Context) (*podcast.State, error)
+	SearchPodcasts(ctx context.Context, query string) ([]podcast.Found, error)
+	AddPodcast(ctx context.Context, url string, minMinutes float64) (*podcast.Show, error)
+	RemovePodcast(ctx context.Context, id string) error
+	PlayEpisode(ctx context.Context, client, id string, from float64) (*stream.Playback, error)
+	EpisodeProgress(ctx context.Context, id string, position, duration float64, watched bool) error
 }
 
 var (
@@ -113,6 +123,21 @@ type progressReq struct {
 	Position float64 `json:"position"`
 	Duration float64 `json:"duration"`
 	Watched  *bool   `json:"watched,omitempty"`
+}
+
+// showReq adds a show: a YouTube channel, its live streams' tab or a
+// playlist, with the shortest video that's an episode (0 for the default).
+type showReq struct {
+	URL        string  `json:"url"`
+	MinMinutes float64 `json:"minMinutes,omitempty"`
+}
+
+// episodeProgressReq is how far an episode was watched.
+type episodeProgressReq struct {
+	ID       string  `json:"id"`
+	Position float64 `json:"position"`
+	Duration float64 `json:"duration"`
+	Watched  bool    `json:"watched"`
 }
 
 // heartbeatReply says whether the client still has a stream.
@@ -262,6 +287,36 @@ func (s *Server) Handler() http.Handler {
 		}
 		reply(w)(b.SetDVRPrefs(r.Context(), p))
 	})
+	mux.HandleFunc("GET /api/podcasts", func(w http.ResponseWriter, r *http.Request) {
+		reply(w)(b.Podcasts(r.Context()))
+	})
+	mux.HandleFunc("GET /api/podcasts/search", func(w http.ResponseWriter, r *http.Request) {
+		reply(w)(b.SearchPodcasts(r.Context(), r.URL.Query().Get("q")))
+	})
+	mux.HandleFunc("POST /api/podcasts/shows", func(w http.ResponseWriter, r *http.Request) {
+		var req showReq
+		if !decode(w, r, &req) {
+			return
+		}
+		reply(w)(b.AddPodcast(r.Context(), req.URL, req.MinMinutes))
+	})
+	mux.HandleFunc("DELETE /api/podcasts/shows/{id}", func(w http.ResponseWriter, r *http.Request) {
+		reply(w)(struct{}{}, b.RemovePodcast(r.Context(), r.PathValue("id")))
+	})
+	mux.HandleFunc("POST /api/podcasts/play", func(w http.ResponseWriter, r *http.Request) {
+		var req clientReq
+		if !decode(w, r, &req) {
+			return
+		}
+		reply(w)(b.PlayEpisode(r.Context(), req.Client, req.ID, req.From))
+	})
+	mux.HandleFunc("POST /api/podcasts/progress", func(w http.ResponseWriter, r *http.Request) {
+		var req episodeProgressReq
+		if !decode(w, r, &req) {
+			return
+		}
+		reply(w)(struct{}{}, b.EpisodeProgress(r.Context(), req.ID, req.Position, req.Duration, req.Watched))
+	})
 	if s.Streams != nil {
 		mux.Handle("/live/", s.Streams)
 	}
@@ -363,14 +418,20 @@ func reply(w http.ResponseWriter) func(any, error) {
 
 // errStatus is the HTTP status for a backend error: 501 for what this
 // server doesn't have (an antenna, a tuner, recording, a location for the
-// weather), 503 for a channel with no signal or no free tuner right now,
-// else 500.
+// weather, podcasts), 503 for a channel with no signal or no free tuner
+// right now, 400 for what isn't a show, 404 for a show or an episode
+// there isn't, else 500.
 func errStatus(err error) int {
 	var noSignal *service.NoSignalError
 	var busy *tuner.BusyError
 	switch {
-	case errors.Is(err, service.ErrNoAntenna), errors.Is(err, service.ErrNoTuner), errors.Is(err, service.ErrNoDVR), errors.Is(err, service.ErrNoLocation):
+	case errors.Is(err, service.ErrNoAntenna), errors.Is(err, service.ErrNoTuner), errors.Is(err, service.ErrNoDVR), errors.Is(err, service.ErrNoLocation),
+		errors.Is(err, service.ErrNoPodcasts):
 		return http.StatusNotImplemented
+	case errors.Is(err, podcast.ErrBadShow):
+		return http.StatusBadRequest
+	case errors.Is(err, podcast.ErrNotFound):
+		return http.StatusNotFound
 	case errors.As(err, &noSignal), errors.As(err, &busy):
 		return http.StatusServiceUnavailable
 	}

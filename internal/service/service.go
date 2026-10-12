@@ -33,6 +33,7 @@ import (
 	"airwaves/internal/hdhr"
 	"airwaves/internal/lineup"
 	"airwaves/internal/phase"
+	"airwaves/internal/podcast"
 	"airwaves/internal/sd"
 	"airwaves/internal/signal"
 	"airwaves/internal/store"
@@ -101,6 +102,8 @@ type Info struct {
 	// Antenna is false for a server with custom channels only: no antenna
 	// channels, reception reports or recording.
 	Antenna bool `json:"antenna"`
+	// Podcasts is set when the server has the Podcasts app.
+	Podcasts bool `json:"podcasts"`
 }
 
 // Snapshot is the lineup with its listings.
@@ -178,8 +181,12 @@ type Options struct {
 	MusicDir string
 	// ChannelsDir holds folder channels, a subfolder of videos each.
 	ChannelsDir string
-	// YtDlp runs yt-dlp for YouTube channels; yt-dlp from PATH when nil.
+	// YtDlp runs yt-dlp for YouTube channels and podcasts; yt-dlp from
+	// PATH when nil.
 	YtDlp *youtube.YtDlp
+	// PodcastsPath keeps the Podcasts app's shows and how far their
+	// episodes were watched; empty leaves the app off.
+	PodcastsPath string
 	// Loudness is the level custom channels' sound is evened out to as
 	// it streams, in LUFS (vchan.DefaultLoudness is antenna TV's); 0
 	// leaves it as it is.
@@ -213,6 +220,7 @@ type Service struct {
 	wxStreams bool
 	wxLocal   string
 	library   *vchan.Library
+	podcasts  *podcast.Library
 
 	buildMu sync.Mutex // serializes report builds
 
@@ -327,6 +335,9 @@ func New(opt Options) (*Service, error) {
 			Root: opt.ChannelsDir, FFmpeg: s.streams.FFmpeg(), FFprobe: s.streams.FFprobe(),
 			Reserved: s.reserved, YtDlp: opt.YtDlp, Loudness: opt.Loudness,
 		}
+	}
+	if opt.PodcastsPath != "" && s.streamErr == nil {
+		s.podcasts = &podcast.Library{Path: opt.PodcastsPath, YtDlp: opt.YtDlp, FFmpeg: s.streams.FFmpeg()}
 	}
 	return s, nil
 }
@@ -454,7 +465,7 @@ func (s *Service) StreamHandler() http.Handler {
 // Info implements the Backend contract.
 func (s *Service) Info(context.Context) (Info, error) {
 	i := Info{Name: s.opt.Name, Mode: s.opt.Mode, Version: Version, Tuner: s.tunerDevice(), DVR: s.dvr != nil, WeatherStar: s.wxOn(),
-		Antenna: !s.opt.NoAntenna}
+		Antenna: !s.opt.NoAntenna, Podcasts: s.podcasts != nil}
 	if s.streamErr != nil {
 		i.Playback = s.streamErr.Error()
 	}
@@ -999,10 +1010,13 @@ func (s *Service) recordingChannels(ctx context.Context) (*guide.Guide, []lineup
 
 // Run keeps a server healthy until ctx ends: refreshes listings, finds the
 // tuner and keeps up with it, measures the signal while tuners are in use,
-// and makes recordings.
+// makes recordings, and keeps the podcasts up to date.
 func (s *Service) Run(ctx context.Context) {
 	if s.listings != nil {
 		go s.listings.Run(ctx)
+	}
+	if s.podcasts != nil {
+		go s.podcasts.Run(ctx)
 	}
 	if s.tuners != nil {
 		s.findTuner(ctx)

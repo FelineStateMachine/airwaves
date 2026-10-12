@@ -790,6 +790,153 @@ export namespace phase {
 
 }
 
+export namespace podcast {
+	
+	export class Episode {
+	    id: string;
+	    showId: string;
+	    title: string;
+	    description: string;
+	    published: time.Time;
+	    duration: number;
+	    thumbnail: string;
+	    position: number;
+	    watched: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new Episode(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.showId = source["showId"];
+	        this.title = source["title"];
+	        this.description = source["description"];
+	        this.published = this.convertValues(source["published"], time.Time);
+	        this.duration = source["duration"];
+	        this.thumbnail = source["thumbnail"];
+	        this.position = source["position"];
+	        this.watched = source["watched"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Found {
+	    id: string;
+	    title: string;
+	    url: string;
+	    thumbnail: string;
+	    description: string;
+	    subscribers: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new Found(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.title = source["title"];
+	        this.url = source["url"];
+	        this.thumbnail = source["thumbnail"];
+	        this.description = source["description"];
+	        this.subscribers = source["subscribers"];
+	    }
+	}
+	export class Show {
+	    id: string;
+	    title: string;
+	    url: string;
+	    thumbnail: string;
+	    minMinutes: number;
+	    error?: string;
+	    episodes: Episode[];
+	
+	    static createFrom(source: any = {}) {
+	        return new Show(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.title = source["title"];
+	        this.url = source["url"];
+	        this.thumbnail = source["thumbnail"];
+	        this.minMinutes = source["minMinutes"];
+	        this.error = source["error"];
+	        this.episodes = this.convertValues(source["episodes"], Episode);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class State {
+	    shows: Show[];
+	    updating: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new State(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.shows = this.convertValues(source["shows"], Show);
+	        this.updating = source["updating"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+}
+
 export namespace reception {
 	
 	export class Estimate {
@@ -1202,6 +1349,7 @@ export namespace service {
 	    playback?: string;
 	    weatherStar?: boolean;
 	    antenna: boolean;
+	    podcasts: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new Info(source);
@@ -1217,6 +1365,7 @@ export namespace service {
 	        this.playback = source["playback"];
 	        this.weatherStar = source["weatherStar"];
 	        this.antenna = source["antenna"];
+	        this.podcasts = source["podcasts"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

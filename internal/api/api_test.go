@@ -14,6 +14,7 @@ import (
 	"airwaves/internal/dvr"
 	"airwaves/internal/guide"
 	"airwaves/internal/lineup"
+	"airwaves/internal/podcast"
 	"airwaves/internal/service"
 	"airwaves/internal/signal"
 	"airwaves/internal/stream"
@@ -110,6 +111,77 @@ func (f *fake) UpdateRule(_ context.Context, id string, u dvr.RuleUpdate) (*dvr.
 }
 
 func (f *fake) SetDVRPrefs(_ context.Context, p dvr.Prefs) (dvr.Prefs, error) { return p, nil }
+
+func (f *fake) Podcasts(context.Context) (*podcast.State, error) {
+	return &podcast.State{Shows: []podcast.Show{{ID: "s1", Title: "Show", Episodes: []podcast.Episode{{ID: "e1", ShowID: "s1", Duration: 3600}}}}}, nil
+}
+
+func (f *fake) SearchPodcasts(_ context.Context, q string) ([]podcast.Found, error) {
+	return []podcast.Found{{ID: "UCa", Title: q}}, nil
+}
+
+func (f *fake) AddPodcast(_ context.Context, u string, minMinutes float64) (*podcast.Show, error) {
+	if !strings.Contains(u, "youtube.com") {
+		return nil, fmt.Errorf("%w: give a YouTube channel or playlist", podcast.ErrBadShow)
+	}
+	return &podcast.Show{ID: "s2", URL: u, MinMinutes: minMinutes}, nil
+}
+
+func (f *fake) RemovePodcast(_ context.Context, id string) error {
+	if id != "s1" {
+		return podcast.ErrNotFound
+	}
+	f.deleted = id
+	return nil
+}
+
+func (f *fake) PlayEpisode(_ context.Context, client, id string, from float64) (*stream.Playback, error) {
+	f.tuned = client + ":" + id
+	return &stream.Playback{Path: "/live/ep/master.m3u8", Offset: from}, nil
+}
+
+func (f *fake) EpisodeProgress(_ context.Context, id string, pos, dur float64, watched bool) error {
+	f.progress = fmt.Sprintf("%s@%.0f/%.0f watched=%v", id, pos, dur, watched)
+	return nil
+}
+
+// TestPodcasts: the Podcasts app's calls, through the client.
+func TestPodcasts(t *testing.T) {
+	be := &fake{}
+	srv := httptest.NewServer((&Server{Backend: be}).Handler())
+	defer srv.Close()
+	ctx := context.Background()
+	c := NewClient(srv.URL, "")
+	if st, err := c.Podcasts(ctx); err != nil || len(st.Shows) != 1 || st.Shows[0].Episodes[0].Duration != 3600 {
+		t.Errorf("podcasts: %+v, %v", st, err)
+	}
+	if found, err := c.SearchPodcasts(ctx, "sad boyz"); err != nil || len(found) != 1 || found[0].Title != "sad boyz" {
+		t.Errorf("search: %+v, %v", found, err)
+	}
+	if s, err := c.AddPodcast(ctx, "https://www.youtube.com/@x/streams", 30); err != nil || s.ID != "s2" || s.MinMinutes != 30 {
+		t.Errorf("add: %+v, %v", s, err)
+	}
+	if _, err := c.AddPodcast(ctx, "https://example.com", 0); err == nil || !strings.Contains(err.Error(), "YouTube channel") {
+		t.Errorf("add something else: %v", err)
+	}
+	resp, err := http.Post(srv.URL+"/api/podcasts/shows", "application/json", strings.NewReader(`{"url":"nope"}`))
+	if err != nil || resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("not a show: %v %v", resp.StatusCode, err)
+	}
+	if err := c.RemovePodcast(ctx, "s1"); err != nil || be.deleted != "s1" {
+		t.Errorf("remove: %v", err)
+	}
+	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/api/podcasts/shows/zz", nil)
+	if resp, err := http.DefaultClient.Do(req); err != nil || resp.StatusCode != http.StatusNotFound {
+		t.Errorf("remove a show there isn't: %v %v", resp.StatusCode, err)
+	}
+	if pb, err := c.PlayEpisode(ctx, "mac", "e1", 600); err != nil || pb.Offset != 600 || be.tuned != "mac:e1" || pb.URL != srv.URL+"/live/ep/master.m3u8" {
+		t.Errorf("play: %+v, %v", pb, err)
+	}
+	if err := c.EpisodeProgress(ctx, "e1", 600, 3600, true); err != nil || be.progress != "e1@600/3600 watched=true" {
+		t.Errorf("progress: %v, backend saw %q", err, be.progress)
+	}
+}
 
 func TestClientServerRoundTrip(t *testing.T) {
 	be := &fake{}

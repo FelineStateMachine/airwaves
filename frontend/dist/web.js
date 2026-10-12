@@ -271,6 +271,18 @@
     UpdateRule: (id, u) => call('PUT', `/api/dvr/rules/${enc(id)}`, u),
     SetDVRPrefs: (p) => call('PUT', '/api/dvr/prefs', p),
 
+    // The Podcasts app.
+    Podcasts: () => call('GET', '/api/podcasts'),
+    SearchPodcasts: (q) => call('GET', `/api/podcasts/search?q=${enc(q)}`),
+    AddPodcast: (url, minMinutes) => call('POST', '/api/podcasts/shows', { url, minMinutes: minMinutes || 0 }),
+    RemovePodcast: (id) => call('DELETE', `/api/podcasts/shows/${enc(id)}`).then(() => undefined),
+    async PlayEpisode(id, from) {
+      if (!id) throw 'no episode selected';
+      return playback(await call('POST', '/api/podcasts/play', { client: load().clientId, id, from: from || 0 }));
+    },
+    EpisodeProgress: (id, position, duration, watched) => call('POST', '/api/podcasts/progress',
+      { id, position: position || 0, duration: duration || 0, watched: !!watched }).then(() => undefined),
+
     async OpenURL(u) {
       if (shell && shell.openUrl) shell.openUrl(String(u));
       else window.open(u, '_blank', 'noopener');
