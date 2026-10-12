@@ -2,6 +2,7 @@ package guide
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -33,6 +34,9 @@ func TestNetworkName(t *testing.T) {
 		"METV TOONS":                    "MeTV Toons",
 		"SHOP LC":                       "Shop LC",
 	} {
+		if got := NetworkName(strings.ToLower(in)); networkNames[in] != "" && got != want {
+			t.Errorf("NetworkName(%q) = %q, want %q", strings.ToLower(in), got, want)
+		}
 		if got := NetworkName(in); got != want {
 			t.Errorf("NetworkName(%q) = %q, want %q", in, got, want)
 		}

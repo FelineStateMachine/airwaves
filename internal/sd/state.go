@@ -52,8 +52,11 @@ type station struct {
 	Logo  string            `json:"logo,omitempty"`
 }
 
-// logo is the station's logo for the guide's light logo chips: the one
-// drawn for a light background, else gray, else any.
+// logoDark is the station's logo drawn for a dark background: white.
+func (s station) logoDark() string { return cmp.Or(s.Logos["dark"], s.Logos["white"]) }
+
+// logo is the station's logo for a light background: the colored one,
+// else gray, else any.
 func (s station) logo() string {
 	for _, c := range []string{"light", "gray"} {
 		if u := s.Logos[c]; u != "" {
@@ -240,7 +243,7 @@ func (st *state) guide(zip string, now time.Time) *guide.Guide {
 	from := now.Add(-24 * time.Hour)
 	for _, sta := range st.Stations {
 		g.Channels = append(g.Channels, guide.Channel{
-			ID: sta.ID, Number: sta.Number, CallSign: sta.CallSign, Network: guide.NetworkName(sta.Affiliate), Logo: sta.logo(),
+			ID: sta.ID, Number: sta.Number, CallSign: sta.CallSign, Network: guide.NetworkName(sta.Affiliate), Logo: sta.logo(), LogoDark: sta.logoDark(),
 		})
 		for _, d := range st.Days[sta.ID] {
 			for _, a := range d.Airings {

@@ -195,7 +195,7 @@ func TestUpdate(t *testing.T) {
 	}
 
 	g := s.Guide()
-	if g == nil || len(g.Channels) != 2 || g.Channels[0].Number != "2.1" || g.Channels[0].CallSign != "KWGNDT" || g.Channels[0].Logo != "https://example.com/kwgn-light.png" {
+	if g == nil || len(g.Channels) != 2 || g.Channels[0].Number != "2.1" || g.Channels[0].CallSign != "KWGNDT" || g.Channels[0].Logo != "https://example.com/kwgn-light.png" || g.Channels[0].LogoDark != "https://example.com/kwgn-dark.png" {
 		t.Fatalf("guide channels = %+v", g)
 	}
 	ps := g.Programs["20370"]

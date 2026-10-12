@@ -35,6 +35,9 @@ type Channel struct {
 	CallSign string `json:"callSign"` // "KWGNDT"
 	Network  string `json:"network"`
 	Logo     string `json:"logo"`
+	// LogoDark is the logo drawn for a dark background (white), when the
+	// listings have one: Schedules Direct's do.
+	LogoDark string `json:"logoDark,omitempty"`
 }
 
 // Program is one airing.
@@ -280,7 +283,9 @@ var acronyms = map[string]bool{
 // NetworkName is an affiliate's name as the guide shows it: "NBC" for
 // "NATIONAL BROADCASTING COMPANY", "Start TV" for "START TV NETWORK".
 func NetworkName(affiliate string) string {
-	if n, ok := networkNames[affiliate]; ok {
+	// Gracenote's grid writes them in capitals, Schedules Direct not
+	// always.
+	if n, ok := networkNames[strings.ToUpper(affiliate)]; ok {
 		return n
 	}
 	if strings.HasPrefix(affiliate, "METV") {

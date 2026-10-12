@@ -747,7 +747,7 @@ function firstAired(d) {
 }
 
 // castLine names a program's cast: "With Missy Peregrym, Zeeko Zaki".
-const castLine = (p) => (p && p.cast && p.cast.length ? `With ${p.cast.slice(0, 5).map((c) => c.replace(/ \(.*\)$/, '')).join(', ')}` : '');
+const castLine = (p, n = 5) => (p && p.cast && p.cast.length ? `With ${p.cast.slice(0, n).map((c) => c.replace(/ \(.*\)$/, '')).join(', ')}` : '');
 
 function renderBanner() {
   updateMediaSession();
@@ -772,6 +772,7 @@ function renderBanner() {
   f(b, 'chips').innerHTML = (rec ? `<span class="chip live">${rec.status === 'recording' ? 'Recording' : 'Will record'}</span>` : '') + chipsFor(p, ch);
   f(b, 'title').textContent = p ? p.title : 'No listings';
   f(b, 'ep').textContent = episodeLine(p);
+  f(b, 'cast').textContent = castLine(p, 3);
   f(b, 'progress').style.width = p ? `${Math.min(100, ((now - p._s) / (p._e - p._s)) * 100)}%` : '0';
   f(b, 'desc').textContent = p ? p.description || '' : ch.description || '';
   f(b, 'next').textContent = nx ? `${clock(nx._s)}  ${nx.title}` : '';
@@ -2090,7 +2091,8 @@ function renderGuide() {
     html += `<div class="${cls}"><div class="g-ch" data-row="${r}">
       <div class="num${ch.number.length > 4 ? ' long' : ''}">${esc(ch.number)}</div>
       <div class="who"><div class="net">${isFav(ch) ? '<span class="fav">★</span>' : ''}${esc(ch.network || displayCall(ch))}</div><div class="call"${bad ? ` title="${esc(`${sig.label}: ${sigDetail(sig)}`)}"` : ''}>${bad ? meter(sig) : ''}<span>${esc(displayCall(ch))}</span></div></div>
-      ${ch.logo ? `<div class="logo${ch.own ? ' own' : ''}" style="background-image:url('${esc(ch.logo)}')"></div>` : '<div></div>'}
+      ${ch.logoDark ? `<div class="logo own" style="background-image:url('${esc(ch.logoDark)}')"></div>`
+    : ch.logo ? `<div class="logo${ch.own ? ' own' : ''}" style="background-image:url('${esc(ch.logo)}')"></div>` : '<div></div>'}
     </div><div class="g-progs">`;
     const progs = programsFor(ch).filter((p) => p._e > lo && p._s < hi);
     if (!progs.length) {

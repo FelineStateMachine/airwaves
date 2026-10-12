@@ -38,12 +38,13 @@ type TunerChannel struct {
 	CallSign string `json:"callSign"`
 	BaseCall string `json:"baseCall"`
 	// GuideID, GuideCallSign ("KWGNDT", "KCNCDT2"), Network ("CW",
-	// "Start TV") and Logo come from the listings, when they have the
-	// channel.
+	// "Start TV"), Logo and LogoDark (for a dark background) come from the
+	// listings, when they have the channel.
 	GuideID       string `json:"guideId,omitempty"`
 	GuideCallSign string `json:"guideCallSign,omitempty"`
 	Network       string `json:"network"`
 	Logo          string `json:"logo,omitempty"`
+	LogoDark      string `json:"logoDark,omitempty"`
 	// RF is the RF channel the tuner receives it on; 0 when unknown.
 	RF int `json:"rf"`
 	// FacilityID and Transmitter are the licensed transmitter on RF that
@@ -155,6 +156,7 @@ func Match(rep *Report, g *guide.Guide, found []Scanned) []TunerChannel {
 		}
 		if gc, ok := pickListing(listed[f.Number], nameBase(f.Name), t); ok {
 			ch.GuideID, ch.GuideCallSign, ch.BaseCall, ch.Network, ch.Logo = gc.ID, gc.CallSign, guide.BaseCall(gc.CallSign), gc.Network, gc.Logo
+			ch.LogoDark = gc.LogoDark
 		} else if t != nil && t.VirtualChannel == major {
 			ch.BaseCall = t.BaseCall
 		} else if s := byVirtual[major]; s != nil {

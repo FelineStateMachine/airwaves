@@ -153,6 +153,10 @@ body.mode-tv #banner.show { transform: none; opacity: 1; }
 .bn-progress { height: 3px; background: var(--line-2); margin: 12px 0 10px; border-radius: 2px; overflow: hidden; }
 .bn-progress i { display: block; height: 100%; background: var(--amber); width: 0; transition: width .6s; }
 .bn-desc { margin: 0; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; max-width: 72ch; }
+.bn-cast { color: var(--muted); font-size: .92em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 72ch; margin-top: 2px; }
+.bn-cast:empty, #banner.osd .bn-cast { display: none; }
+/* The details (I) have room for the whole description. */
+#banner.detail .bn-desc { -webkit-line-clamp: 6; }
 .bn-next { display: flex; gap: 10px; align-items: center; margin-top: 12px; font-size: 14px; }
 .bn-signal { border-left: 1px solid var(--line); padding-left: 24px; display: none; flex-direction: column; gap: 8px; justify-content: center; }
 #banner.detail, #banner.warn { grid-template-columns: 210px minmax(0, 1fr) 270px; }
@@ -243,6 +247,9 @@ body.mode-guide #guide, body.mode-antenna #antenna, body.mode-settings #settings
 .g-ch .who { min-width: 0; }
 .g-ch .call { font: 400 11px var(--f-mono); letter-spacing: .06em; color: var(--muted); display: flex; gap: 6px; align-items: center; }
 .g-ch .net { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* A station's logo drawn for a light background sits on a light chip; one
+   drawn for the dark (white, from Schedules Direct) and the server's own
+   channels' sit on the guide itself. */
 .g-ch .logo { width: 44px; height: 26px; border-radius: 2px; background: #e9e3d4 center/80% no-repeat; }
 .g-ch .logo.own { background: center/contain no-repeat; }
 .g-ch .num.long { font-size: 22px; }
