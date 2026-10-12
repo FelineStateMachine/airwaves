@@ -69,6 +69,12 @@ func fakeYtDlp(args []string) int {
 				{"id": "pbx", "title": "[Private video]"},
 				{"id": "pb2", "title": "B 2", "duration": 3600, "timestamp": now - day},
 			}}
+	case strings.Contains(u, "playlist?list=PLtest00000002"):
+		out = map[string]any{"_type": "playlist", "id": "PLtest00000002", "title": "Every Episode", "channel": "Show C", "channel_id": "UCc",
+			"entries": []map[string]any{
+				{"id": "pc0"},
+				{"id": "pc1", "title": "C 1", "duration": 3600, "timestamp": now - day},
+			}}
 	case strings.Contains(u, "results?search_query="):
 		out = map[string]any{"entries": []map[string]any{{"channel_id": "UCa", "channel": "Show A", "uploader_id": "@showa",
 			"channel_follower_count": 1000, "description": "A show."}}}
@@ -183,6 +189,15 @@ func TestAddStreamsAndPlaylist(t *testing.T) {
 	}
 	if st := l.State(); len(st.Shows) != 2 || st.Shows[0].ID != s.ID {
 		t.Errorf("state: %+v", st)
+	}
+	// A playlist titled for what it holds is named for its channel; a video
+	// without a title yet isn't an episode.
+	c, err := l.Add(context.Background(), "https://www.youtube.com/playlist?list=PLtest00000002", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ids(c.Episodes); c.Title != "Show C" || !slices.Equal(got, []string{"pc1"}) {
+		t.Errorf("generic playlist: %q %v", c.Title, got)
 	}
 }
 

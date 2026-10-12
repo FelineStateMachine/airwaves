@@ -1,13 +1,16 @@
 package podcast
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"log"
 	"math"
 	"net/http"
+	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"airwaves/internal/web"
@@ -163,8 +166,8 @@ func (l *Library) relist(ctx context.Context, s *show) {
 // each, plus older ones part watched. Videos too short to be episodes,
 // and streams to come or under way, are left out.
 func (s *show) merge(lst youtube.Listing, sr src, now time.Time) {
-	if s.Title == "" || lst.Name != "" {
-		s.Title = lst.Name
+	if t := showTitle(lst, sr); t != "" {
+		s.Title = t
 	}
 	if lst.Image != "" {
 		s.Thumbnail = lst.Image
@@ -182,6 +185,11 @@ func (s *show) merge(lst youtube.Listing, sr src, now time.Time) {
 	var out []*episode
 	seen := map[string]bool{}
 	for _, v := range lst.Entries {
+		// A video without a title yet (a premiere to come, say) is
+		// listed once it has one.
+		if v.Title == "" {
+			continue
+		}
 		if seen[v.ID] || !s.fits(v.Seconds, v.LiveStatus, sr) {
 			if v.Seconds > 0 && float64(v.Seconds) < s.MinMinutes*60 {
 				s.skip(v.ID)
@@ -240,6 +248,20 @@ func (s *show) fits(seconds int, live string, sr src) bool {
 	}
 	return seconds <= 0 || float64(seconds) >= s.MinMinutes*60
 }
+
+// showTitle is what a listing calls the show: a playlist's title, unless
+// it names no show ("Every Episode", "Full Episodes", "Podcast"), then its
+// channel's name; a channel's name.
+func showTitle(lst youtube.Listing, sr src) string {
+	if sr.playlist && lst.Owner != "" && strings.TrimSpace(generic.ReplaceAllString(lst.Name, "")) == "" {
+		return lst.Owner
+	}
+	return cmp.Or(lst.Name, lst.Owner)
+}
+
+// generic are the words of a playlist's title that say what it holds, not
+// which show.
+var generic = regexp.MustCompile(`(?i)\b(the|every|all|full|latest|new|episodes?|podcasts?|shows?|uploads?|videos?)\b|[^\pL\pN]+`)
 
 // skip remembers a video that isn't an episode.
 func (s *show) skip(id string) {
