@@ -739,10 +739,10 @@ const stars = (n) => '\u2605'.repeat(Math.floor(n)) + (n % 1 >= 0.5 ? '\u00bd' :
 function episodeLine(p) {
   if (!p) return '';
   const se = p.season && p.episode ? `S${p.season} E${p.episode}` : '';
-  // A repeat says when it first aired.
+  // A repeat says when it first aired, which says the year too.
   const first = p.originalAirDate && !(p.flags || []).includes('New') ? `first aired ${firstAired(p.originalAirDate)}` : '';
   const game = p.awayTeam && p.homeTeam && !p.episodeTitle ? `${p.awayTeam} at ${p.homeTeam}` : '';
-  return [p.episodeTitle && `"${p.episodeTitle}"`, game, se, p.year, first].filter(Boolean).join('   ');
+  return [p.episodeTitle && `"${p.episodeTitle}"`, game, se, !first && p.year, first].filter(Boolean).join('   ');
 }
 
 // firstAired names an original air date ("2019-03-05") as "Mar 5, 2019".
