@@ -25,6 +25,8 @@ type fakeSD struct {
 	md5      string
 	images   []string // pictures downloaded
 	capped   bool     // pictures answer with the daily cap
+	stale    bool     // the next request gets 4003 once, as for an old token
+	s3       string   // where pictures redirect to, when set
 }
 
 func (f *fakeSD) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -61,6 +63,11 @@ func (f *fakeSD) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(403, 4006, "TOKEN_EXPIRED")
 		return
 	}
+	if f.stale {
+		f.stale = false
+		fail(400, 4003, "INVALID_USER")
+		return
+	}
 	today := time.Now().UTC().Format(time.DateOnly)
 	if uri, ok := strings.CutPrefix(path, "image/"); ok {
 		if f.capped {
@@ -68,6 +75,10 @@ func (f *fakeSD) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		f.images = append(f.images, uri)
+		if f.s3 != "" {
+			http.Redirect(w, r, f.s3+"/"+uri, http.StatusSeeOther)
+			return
+		}
 		w.Header().Set("Content-Type", "image/jpeg")
 		fmt.Fprint(w, "JPEG "+uri)
 		return
@@ -455,5 +466,49 @@ func TestArtworkCap(t *testing.T) {
 	}
 	if s.Guide().Programs["20370"][0].Image != "" {
 		t.Fatal("a picture without a download")
+	}
+}
+
+// TestStaleToken: a 4003 outside a login means an old token: one new
+// login, and the update goes on.
+func TestStaleToken(t *testing.T) {
+	s, f := newSource(t)
+	_ = s.SetAccount("viewer", "hunter2")
+	a, _ := LoadAccount(s.accountPath())
+	s.update(context.Background(), a)
+	f.mu.Lock()
+	f.stale, f.md5 = true, "day5"
+	f.mu.Unlock()
+	s.update(context.Background(), a)
+	if st := s.Status(); !st.OK || st.Stopped != "" || f.count("POST token") != 2 {
+		t.Fatalf("status %+v, %d logins", st, f.count("POST token"))
+	}
+}
+
+// TestPictureRedirect: pictures are fetched from where Schedules Direct
+// redirects, without the token.
+func TestPictureRedirect(t *testing.T) {
+	var mu sync.Mutex
+	var tokens []string
+	s3 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		tokens = append(tokens, r.Header.Get("Token"))
+		mu.Unlock()
+		w.Header().Set("Content-Type", "image/jpeg")
+		fmt.Fprint(w, "JPEG from S3")
+	}))
+	defer s3.Close()
+	s, f := newSource(t)
+	f.s3 = strings.Replace(s3.URL, "127.0.0.1", "localhost", 1) // another host
+	_ = s.SetAccount("viewer", "hunter2")
+	a, _ := LoadAccount(s.accountPath())
+	s.update(context.Background(), a)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(tokens) != 2 || tokens[0] != "" || tokens[1] != "" {
+		t.Fatalf("S3 saw tokens %q", tokens)
+	}
+	if s.Guide().Programs["20370"][0].Image == "" {
+		t.Fatal("no picture")
 	}
 }

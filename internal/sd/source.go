@@ -165,8 +165,10 @@ func (s *Source) SetAccount(user, password string) error {
 		return err
 	}
 	s.mu.Lock()
-	// A new login: try again, with a token of its own.
+	// A new login: try again, with a token of its own, and pictures too
+	// (a subscription lifts a trial's cap on them).
 	s.st.Stopped, s.st.Token, s.st.TokenExpires = "", "", time.Time{}
+	s.st.ImagesPaused = time.Time{}
 	s.status = Status{User: a.User}
 	if a.User == "" {
 		s.st = &state{}

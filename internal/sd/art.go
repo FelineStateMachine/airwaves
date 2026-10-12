@@ -24,8 +24,8 @@ import (
 // a week.
 const (
 	maxArtChunk   = 500  // keys per /metadata/programs
-	maxArtLookups = 1000 // keys looked up per update
-	maxArtFetches = 500  // downloads per update
+	maxArtLookups = 2000 // keys looked up per update
+	maxArtFetches = 2000 // downloads per update, of a subscriber's 5000 a day
 	artRecheck    = 7 * 24 * time.Hour
 )
 
@@ -239,7 +239,19 @@ func (c *client) fetchPicture(ctx context.Context, uri, path string) error {
 	}
 	req.Header.Set("User-Agent", c.ua)
 	req.Header.Set("Token", c.st.Token)
-	resp, err := c.http.Do(req)
+	// The picture is wherever it redirects to (S3): the token isn't for
+	// there.
+	hc := *c.http
+	hc.CheckRedirect = func(r *http.Request, via []*http.Request) error {
+		if len(via) >= 5 {
+			return errors.New("too many redirects")
+		}
+		if r.URL.Host != via[0].URL.Host {
+			r.Header.Del("Token")
+		}
+		return nil
+	}
+	resp, err := hc.Do(req)
 	if err != nil {
 		return err
 	}

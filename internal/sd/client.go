@@ -21,7 +21,7 @@ const API = "https://json.schedulesdirect.org/20141201/"
 // Request limits.
 const (
 	maxStations = 5000 // per /schedules and /schedules/md5
-	maxPrograms = 5000 // per /programs
+	maxPrograms = 2000 // per /programs (5000 at most; smaller is kinder)
 )
 
 // StopError is a refusal that ends updating until the account is
@@ -128,8 +128,9 @@ func (c *client) do(ctx context.Context, method, path string, in, out any) error
 		var env envelope
 		if err := json.Unmarshal(trimmed, &env); err == nil && env.Code != nil && *env.Code != 0 {
 			code := *env.Code
-			if code == 4006 && path != "token" && !c.relogged {
-				// The token ran out: one new one, one retry.
+			// The token ran out (Schedules Direct may say so with 4003 as
+			// well as 4006 outside a login): one new one, one retry.
+			if (code == 4006 || code == 4003) && path != "token" && !c.relogged {
 				c.relogged = true
 				c.st.Token = ""
 				if err := c.login(ctx, true); err != nil {
