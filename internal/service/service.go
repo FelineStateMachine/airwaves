@@ -33,6 +33,7 @@ import (
 	"airwaves/internal/hdhr"
 	"airwaves/internal/lineup"
 	"airwaves/internal/phase"
+	"airwaves/internal/sd"
 	"airwaves/internal/signal"
 	"airwaves/internal/store"
 	"airwaves/internal/stream"
@@ -152,6 +153,9 @@ type Options struct {
 	// the recorded files; recording needs both.
 	DVRPath       string
 	RecordingsDir string
+	// ListingsDir keeps a Schedules Direct account and its listings,
+	// which replace Gracenote's public grid once there's an account.
+	ListingsDir string
 	// NoAntenna serves custom channels only: no tuner, lineup or listings
 	// from the ZIP code, reception reports or recording.
 	// The location (Config) is then only for the weather, and there's none
@@ -199,6 +203,7 @@ type Service struct {
 	streamErr error
 	tuners    *tuner.Manager
 	dvr       *dvr.Manager
+	listings  *sd.Source
 	weather   *weather.Source
 	// wx is the weather channel, when there's a WeatherStar display;
 	// wxStreams when it can be rendered to video for HDHomeRun clients.
@@ -266,6 +271,17 @@ func New(opt Options) (*Service, error) {
 	s.weather = weather.NewSource(s.http)
 	s.streams, s.streamErr = stream.NewServer(false)
 
+	if !opt.NoAntenna && opt.ListingsDir != "" {
+		s.listings = &sd.Source{
+			Dir: opt.ListingsDir, ZIP: s.cfg.ZIP, HTTP: s.http, UserAgent: "airwaves/" + Version,
+			// New listings make the next snapshot rebuild with them.
+			OnUpdate: func() {
+				s.mu.Lock()
+				s.built = time.Time{}
+				s.mu.Unlock()
+			},
+		}
+	}
 	if !opt.NoAntenna {
 		s.tuners = tuner.NewManager()
 		if opt.DVRPath != "" && opt.RecordingsDir != "" {
@@ -307,6 +323,10 @@ func New(opt Options) (*Service, error) {
 
 // Library is the folder channels, or nil when there's no channels folder.
 func (s *Service) Library() *vchan.Library { return s.library }
+
+// Listings is the Schedules Direct account and its listings, or nil on a
+// server without an antenna.
+func (s *Service) Listings() *sd.Source { return s.listings }
 
 // WeatherChannel is the weather channel, or nil when there's no WeatherStar
 // display.
@@ -485,7 +505,10 @@ func (s *Service) Snapshot(ctx context.Context, refresh bool) (*Snapshot, error)
 	if len(a.Channels) == 0 && a.Tuner.Reason != "" {
 		out.Report.Warnings = append(slices.Clone(out.Report.Warnings), "No antenna channels: "+a.Tuner.Reason)
 	}
-	out.Guide = listedOnly(snap.Guide, a.Channels)
+	s.mu.Lock()
+	hours := s.cfg.GuideHours
+	s.mu.Unlock()
+	out.Guide = listedOnly(snap.Guide, a.Channels, time.Now().Add(-time.Hour), time.Now().Add(time.Duration(hours)*time.Hour))
 	out.Antenna = a
 	return out, nil
 }
@@ -624,6 +647,9 @@ func (s *Service) snapshot(ctx context.Context, refresh bool) (*Snapshot, error)
 
 	// The records only: no terrain, so no estimates.
 	b := &lineup.Builder{HTTP: s.http, Cache: s.cache, Progress: s.opt.Progress}
+	if s.listings != nil {
+		b.Listings = s.listings.Guide
+	}
 	opt := lineup.Options{ZIP: cfg.ZIP, RadiusKm: cfg.RadiusKm, GuideHours: cfg.GuideHours, Refresh: refresh}
 	if cfg.Lat != 0 && cfg.Lon != 0 {
 		opt.Point = &geo.Point{Lat: cfg.Lat, Lon: cfg.Lon}
@@ -964,6 +990,9 @@ func (s *Service) recordingChannels(ctx context.Context) (*guide.Guide, []lineup
 // tuner and keeps up with it, measures the signal while tuners are in use,
 // and makes recordings.
 func (s *Service) Run(ctx context.Context) {
+	if s.listings != nil {
+		go s.listings.Run(ctx)
+	}
 	if s.tuners != nil {
 		s.findTuner(ctx)
 		go s.sample(ctx)

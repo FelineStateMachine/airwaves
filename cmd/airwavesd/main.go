@@ -122,6 +122,7 @@ func run() error {
 		Config:          service.Config{ZIP: *zip, GuideHours: 48},
 		DVRPath:         filepath.Join(*data, "dvr.json"),
 		RecordingsDir:   *recordings,
+		ListingsDir:     filepath.Join(*data, "schedulesdirect"),
 		SignalPath:      filepath.Join(*data, "signal.json"),
 		HDHomeRun:       *tunerAddr,
 		SkipDeviceID:    hdhr.DeviceIDFor(*name),
@@ -257,6 +258,9 @@ func adminPage(ctx context.Context, svc *service.Service, backups, channels, mus
 	}
 	page := &admin.Server{Library: lib, Weather: svc.WeatherChannel(), Antenna: svc.AntennaChannels, HTTP: web.NewClient(),
 		Backups: backups, Version: service.Version, ChannelsDir: channels, MusicDir: music}
+	if l := svc.Listings(); l != nil {
+		page.Listings = l
+	}
 	go page.Run(ctx)
 	return page.Handler()
 }

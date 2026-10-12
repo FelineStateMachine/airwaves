@@ -107,7 +107,10 @@ type Builder struct {
 	// Terrain, when set, has every transmitter's reception estimated from
 	// the terrain between it and the location. Without it the report is
 	// the records alone, and its stations are ordered by distance.
-	Terrain  *terrain.Source
+	Terrain *terrain.Source
+	// Listings, when it has any, are the guide's listings in place of
+	// Gracenote's public grid: Schedules Direct's, kept by the server.
+	Listings func() *guide.Guide
 	Progress func(string)
 }
 
@@ -162,14 +165,24 @@ func (b *Builder) Build(ctx context.Context, opt Options) (*Report, *guide.Guide
 	}
 	rep.ATSC3 = relevantHosts(hosts, rep.Stations)
 
-	b.progress("Loading listings for lineup %s", guide.LineupID(opt.ZIP))
-	guideKey := fmt.Sprintf("guide-%s-%dh", opt.ZIP, opt.GuideHours)
-	g, err := store.Load(ctx, b.Cache, guideKey, 4*time.Hour, opt.Refresh, func(ctx context.Context) (*guide.Guide, error) {
-		return guide.Fetch(ctx, b.HTTP, opt.ZIP, time.Now().Add(-30*time.Minute), opt.GuideHours)
-	})
-	if err != nil {
-		rep.Warnings = append(rep.Warnings, "Listings unavailable: "+err.Error())
-		g = nil
+	var g *guide.Guide
+	if b.Listings != nil {
+		g = b.Listings()
+	}
+	if g != nil {
+		b.progress("Listings from Schedules Direct, lineup %s", g.Lineup)
+		rep.Sources = slices.DeleteFunc(rep.Sources, func(s Source) bool { return s.Name == gracenoteSource })
+		rep.Sources = append(rep.Sources, Source{"Schedules Direct", "https://www.schedulesdirect.org/", "Over-the-air lineup and program guide (Gracenote data)"})
+	} else {
+		b.progress("Loading listings for lineup %s", guide.LineupID(opt.ZIP))
+		guideKey := fmt.Sprintf("guide-%s-%dh", opt.ZIP, opt.GuideHours)
+		g, err = store.Load(ctx, b.Cache, guideKey, 4*time.Hour, opt.Refresh, func(ctx context.Context) (*guide.Guide, error) {
+			return guide.Fetch(ctx, b.HTTP, opt.ZIP, time.Now().Add(-30*time.Minute), opt.GuideHours)
+		})
+		if err != nil {
+			rep.Warnings = append(rep.Warnings, "Listings unavailable: "+err.Error())
+			g = nil
+		}
 	}
 
 	rep.Channels = buildChannels(rep, g)
@@ -177,13 +190,16 @@ func (b *Builder) Build(ctx context.Context, opt Options) (*Report, *guide.Guide
 	return rep, g, nil
 }
 
-const terrainSource = "AWS Terrain Tiles"
+const (
+	terrainSource   = "AWS Terrain Tiles"
+	gracenoteSource = "Gracenote TV Listings"
+)
 
 var sources = []Source{
 	{"FCC TV Query", "https://www.fcc.gov/media/television/tv-query", "Licensed transmitters, power, height, location"},
 	{terrainSource, "https://registry.opendata.aws/terrain-tiles/", "Terrain profiles for reception estimates"},
 	{"RabbitEars.Info", "https://www.rabbitears.info/market.php?request=atsc3", "ATSC 3.0 (NextGen TV) hosting"},
-	{"Gracenote TV Listings", "https://tvlistings.gracenote.com/", "Over-the-air lineup and program guide"},
+	{gracenoteSource, "https://tvlistings.gracenote.com/", "Over-the-air lineup and program guide"},
 	{"Zippopotam.us", "https://zippopotam.us/", "Location lookup"},
 }
 

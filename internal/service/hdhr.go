@@ -17,6 +17,7 @@ import (
 	"airwaves/internal/guide"
 	"airwaves/internal/hdhr"
 	"airwaves/internal/lineup"
+	"airwaves/internal/sd"
 	"airwaves/internal/tuner"
 	"airwaves/internal/vchan"
 )
@@ -166,7 +167,9 @@ func (b hdhrBackend) XMLTV(ctx context.Context, w io.Writer, abs func(path strin
 	for _, v := range b.s.customChannels() {
 		custom[v.Number()] = v
 	}
-	from, to := time.Now().Add(-time.Hour), time.Now().Add(48*time.Hour)
+	// As far as the listings go: two days of Gracenote's grid, two weeks
+	// from Schedules Direct.
+	from, to := time.Now().Add(-time.Hour), time.Now().Add(sd.Days*24*time.Hour)
 	doc := xmltvDoc{Generator: "Airwaves"}
 	for _, e := range entries {
 		id := hdhr.ChannelID(e.Number)

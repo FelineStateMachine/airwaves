@@ -57,6 +57,17 @@ type Program struct {
 	// AudioLang is the sound's language as tagged ("eng", "jpn") where a
 	// custom channel knows it.
 	AudioLang string `json:"audioLang,omitempty"`
+
+	// From Schedules Direct's fuller listings: when the episode first
+	// aired ("2019-03-05"), the cast as "Name (Character)", a movie's
+	// running time in minutes and Gracenote's star rating (1 to 4), and a
+	// game's teams.
+	OriginalAirDate string   `json:"originalAirDate,omitempty"`
+	Cast            []string `json:"cast,omitempty"`
+	Runtime         int      `json:"runtime,omitempty"`
+	Stars           float64  `json:"stars,omitempty"`
+	HomeTeam        string   `json:"homeTeam,omitempty"`
+	AwayTeam        string   `json:"awayTeam,omitempty"`
 }
 
 // Guide is a lineup with listings, keyed by channel ID.
@@ -194,7 +205,7 @@ func (g *Guide) merge(resp *gridResponse, seen map[string]bool) {
 				ID:       ch.ChannelID,
 				Number:   ch.ChannelNo,
 				CallSign: ch.CallSign,
-				Network:  networkName(ch.AffiliateName),
+				Network:  NetworkName(ch.AffiliateName),
 				Logo:     imageURL(ch.Thumbnail),
 			})
 		}
@@ -266,7 +277,9 @@ var acronyms = map[string]bool{
 	"LC": true, "LAFF": true, "ABC": true, "CBS": true, "NBC": true, "FOX": true, "CW": true,
 }
 
-func networkName(affiliate string) string {
+// NetworkName is an affiliate's name as the guide shows it: "NBC" for
+// "NATIONAL BROADCASTING COMPANY", "Start TV" for "START TV NETWORK".
+func NetworkName(affiliate string) string {
 	if n, ok := networkNames[affiliate]; ok {
 		return n
 	}

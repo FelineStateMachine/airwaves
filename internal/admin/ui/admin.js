@@ -375,6 +375,7 @@
       return;
     }
     renderAccount();
+    renderListings();
     let t = hashTarget();
     if (!t) {
       // The first channel there is to edit; Jellyfin ones once there's an account.
@@ -396,6 +397,7 @@
     stateReq = (async () => {
       try {
         const prevAcct = JSON.stringify(S.state && S.state.account);
+        const prevLs = JSON.stringify(S.state && S.state.listings);
         const prevMissing = JSON.stringify(S.ch && S.ch.unmatched);
         S.state = normalizeState(await api('GET', '/state'));
         S.stateErr = null;
@@ -403,6 +405,7 @@
         else if (S.sel && !isNewTarget(S.sel)) S.ch = findCh(S.sel);
         renderChannels();
         if (JSON.stringify(S.state.account) !== prevAcct && !S.qc && !acctFormInUse()) renderAccount();
+        if (JSON.stringify(S.state.listings) !== prevLs && !lsFormInUse()) renderListings();
         if (E.yt) {
           ytStateChanged();
         } else if (E.kicker) {
@@ -725,6 +728,127 @@
     const n = links[Math.max(0, Math.min(links.length - 1, i + (e.key === 'ArrowDown' ? 1 : -1)))];
     n.focus();
   });
+
+  // ---------- Side: guide listings ----------
+  // The guide's Schedules Direct account: a line while it works, the form
+  // with none, when it stopped, or on Change. An update is followed every
+  // few seconds until it's done.
+  function lsFormInUse() {
+    const box = $('#listings');
+    return box.contains(document.activeElement) && isTyping(document.activeElement);
+  }
+
+  const lsDate = (t) => new Date(t).toLocaleDateString([], { month: 'short', day: 'numeric' });
+
+  function renderListings() {
+    const box = $('#listings');
+    const l = S.state && S.state.listings;
+    box.hidden = !l;
+    if (!l) { box.replaceChildren(); return; }
+    const hadFocus = box.contains(document.activeElement);
+    const configured = !!l.user;
+    if (l.updating) followListings();
+    if (configured && !l.stopped && !S.lsOpen) {
+      const what = l.updating ? 'Fetching the listings'
+        : l.ok ? `${l.stations} stations through ${lsDate(l.through)}`
+          : l.error ? `Not updated: ${l.error}` : 'Waiting for the first update';
+      const dot = l.ok && !l.updating ? '' : l.error && !l.updating ? ' bad' : ' wait';
+      box.replaceChildren(h('div', { class: 'acct-line' },
+        h('span', { class: 'dot' + dot, 'aria-hidden': 'true' }),
+        h('span', { class: 'who' },
+          h('b', { text: 'Schedules Direct' }),
+          h('span', { text: `${l.user}  |  ${what}`, title: l.expires ? `Account until ${lsDate(l.expires)}` : '' })),
+        h('button', { class: 'btn ghost small', type: 'button', id: 'ls-change', onclick: () => { S.lsOpen = true; renderListings(); $('#ls-user').focus(); } }, 'Change')));
+      if (hadFocus) $('#ls-change').focus();
+      return;
+    }
+    let cls = 'acct-box', title = 'Guide listings', lead;
+    if (!configured) {
+      cls += ' setup';
+      lead = h('p', { class: 'lead' }, "Sign in to Schedules Direct for two weeks of listings, with cast, first air dates and ratings. Until then the guide uses Gracenote's public listings.");
+    } else if (l.stopped) {
+      cls += ' fail';
+      title = 'Listings stopped';
+      lead = h('p', { class: 'lead err' }, h('b', { text: l.stopped }), ' Nothing more is asked of Schedules Direct until you save the account again.');
+    } else {
+      lead = h('p', { class: 'lead' }, `Signed in to Schedules Direct as ${l.user}.`);
+    }
+    const msg = h('p', { class: 'acct-msg' + (S.lsMsg ? ' ' + S.lsMsg.cls : ''), role: 'status', text: S.lsMsg ? S.lsMsg.text : '' });
+    const form = h('form', { class: 'acct-form', onsubmit: saveListings },
+      h('label', { class: 'field' }, h('span', null, 'User name'),
+        h('input', { class: 'input', name: 'user', id: 'ls-user', value: l.user || '', autocomplete: 'username', spellcheck: 'false', autocapitalize: 'off' })),
+      h('label', { class: 'field' }, h('span', null, 'Password'),
+        h('input', { class: 'input', name: 'password', type: 'password', autocomplete: 'current-password', placeholder: configured ? 'saved' : '' })),
+      configured ? h('p', { class: 'help' }, 'Leave the password empty to keep the saved one. Only its SHA-1, which Schedules Direct takes, is kept on the server.')
+        : h('p', { class: 'help' }, 'Only the password\'s SHA-1, which Schedules Direct takes, is kept on the server.'),
+      h('div', { class: 'acct-actions' },
+        h('button', { class: 'btn', type: 'submit', id: 'ls-submit', disabled: S.lsBusy }, S.lsBusy ? 'Saving' : 'Save and fetch'),
+        configured && !l.stopped ? h('button', { class: 'btn ghost', type: 'button', onclick: () => { S.lsOpen = false; S.lsMsg = null; renderListings(); } }, 'Cancel') : null,
+        configured ? h('button', { class: 'btn ghost danger', type: 'button', onclick: removeListings }, S.lsRemove ? 'Press again to remove' : 'Remove') : null),
+      msg);
+    box.replaceChildren(h('div', { class: cls }, h('h2', null, title), lead, form));
+    if (hadFocus) {
+      const el = box.querySelector('#ls-submit:not([disabled]), input');
+      if (el) el.focus();
+    }
+  }
+
+  async function saveListings(e) {
+    e.preventDefault();
+    const f = e.currentTarget;
+    const body = { user: f.user.value.trim(), password: f.password.value };
+    if (!body.user) { S.lsMsg = { text: 'Enter the Schedules Direct user name.', cls: 'err' }; renderListings(); return; }
+    S.lsBusy = true;
+    renderListings();
+    try {
+      S.state.listings = await api('PUT', '/listings', body);
+      S.lsOpen = false;
+      S.lsMsg = null;
+      toast('Saved. Fetching two weeks of listings from Schedules Direct.');
+    } catch (err) {
+      S.lsMsg = { text: err.message, cls: 'err' };
+    }
+    S.lsBusy = false;
+    renderListings();
+    followListings();
+  }
+
+  async function removeListings() {
+    if (!S.lsRemove) {
+      S.lsRemove = true;
+      renderListings();
+      setTimeout(() => { S.lsRemove = false; if (!lsFormInUse()) renderListings(); }, 4000);
+      return;
+    }
+    S.lsRemove = false;
+    try {
+      S.state.listings = await api('DELETE', '/listings');
+      S.lsOpen = false;
+      toast("Removed. The guide goes back to Gracenote's public listings.");
+    } catch (err) {
+      toast(err.message, true);
+    }
+    renderListings();
+  }
+
+  // followListings reads the listings' state every few seconds while an
+  // update runs.
+  let lsTimer = 0;
+  function followListings() {
+    if (lsTimer) return;
+    lsTimer = setTimeout(async () => {
+      lsTimer = 0;
+      try {
+        const st = await api('GET', '/state');
+        const was = JSON.stringify(S.state.listings);
+        S.state.listings = st.listings;
+        if (JSON.stringify(st.listings) !== was && !lsFormInUse()) renderListings();
+        if (st.listings && (st.listings.updating || (st.listings.user && !st.listings.ok && !st.listings.error && !st.listings.stopped))) followListings();
+      } catch {
+        followListings();
+      }
+    }, 3000);
+  }
 
   // ---------- Side: account ----------
   function acctFormInUse() {

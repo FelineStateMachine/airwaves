@@ -508,9 +508,11 @@ func dvrChannels(chans []lineup.TunerChannel) []lineup.Channel {
 	return out
 }
 
-// listedOnly keeps g's channels and listings for the tuner's channels:
-// listings of stations the tuner doesn't receive aren't the app's.
-func listedOnly(g *guide.Guide, chans []AntennaChannel) *guide.Guide {
+// listedOnly keeps g's channels and listings for the tuner's channels,
+// from from to to: listings of stations the tuner doesn't receive aren't
+// the app's, and it shows a day or two while recording looks two weeks
+// ahead.
+func listedOnly(g *guide.Guide, chans []AntennaChannel, from, to time.Time) *guide.Guide {
 	if g == nil {
 		return nil
 	}
@@ -528,10 +530,17 @@ func listedOnly(g *guide.Guide, chans []AntennaChannel) *guide.Guide {
 			out.Channels = append(out.Channels, c)
 		}
 	}
-	for id, p := range g.Programs {
-		if ids[id] {
-			out.Programs[id] = p
+	for id, ps := range g.Programs {
+		if !ids[id] {
+			continue
 		}
+		var keep []guide.Program
+		for _, p := range ps {
+			if p.End.After(from) && p.Start.Before(to) {
+				keep = append(keep, p)
+			}
+		}
+		out.Programs[id] = keep
 	}
 	return &out
 }

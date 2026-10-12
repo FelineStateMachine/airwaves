@@ -196,6 +196,8 @@ body.mode-guide #guide, body.mode-antenna #antenna, body.mode-settings #settings
 .gd-title { font: 800 clamp(34px, calc(4.4 * var(--vw)), 60px)/.95 var(--f-display); margin: 10px 0 6px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .gd-ep { font-style: italic; min-height: 1.4em; }
 .gd-meta { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 10px 0; font: 400 12px var(--f-mono); color: var(--muted); }
+.gd-cast { margin: 0 0 6px; color: var(--muted); font-size: .92em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gd-cast:empty { display: none; }
 .gd-desc { margin: 0; color: var(--muted); max-width: 70ch; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .gd-hint { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 12px; font: 400 11px var(--f-mono); color: var(--faint); letter-spacing: .06em; }
 .g-detail .gd-gone { display: none; }

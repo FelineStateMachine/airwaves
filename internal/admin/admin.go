@@ -35,6 +35,7 @@ import (
 	"airwaves/internal/guide"
 	"airwaves/internal/jellyfin"
 	"airwaves/internal/phase"
+	"airwaves/internal/sd"
 	"airwaves/internal/vchan"
 )
 
@@ -58,6 +59,9 @@ type Server struct {
 	// ChannelsDir and MusicDir are where the channels and the weather
 	// music folders are as the host sees them, for the page's hints.
 	ChannelsDir, MusicDir string
+	// Listings is the guide's Schedules Direct account; nil on a server
+	// without an antenna.
+	Listings Listings
 
 	bk       backupState
 	mu       sync.Mutex
@@ -108,6 +112,8 @@ func (s *Server) Handler() http.Handler {
 	}))
 	mux.HandleFunc("GET /admin/api/state", s.getState)
 	mux.HandleFunc("PUT /admin/api/account", s.putAccount)
+	mux.HandleFunc("PUT /admin/api/listings", s.putListings)
+	mux.HandleFunc("DELETE /admin/api/listings", s.deleteListings)
 	mux.HandleFunc("POST /admin/api/account/quickconnect", s.startQuickConnect)
 	mux.HandleFunc("GET /admin/api/account/quickconnect/{id}", s.checkQuickConnect)
 	mux.HandleFunc("GET /admin/api/library/{kind}", s.getLibrary)
@@ -508,10 +514,14 @@ func (s *Server) getState(w http.ResponseWriter, r *http.Request) {
 		list = append(list, antennaJSON{Number: n, Name: name})
 	}
 	slices.SortFunc(list, func(a, b antennaJSON) int { return guide.CompareNumbers(a.Number, b.Number) })
-	writeJSON(w, map[string]any{
+	state := map[string]any{
 		"account": s.accountStatus(r.Context(), false), "channels": chans, "categories": vchan.Categories, "antenna": list,
 		"channelsDir": s.ChannelsDir, "musicDir": s.MusicDir,
-	})
+	}
+	if s.Listings != nil {
+		state["listings"] = s.Listings.Status()
+	}
+	writeJSON(w, state)
 }
 
 func (s *Server) find(number string) (vchan.Entry, bool) {
@@ -1110,4 +1120,51 @@ func writeErr(w http.ResponseWriter, code int, err error) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+}
+
+// ---------- listings ----------
+
+// Listings is a Schedules Direct account and how its listings stand.
+type Listings interface {
+	Status() sd.Status
+	// SetAccount keeps a login (an empty password keeps the saved one for
+	// the same user) and updates with it; an empty user removes it.
+	SetAccount(user, password string) error
+}
+
+// putListings saves the Schedules Direct login and starts an update with
+// it; the page follows the update in the state.
+func (s *Server) putListings(w http.ResponseWriter, r *http.Request) {
+	if s.Listings == nil {
+		writeErr(w, http.StatusNotFound, errors.New("this server has no antenna, so no listings"))
+		return
+	}
+	var req struct{ User, Password string }
+	if !decode(w, r, &req) {
+		return
+	}
+	req.User = strings.TrimSpace(req.User)
+	if req.User == "" {
+		writeErr(w, http.StatusBadRequest, errors.New("enter the Schedules Direct user name"))
+		return
+	}
+	if err := s.Listings.SetAccount(req.User, req.Password); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, s.Listings.Status())
+}
+
+// deleteListings removes the Schedules Direct account; the guide goes back
+// to Gracenote's public grid.
+func (s *Server) deleteListings(w http.ResponseWriter, r *http.Request) {
+	if s.Listings == nil {
+		writeErr(w, http.StatusNotFound, errors.New("this server has no antenna, so no listings"))
+		return
+	}
+	if err := s.Listings.SetAccount("", ""); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, s.Listings.Status())
 }

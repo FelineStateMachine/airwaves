@@ -177,15 +177,29 @@ an amber ring.
 | [FCC TV Query](https://www.fcc.gov/media/television/tv-query) | Licensed transmitters: RF channel, ERP, height, location | 7 days |
 | [AWS Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) | Elevation along each path (SRTM, USGS NED and others) | permanent |
 | [RabbitEars.Info](https://www.rabbitears.info/market.php?request=atsc3) | ATSC 3.0 hosts and services | 3 days |
-| [Gracenote TV listings](https://tvlistings.gracenote.com/) | Lineup `USA-OTA<zip>` and schedules | 4 hours |
+| [Gracenote TV listings](https://tvlistings.gracenote.com/) | Lineup `USA-OTA<zip>` and schedules, without a Schedules Direct account | 4 hours |
+| [Schedules Direct](https://www.schedulesdirect.org/) | Lineup `USA-OTA-<zip>` and two weeks of schedules and programs, with an account | Updated daily |
 | [Zippopotam.us](https://zippopotam.us/) | ZIP centroid | 1 year |
 
 Caches live in `~/Library/Caches/airwaves` (on the server, `~/airwaves/data/cache`);
 app settings in `~/Library/Application Support/airwaves/settings.json`.
 
 The Gracenote grid endpoint is the public JSON behind tvlistings.gracenote.com. It is
-undocumented and meant for personal use; [Schedules Direct](https://www.schedulesdirect.org)
-is the supported source if this grows beyond that.
+undocumented and meant for personal use, and it answers only browsers.
+
+**Schedules Direct.** With an account at [Schedules Direct](https://www.schedulesdirect.org)
+(the licensed source of the same Gracenote data, for personal use), the listings come from
+there instead: two weeks of them, with long descriptions, cast, original air dates, movie
+runtimes and star ratings, and sports teams. Sign in on the admin page (Guide listings); the
+server keeps the user name and the password's SHA-1, which is what the API takes, in
+`<data>/schedulesdirect`, readable by it alone, and never in backups or the app. It adds the
+ZIP code's antenna lineup to the account, updates once a day at a minute of its own, asks only
+for the station-days that changed, and stops asking altogether when the account is refused
+(a wrong password, a locked or expired account) until it's saved again, as Schedules Direct
+requires. The app's guide still shows its listing hours; recording rules look the two weeks
+ahead, and the emulated HDHomeRun's XMLTV carries them all. Airwaves identifies itself as
+`airwaves/<version>`; it is used under Schedules Direct's personal research terms, for one
+household.
 
 ## How reception is estimated
 
@@ -234,7 +248,7 @@ It serves HTTP on port 5004 (`AIRWAVES_HDHR_LISTEN`, default `:5004`; empty or
 | `/discover.json`, `/lineup.json`, `/lineup_status.json` | The HDHomeRun device API |
 | `/auto/v<number>`, `/tuner0/v<number>` | A channel's stream, e.g. `/auto/v9.1` |
 | `/channels.m3u` | Playlist, with `url-tvg` pointing at the guide |
-| `/xmltv.xml` | 48 hour guide from Gracenote listings and custom channel schedules; channel ids `airwaves.<number>` |
+| `/xmltv.xml` | The guide as far as the listings go (two days from Gracenote's grid, two weeks from Schedules Direct) and custom channel schedules; channel ids `airwaves.<number>` |
 | `/channel-logos/<number>` | A custom channel's logo, also on the API port; the playlist and guide link to it |
 
 Discovery answers on UDP 65001, only to other machines: requests from the server itself
@@ -616,6 +630,7 @@ internal/terrain          Terrarium elevation tiles and path profiles
 internal/reception        propagation model and antenna presets (otascan)
 internal/atsc3            RabbitEars ATSC 3.0 list parser
 internal/guide            Gracenote lineup and listings
+internal/sd               Schedules Direct listings: account, daily updates of what changed
 internal/lineup           merges all of the above into a Report, and describes the tuner's channels from it
 internal/signal           what the tuners measured per RF channel, kept across restarts
 internal/tuner            shares the HDHomeRun's tuners: one per RF channel, by priority

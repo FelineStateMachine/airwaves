@@ -721,16 +721,33 @@ function step(dir) {
 function chipsFor(p, ch) {
   const out = [];
   for (const fl of (p && p.flags) || []) out.push(`<span class="chip ${fl === 'Live' ? 'live' : fl === 'New' ? 'new' : ''}">${esc(fl)}</span>`);
+  if (p && p.stars) out.push(`<span class="chip" title="Gracenote's rating, out of 4">${stars(p.stars)}</span>`);
   if (p && p.rating) out.push(`<span class="chip">${esc(p.rating)}</span>`);
+  if (p && p.runtime) out.push(`<span class="chip">${p.runtime >= 60 ? `${Math.floor(p.runtime / 60)} h ${p.runtime % 60 ? `${p.runtime % 60} min` : ''}` : `${p.runtime} min`}</span>`);
   for (const t of (p && p.tags) || []) out.push(`<span class="chip">${esc(t)}</span>`);
   return out.join('');
 }
 
+// stars draws a rating out of 4 in stars, halves included.
+const stars = (n) => '\u2605'.repeat(Math.floor(n)) + (n % 1 >= 0.5 ? '\u00bd' : '');
+
 function episodeLine(p) {
   if (!p) return '';
   const se = p.season && p.episode ? `S${p.season} E${p.episode}` : '';
-  return [p.episodeTitle && `"${p.episodeTitle}"`, se, p.year].filter(Boolean).join('   ');
+  // A repeat says when it first aired.
+  const first = p.originalAirDate && !(p.flags || []).includes('New') ? `first aired ${firstAired(p.originalAirDate)}` : '';
+  const game = p.awayTeam && p.homeTeam && !p.episodeTitle ? `${p.awayTeam} at ${p.homeTeam}` : '';
+  return [p.episodeTitle && `"${p.episodeTitle}"`, game, se, p.year, first].filter(Boolean).join('   ');
 }
+
+// firstAired names an original air date ("2019-03-05") as "Mar 5, 2019".
+function firstAired(d) {
+  const [y, m, day] = d.split('-').map(Number);
+  return new Date(y, m - 1, day).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+// castLine names a program's cast: "With Missy Peregrym, Zeeko Zaki".
+const castLine = (p) => (p && p.cast && p.cast.length ? `With ${p.cast.slice(0, 5).map((c) => c.replace(/ \(.*\)$/, '')).join(', ')}` : '');
 
 function renderBanner() {
   updateMediaSession();
@@ -2174,15 +2191,15 @@ function renderGuideActions(ch, p) {
 }
 
 // fitGuideDetail leaves out what of the program's details doesn't fit
-// above the grid at this window and interface size: its description
-// first, then its tags, its episode line and the hint. The title and the
+// above the grid at this window and interface size: its cast first, then
+// its description, its tags, its episode line and the hint. The title and the
 // actions always show, the actions on one row that scrolls sideways when
 // even that isn't enough.
 function fitGuideDetail() {
   const g = $('#guide');
   const top = $('.g-top', g);
   const box = $('.g-detail', g);
-  const parts = ['desc', 'meta', 'ep', 'hint'].map((k) => f(g, k));
+  const parts = ['cast', 'desc', 'meta', 'ep', 'hint'].map((k) => f(g, k));
   for (const el of parts) el.classList.remove('gd-gone');
   box.classList.remove('one-row');
   const cs = getComputedStyle(top);
@@ -2246,7 +2263,7 @@ function renderGuideDetail(ch, p) {
   const g = $('#guide');
   if (!ch) {
     // No channels under this filter.
-    for (const k of ['kicker', 'title', 'ep', 'meta', 'desc', 'actions', 'hint']) f(g, k).textContent = '';
+    for (const k of ['kicker', 'title', 'ep', 'meta', 'cast', 'desc', 'actions', 'hint']) f(g, k).textContent = '';
     f(g, 'art').classList.remove('has');
     return;
   }
@@ -2258,6 +2275,7 @@ function renderGuideDetail(ch, p) {
   // listed it shows on its own, with the channel's description.
   const genres = p ? p.genres || [] : ch.own && ch.category !== 'Other' ? [ch.category] : [];
   f(g, 'meta').innerHTML = chipsFor(p, ch) + genres.map((x) => `<span class="chip">${esc(x)}</span>`).join('');
+  f(g, 'cast').textContent = castLine(p);
   f(g, 'desc').textContent = p ? p.description || '' : ch.description || '';
   const live = !p || p._s <= now;
   const ok = keyHint('Enter', 'Enter');
