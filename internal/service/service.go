@@ -832,6 +832,16 @@ func (s *Service) Stop(_ context.Context, client string) error {
 	return nil
 }
 
+// Heartbeat keeps client's stream (live TV or a recording) from being
+// stopped as idle while its player holds it without fetching (paused),
+// and reports whether client still has one.
+func (s *Service) Heartbeat(_ context.Context, client string) (bool, error) {
+	if s.streams == nil {
+		return false, nil
+	}
+	return s.streams.Touch(client), nil
+}
+
 // DVR returns rules, schedule and recordings.
 func (s *Service) DVR(ctx context.Context) (*dvr.State, error) {
 	if s.dvr == nil {

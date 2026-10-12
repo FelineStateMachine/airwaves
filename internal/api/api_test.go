@@ -78,6 +78,9 @@ func (f *fake) Tune(_ context.Context, client, number string) (*stream.Playback,
 	return &stream.Playback{ID: "abc", Path: "/live/abc/index.m3u8"}, nil
 }
 func (f *fake) Stop(_ context.Context, client string) error { f.stopped = client; return nil }
+func (f *fake) Heartbeat(_ context.Context, client string) (bool, error) {
+	return client == "mac" && f.stopped == "", nil
+}
 func (f *fake) DVR(context.Context) (*dvr.State, error)     { return &dvr.State{Available: true}, nil }
 func (f *fake) Record(_ context.Context, r dvr.Request) (*dvr.Rule, error) {
 	return &dvr.Rule{ID: "r1", Kind: r.Kind, Channel: r.Channel}, nil
@@ -140,8 +143,14 @@ func TestClientServerRoundTrip(t *testing.T) {
 	if err := c.DeleteRecording(ctx, "e/1"); err != nil || be.deleted != "e/1" {
 		t.Errorf("delete: %v, backend saw %q", err, be.deleted)
 	}
+	if on, err := c.Heartbeat(ctx, "mac"); err != nil || !on {
+		t.Errorf("heartbeat: %v, %v", on, err)
+	}
 	if err := c.Stop(ctx, "mac"); err != nil || be.stopped != "mac" {
 		t.Errorf("stop: %v, backend saw %q", err, be.stopped)
+	}
+	if on, err := c.Heartbeat(ctx, "mac"); err != nil || on {
+		t.Errorf("heartbeat after stop: %v, %v", on, err)
 	}
 	if pb, err := c.PlayRecording(ctx, "mac", "rec1", 754); err != nil || pb.Offset != 754 {
 		t.Errorf("play recording: %+v, %v", pb, err)

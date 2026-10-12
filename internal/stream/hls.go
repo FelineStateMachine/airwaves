@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"airwaves/internal/phase"
@@ -30,6 +31,10 @@ import (
 
 // maxSessions bounds concurrent transcodes; the oldest is evicted.
 const maxSessions = 4
+
+// IdleAfter is how long a stream lasts without a request for its files or
+// a Touch: a player gone (an app quit, a TV switched off) frees its tuner.
+const IdleAfter = 2 * time.Minute
 
 // Playback locates a running stream.
 type Playback struct {
@@ -57,6 +62,8 @@ type Server struct {
 
 	mu       sync.Mutex
 	sessions map[string]*session // by client
+	idle     time.Duration       // IdleAfter, but in tests
+	quit     chan struct{}       // closed by Close, ending the reaper
 }
 
 type session struct {
@@ -64,9 +71,16 @@ type session struct {
 	client  string
 	dir     string
 	started time.Time
+	used    atomic.Int64 // when last used, in Unix nanoseconds
 	cancel  context.CancelFunc
 	done    chan struct{}
 	stderr  *tail
+}
+
+func (sess *session) touch(t time.Time) { sess.used.Store(t.UnixNano()) }
+
+func (sess *session) idleFor(now time.Time) time.Duration {
+	return now.Sub(time.Unix(0, sess.used.Load()))
 }
 
 // FindFFmpeg locates the ffmpeg binary.
@@ -94,7 +108,8 @@ func NewServer(loopback bool) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{ffmpeg: bin, root: root, sessions: make(map[string]*session)}
+	s := &Server{ffmpeg: bin, root: root, sessions: make(map[string]*session), idle: IdleAfter, quit: make(chan struct{})}
+	go s.reap()
 	if loopback {
 		ln, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
@@ -148,6 +163,7 @@ func (s *Server) Start(ctx context.Context, client string, in tuner.Input) (*Pla
 		id: id, client: client, dir: dir, started: time.Now(),
 		cancel: cancel, done: make(chan struct{}), stderr: &tail{max: 4096},
 	}
+	sess.touch(sess.started)
 	cmd.Stderr = sess.stderr
 	var source io.WriteCloser
 	if in.Source != nil {
@@ -461,6 +477,50 @@ func TrackName(a tuner.AudioTrack, i int) (name, lang string) {
 // Stop ends client's stream and removes its files.
 func (s *Server) Stop(client string) { s.stop(client) }
 
+// Touch marks client's stream as in use, for a player holding one without
+// fetching from it (paused, say), and reports whether client has one.
+func (s *Server) Touch(client string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess := s.sessions[client]
+	if sess != nil {
+		sess.touch(time.Now())
+	}
+	return sess != nil
+}
+
+// reap stops streams left idle, until Close.
+func (s *Server) reap() {
+	for {
+		s.mu.Lock()
+		every := s.idle / 4
+		s.mu.Unlock()
+		select {
+		case <-s.quit:
+			return
+		case now := <-time.After(every):
+			s.reapIdle(now)
+		}
+	}
+}
+
+// reapIdle stops the streams idle longer than the server allows at now.
+func (s *Server) reapIdle(now time.Time) {
+	var idle []*session
+	s.mu.Lock()
+	for client, sess := range s.sessions {
+		if sess.idleFor(now) > s.idle {
+			delete(s.sessions, client)
+			idle = append(idle, sess)
+		}
+	}
+	s.mu.Unlock()
+	for _, sess := range idle {
+		log.Printf("stream: %s idle, stopped", sess.client)
+		sess.stop()
+	}
+}
+
 // stop ends client's stream, reporting whether it had one.
 func (s *Server) stop(client string) bool {
 	s.mu.Lock()
@@ -490,6 +550,11 @@ func (s *Server) Close() {
 		all = append(all, x)
 	}
 	s.sessions = make(map[string]*session)
+	select {
+	case <-s.quit:
+	default:
+		close(s.quit)
+	}
 	s.mu.Unlock()
 	for _, x := range all {
 		x.stop()
@@ -521,6 +586,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	sess.touch(time.Now())
 	switch filepath.Ext(file) {
 	case ".m3u8":
 		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")

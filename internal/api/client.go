@@ -105,6 +105,13 @@ func (c *Client) Stop(ctx context.Context, client string) error {
 	return c.call(ctx, http.MethodPost, "/api/stop", clientReq{Client: client}, nil)
 }
 
+// Heartbeat implements Backend.
+func (c *Client) Heartbeat(ctx context.Context, client string) (bool, error) {
+	var out heartbeatReply
+	err := c.call(ctx, http.MethodPost, "/api/heartbeat", clientReq{Client: client}, &out)
+	return out.Stream, err
+}
+
 // DVR implements Backend.
 func (c *Client) DVR(ctx context.Context) (*dvr.State, error) {
 	var s dvr.State

@@ -40,6 +40,9 @@ type Backend interface {
 	Weather(ctx context.Context) (*weather.Report, error)
 	Tune(ctx context.Context, client, number string) (*stream.Playback, error)
 	Stop(ctx context.Context, client string) error
+	// Heartbeat keeps client's stream from being stopped as idle, and
+	// reports whether it still has one.
+	Heartbeat(ctx context.Context, client string) (bool, error)
 	DVR(ctx context.Context) (*dvr.State, error)
 	Record(ctx context.Context, req dvr.Request) (*dvr.Rule, error)
 	DeleteRule(ctx context.Context, id string) error
@@ -112,6 +115,11 @@ type progressReq struct {
 	Watched  *bool   `json:"watched,omitempty"`
 }
 
+// heartbeatReply says whether the client still has a stream.
+type heartbeatReply struct {
+	Stream bool `json:"stream"`
+}
+
 // extendReq extends a recording by Minutes; the reply says Until when.
 type extendReq struct {
 	Minutes int       `json:"minutes,omitempty"`
@@ -163,6 +171,16 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 		reply(w)(struct{}{}, b.Stop(r.Context(), req.Client))
+	})
+	// A player holding a stream without fetching from it (paused) says
+	// so every half minute or so; a stream idle two minutes is stopped.
+	mux.HandleFunc("POST /api/heartbeat", func(w http.ResponseWriter, r *http.Request) {
+		var req clientReq
+		if !decode(w, r, &req) {
+			return
+		}
+		on, err := b.Heartbeat(r.Context(), req.Client)
+		reply(w)(heartbeatReply{Stream: on}, err)
 	})
 	// The app reports how long its channel changes took, from the key
 	// press to the first frame playing, for the admin page.

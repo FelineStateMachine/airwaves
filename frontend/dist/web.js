@@ -247,6 +247,8 @@
     async StopTV() {
       try { await call('POST', '/api/stop', { client: load().clientId }); } catch { /* as the desktop app: ignored */ }
     },
+    // Keeps a paused stream from being stopped as idle; false once it's gone.
+    Heartbeat: () => call('POST', '/api/heartbeat', { client: load().clientId }).then((r) => !!(r && r.stream)),
     // How long a channel change took, for the server's admin page.
     ReportTune: (m) => call('POST', '/api/metrics', m).then(() => undefined),
     DVR: () => call('GET', '/api/dvr'),

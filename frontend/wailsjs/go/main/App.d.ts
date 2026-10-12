@@ -20,6 +20,8 @@ export function DeleteRule(arg1:string):Promise<void>;
 
 export function ExtendRecording(arg1:string,arg2:number):Promise<time.Time>;
 
+export function Heartbeat():Promise<boolean>;
+
 export function Log(arg1:string,arg2:string):Promise<void>;
 
 export function MarkWatched(arg1:string,arg2:boolean):Promise<void>;

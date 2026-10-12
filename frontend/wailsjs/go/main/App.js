@@ -26,6 +26,10 @@ export function ExtendRecording(arg1, arg2) {
   return window['go']['main']['App']['ExtendRecording'](arg1, arg2);
 }
 
+export function Heartbeat() {
+  return window['go']['main']['App']['Heartbeat']();
+}
+
 export function Log(arg1, arg2) {
   return window['go']['main']['App']['Log'](arg1, arg2);
 }

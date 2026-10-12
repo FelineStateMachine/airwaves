@@ -256,6 +256,16 @@ func (a *App) StopTV() {
 	}
 }
 
+// Heartbeat keeps this app's stream from being stopped as idle while it
+// holds it (paused), and reports whether the server still has it.
+func (a *App) Heartbeat() (bool, error) {
+	c, s, err := a.server()
+	if err != nil {
+		return false, err
+	}
+	return c.Heartbeat(a.ctx, s.ClientID)
+}
+
 // DVR returns recording rules, schedule and library.
 func (a *App) DVR() (*dvr.State, error) {
 	c, _, err := a.server()
