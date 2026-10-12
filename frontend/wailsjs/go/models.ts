@@ -440,6 +440,12 @@ export namespace guide {
 	    programId?: string;
 	    seriesId?: string;
 	    audioLang?: string;
+	    originalAirDate?: string;
+	    cast?: string[];
+	    runtime?: number;
+	    stars?: number;
+	    homeTeam?: string;
+	    awayTeam?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Program(source);
@@ -463,6 +469,12 @@ export namespace guide {
 	        this.programId = source["programId"];
 	        this.seriesId = source["seriesId"];
 	        this.audioLang = source["audioLang"];
+	        this.originalAirDate = source["originalAirDate"];
+	        this.cast = source["cast"];
+	        this.runtime = source["runtime"];
+	        this.stars = source["stars"];
+	        this.homeTeam = source["homeTeam"];
+	        this.awayTeam = source["awayTeam"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
