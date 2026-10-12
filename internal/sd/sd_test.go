@@ -339,7 +339,7 @@ func TestRunOncePerDay(t *testing.T) {
 	if n := f.count("POST schedules/md5"); n != 1 {
 		t.Fatalf("%d updates, want one", n)
 	}
-	if next := s.Status().Next; time.Until(next) < 12*time.Hour {
+	if next := s.Status().Next; time.Until(next) < 11*time.Hour || time.Until(next) > 37*time.Hour {
 		t.Fatalf("next update %s", next)
 	}
 }

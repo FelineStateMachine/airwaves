@@ -193,7 +193,7 @@ there instead: two weeks of them, with long descriptions, cast, original air dat
 runtimes and star ratings, and sports teams. Sign in on the admin page (Guide listings); the
 server keeps the user name and the password's SHA-1, which is what the API takes, in
 `<data>/schedulesdirect`, readable by it alone, and never in backups or the app. It adds the
-ZIP code's antenna lineup to the account, updates once a day at a minute of its own, asks only
+ZIP code's antenna lineup to the account, updates about once a day at a minute of its own, asks only
 for the station-days that changed, and stops asking altogether when the account is refused
 (a wrong password, a locked or expired account) until it's saved again, as Schedules Direct
 requires. The app's guide still shows its listing hours; recording rules look the two weeks

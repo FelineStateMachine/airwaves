@@ -184,9 +184,9 @@ func (s *Source) Kick() {
 	}
 }
 
-// Run keeps the listings up to date until ctx ends: once a day, at a time
-// of its own (Schedules Direct asks clients not to all come at once), and
-// on Kick. After a failure it tries again in an hour; a refused account
+// Run keeps the listings up to date until ctx ends: about once a day, at
+// a minute of its own (Schedules Direct asks clients not to all come at
+// once), and on Kick. After a failure it tries again in an hour; a refused account
 // stops it until the account changes.
 func (s *Source) Run(ctx context.Context) {
 	s.init()
@@ -200,14 +200,15 @@ func (s *Source) Run(ctx context.Context) {
 			stopped, updated := s.st.Stopped, s.st.Updated
 			s.mu.Unlock()
 			if stopped == "" {
-				due := updated.Add(24 * time.Hour)
-				if updated.IsZero() || !time.Now().Before(due) {
+				// The server's own minute of the day, at least half a day
+				// after the last update: a day apart, give or take.
+				soonest := updated.Add(12 * time.Hour)
+				if next = soonest.Truncate(24 * time.Hour).Add(offset); next.Before(soonest) {
+					next = next.Add(24 * time.Hour)
+				}
+				if updated.IsZero() || !time.Now().Before(next) {
 					s.update(ctx, a)
 					continue
-				}
-				// The server's own minute of the day, once a day has passed.
-				if next = due.Truncate(24 * time.Hour).Add(offset); next.Before(due) {
-					next = next.Add(24 * time.Hour)
 				}
 			}
 		}
