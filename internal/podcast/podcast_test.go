@@ -85,6 +85,9 @@ func fakeYtDlp(args []string) int {
 		if id == "feedclip" {
 			info["duration"] = 200
 		}
+		if id == "ep2" {
+			info["automatic_captions"] = map[string]any{"en": []map[string]any{{"ext": "vtt", "url": "https://example.com/ep2.en.vtt"}}}
+		}
 		if slices.Contains(args, "-f") {
 			exp := now + 6*3600
 			info["requested_formats"] = []map[string]any{
@@ -119,6 +122,8 @@ func (youtubeStub) RoundTrip(r *http.Request) (*http.Response, error) {
 </feed>`, http.StatusOK
 	case u == "https://i.ytimg.com/vi/ep3/maxresdefault.jpg":
 		code = http.StatusOK
+	case u == "https://example.com/ep2.en.vtt":
+		body, code = "WEBVTT\n\n00:09:58.000 --> 00:10:03.000\nbefore and after\n\n00:10:30.000 --> 00:10:32.000\nlater on\n", http.StatusOK
 	}
 	return &http.Response{StatusCode: code, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
 }
@@ -292,6 +297,15 @@ func TestInput(t *testing.T) {
 	}
 	if !in.VOD || !in.Copy || in.Offset != 600 || in.Video != "0:v:0" || len(in.Audio) != 1 || in.Audio[0].Map != "1:a:0" {
 		t.Errorf("input: %+v", in)
+	}
+	// Its captions, timed from where it starts: the one showing then is
+	// clipped there.
+	if in.Subtitles == nil {
+		t.Fatal("no captions")
+	}
+	cues := in.Subtitles.Between(0, time.Hour)
+	if len(cues) != 2 || cues[0].Start != 0 || cues[0].End != 3*time.Second || cues[1].Start != 30*time.Second || cues[1].Text != "later on" {
+		t.Errorf("captions: %+v", cues)
 	}
 	if in, err := l.Input(context.Background(), "ep2", 3); err != nil || in.Offset != 0 || strings.Contains(strings.Join(in.Args, " "), "-ss") {
 		t.Errorf("from the start: %+v %v", in, err)

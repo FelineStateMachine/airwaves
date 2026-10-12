@@ -493,10 +493,15 @@ func (l *Library) ahead(ctx context.Context) {
 			return
 		}
 		tool.Ahead.Lock()
-		_, err := l.fetch(ctx, id)
+		info, err := l.fetch(ctx, id)
 		tool.Ahead.Unlock()
 		if err != nil && ctx.Err() == nil {
 			log.Printf("podcasts: finding %s ahead: %v", id, err)
+		}
+		if err == nil {
+			cctx, cancel := context.WithTimeout(ctx, captionsTime)
+			l.captionsFor(cctx, id, info)
+			cancel()
 		}
 	}
 }

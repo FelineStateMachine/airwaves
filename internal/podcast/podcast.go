@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"airwaves/internal/cc"
 	"airwaves/internal/store"
 	"airwaves/internal/tuner"
 	"airwaves/internal/youtube"
@@ -58,6 +59,7 @@ type Library struct {
 	loaded   bool
 	st       file
 	resolved map[string]resolved // where episodes stream from, by ID
+	captions map[string][]cc.Cue // episodes' English captions, nil for none
 	updating bool                // listing a show
 	kick     chan struct{}
 	now      func() time.Time
@@ -414,10 +416,57 @@ func (l *Library) Input(ctx context.Context, id string, from float64) (tuner.Inp
 	if from <= 5 || length > 0 && from >= length-5 {
 		from = 0
 	}
-	args, audio := youtube.InputArgs(in, time.Duration(from*float64(time.Second)), youtube.HTTPChunks(l.FFmpeg))
+	start := time.Duration(from * float64(time.Second))
+	args, audio := youtube.InputArgs(in, start, youtube.HTTPChunks(l.FFmpeg))
 	out := tuner.Input{Args: args, Video: "0:v:0", VOD: true, Offset: from, Copy: strings.HasPrefix(in[0].VCodec, "avc1")}
 	if audio != "" {
 		out.Audio = []tuner.AudioTrack{{Map: audio}}
 	}
+	// English captions, as text for the app to lay out, timed from where
+	// the stream starts.
+	cctx, cancel := context.WithTimeout(ctx, playCaptionsTime)
+	defer cancel()
+	if cues := l.captionsFor(cctx, id, info); len(cues) > 0 {
+		out.Subtitles = &cc.Script{}
+		out.Subtitles.Set(0, 1000*time.Hour, cc.Shift(cues, -start))
+	}
 	return out, nil
+}
+
+const (
+	// playCaptionsTime bounds waiting for an episode's captions at Play
+	// (they're usually fetched ahead); captionsTime fetching them ahead.
+	playCaptionsTime = 8 * time.Second
+	captionsTime     = 30 * time.Second
+	// keptCaptions bounds how many episodes' captions are kept.
+	keptCaptions = 64
+)
+
+// captionsFor are an episode's English captions, the uploader's or
+// YouTube's automatic ones, fetched once; nil when it has none. A failed
+// fetch is tried again next time.
+func (l *Library) captionsFor(ctx context.Context, id string, info youtube.Info) []cc.Cue {
+	l.mu.Lock()
+	cues, ok := l.captions[id]
+	l.mu.Unlock()
+	if ok {
+		return cues
+	}
+	if sub, ok := info.Captions(); ok {
+		raw, err := youtube.FetchCaptions(ctx, l.tool().Client(), sub)
+		if err == nil {
+			cues, err = cc.Parse(raw)
+		}
+		if err != nil {
+			log.Printf("podcasts: captions for %s: %v", id, err)
+			return nil
+		}
+	}
+	l.mu.Lock()
+	if l.captions == nil || len(l.captions) >= keptCaptions {
+		l.captions = map[string][]cc.Cue{}
+	}
+	l.captions[id] = cues
+	l.mu.Unlock()
+	return cues
 }

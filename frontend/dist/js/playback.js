@@ -187,7 +187,8 @@ if (video.audioTracks) video.audioTracks.addEventListener('addtrack', applyAudio
 // A small badge at the picture's bottom right says what playback is doing,
 // on the TV view. It stays only while there's something to do about it:
 // paused (with how far behind live, or where in a recording), and
-// buffering (once a stream has played, after 300 ms of waiting). The rest
+// buffering (once a stream has played, after 300 ms of waiting with the
+// picture stopped). The rest
 // flashes and fades: a skip (the amount, adding up over quick presses) and
 // then where it left the picture; how far behind live on resuming, or on
 // the info key; "Live" on going back to live. Playing behind live, it's
@@ -205,7 +206,7 @@ const PS_PLACE_MS = 2500; // then where it left the picture, this long
 const PS_WAIT_MS = 300;   // shorter waits for data go unmarked
 const ps = {
   el: $('#pstate'), skip: 0, dir: 0, skipUntil: 0, skipTimer: 0, placeUntil: 0, placeLive: false, placeTimer: 0,
-  played: false, paused: false, waiting: false, waitTimer: 0, tick: 0, shown: '',
+  played: false, paused: false, waiting: false, waitAt: 0, waitTimer: 0, tick: 0, shown: '',
 };
 
 // noteSkip shows a skip of delta seconds (what playback moved, which is
@@ -302,9 +303,14 @@ function placePlayState() {
 
 function startWaiting() {
   if (!ps.played || ps.waitTimer || ps.waiting) return;
+  const at = video.currentTime;
   ps.waitTimer = setTimeout(() => {
     ps.waitTimer = 0;
+    // A stall the picture plays through isn't a wait: a player with all it
+    // needs stops fetching for a while, which WebKit calls stalled.
+    if (video.paused || video.currentTime > at + 0.1) return;
     ps.waiting = true;
+    ps.waitAt = video.currentTime;
     renderPlayState();
   }, PS_WAIT_MS);
 }
@@ -335,7 +341,11 @@ video.addEventListener('emptied', () => {
   ps.placeUntil = 0;
   stopWaiting();
 });
-video.addEventListener('timeupdate', renderPlayState);
+// Playing again ends a wait, whatever the events said.
+video.addEventListener('timeupdate', () => {
+  if (ps.waiting && video.currentTime > ps.waitAt + 0.25) stopWaiting();
+  else renderPlayState();
+});
 video.addEventListener('resize', placePlayState);
 if (window.ResizeObserver) new ResizeObserver(placePlayState).observe(stage);
 new MutationObserver(() => { placePlayState(); renderPlayState(); }).observe($('#banner'), { attributes: true, attributeFilter: ['class'] });

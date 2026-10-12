@@ -193,7 +193,11 @@ func (s *Server) Start(ctx context.Context, client string, in tuner.Input) (*Pla
 		}()
 	}
 	if subtitled(in) {
-		go newSubtitler(dir, in.Subtitles).run(runCtx)
+		sub := newSubtitler(dir, in.Subtitles)
+		if in.Copy {
+			sub.byAudio()
+		}
+		go sub.run(runCtx)
 	}
 	go func() {
 		_ = cmd.Wait()
@@ -334,8 +338,9 @@ func playlists(in tuner.Input) []string {
 }
 
 // subtitled reports whether a session has a WebVTT subtitle rendition:
-// live streams with their captions as text.
-func subtitled(in tuner.Input) bool { return in.Subtitles != nil && !in.VOD }
+// live streams with their captions as text, and podcasts' episodes (a
+// recording's are in its picture).
+func subtitled(in tuner.Input) bool { return in.Subtitles != nil && (!in.VOD || in.Copy) }
 
 // ffmpegArgs transcodes to H.264 and AAC in HLS, or copies a picture
 // that's H.264 already (Copy). Several audio tracks become separate

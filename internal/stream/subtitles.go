@@ -41,6 +41,8 @@ type subtitler struct {
 	script *cc.Script
 	first  int64 // PTS of the stream's first picture; -1 until known
 	segs   map[int]subSegment
+	audio  bool          // the script counts from the first sound (byAudio)
+	lead   time.Duration // and that's this long after the first picture
 }
 
 // subSegment is a video segment's place in time.
@@ -53,6 +55,15 @@ type subSegment struct {
 
 func newSubtitler(dir string, script *cc.Script) *subtitler {
 	return &subtitler{dir: dir, script: script, first: -1, segs: map[int]subSegment{}}
+}
+
+// byAudio has the script count from the stream's first sound rather than
+// its first picture: for a picture copied as it is (a podcast's), which
+// starts at the key frame before where the stream was asked to, while the
+// sound starts there.
+func (s *subtitler) byAudio() *subtitler {
+	s.audio = true
+	return s
 }
 
 // run keeps the subtitles in step with the video until ctx ends.
@@ -74,6 +85,8 @@ type mediaPlaylist struct {
 	target   string // EXT-X-TARGETDURATION
 	sequence int    // of the first segment
 	segs     []playlistSegment
+	kind     string // EXT-X-PLAYLIST-TYPE, "" for none
+	ended    bool   // EXT-X-ENDLIST
 }
 
 type playlistSegment struct {
@@ -90,6 +103,10 @@ func parseMediaPlaylist(b []byte) (mediaPlaylist, error) {
 		switch {
 		case strings.HasPrefix(line, "#EXT-X-TARGETDURATION:"):
 			p.target = strings.TrimPrefix(line, "#EXT-X-TARGETDURATION:")
+		case strings.HasPrefix(line, "#EXT-X-PLAYLIST-TYPE:"):
+			p.kind = strings.TrimPrefix(line, "#EXT-X-PLAYLIST-TYPE:")
+		case line == "#EXT-X-ENDLIST":
+			p.ended = true
 		case strings.HasPrefix(line, "#EXT-X-MEDIA-SEQUENCE:"):
 			p.sequence, _ = strconv.Atoi(strings.TrimPrefix(line, "#EXT-X-MEDIA-SEQUENCE:"))
 		case strings.HasPrefix(line, "#EXTINF:"):
@@ -119,14 +136,22 @@ func (s *subtitler) update() error {
 	}
 	var list bytes.Buffer
 	fmt.Fprintf(&list, "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:%s\n#EXT-X-MEDIA-SEQUENCE:%d\n", p.target, p.sequence)
+	if p.kind != "" {
+		fmt.Fprintf(&list, "#EXT-X-PLAYLIST-TYPE:%s\n", p.kind)
+	}
+	ended := p.ended // the video's ended, and so have these once all are written
 	for i, seg := range p.segs {
 		n := p.sequence + i
 		if _, done := s.segs[n]; !done {
 			if err := s.write(n, seg); err != nil {
+				ended = false
 				break // list only what's written; try again shortly
 			}
 		}
 		fmt.Fprintf(&list, "#EXTINF:%.6f,\n%s\n", seg.dur, subName(n))
+	}
+	if ended {
+		list.WriteString("#EXT-X-ENDLIST\n")
 	}
 	if err := writeAtomic(filepath.Join(s.dir, subsPlaylist), list.Bytes()); err != nil {
 		return err
@@ -149,7 +174,7 @@ func subName(n int) string { return fmt.Sprintf("sub_%05d.vtt", n) }
 
 // write makes the WebVTT segment for video segment n.
 func (s *subtitler) write(n int, seg playlistSegment) error {
-	pts, err := firstPTS(filepath.Join(s.dir, seg.uri))
+	pts, err := firstPTS(filepath.Join(s.dir, seg.uri), false)
 	if err != nil {
 		prev, ok := s.segs[n-1]
 		if !ok {
@@ -163,6 +188,15 @@ func (s *subtitler) write(n int, seg playlistSegment) error {
 		cur.pts = prev.pts + (pts-prev.raw)&ptsMask
 	} else if s.first < 0 {
 		s.first, cur.pts = pts, pts
+		if s.audio {
+			// How long the sound starts after the picture, which the
+			// script's times count from.
+			if a, err := firstPTS(filepath.Join(s.dir, seg.uri), true); err == nil {
+				if d := (a - pts) & ptsMask; d < 10*90000 {
+					s.lead = time.Duration(d) * time.Second / 90000
+				}
+			}
+		}
 	} else {
 		// A gap in what's been seen: the nearest way round the clock.
 		cur.pts = s.first + (pts-s.first)&ptsMask
@@ -173,7 +207,7 @@ func (s *subtitler) write(n int, seg playlistSegment) error {
 	b := fmt.Appendf(nil, "WEBVTT\nX-TIMESTAMP-MAP=MPEGTS:%d,LOCAL:%s\n\n", pts, cc.VTTTime(cur.start))
 	// Cues starting a little later come too, so players that lay captions
 	// out ahead know what's coming; they're repeated in their own segments.
-	for _, c := range s.script.Between(cur.start, end+subsAhead) {
+	for _, c := range cc.Shift(s.script.Between(cur.start-s.lead, end+subsAhead-s.lead), s.lead) {
 		b = cc.AppendVTT(b, c)
 	}
 	if err := writeAtomic(filepath.Join(s.dir, subName(n)), b); err != nil {
@@ -185,9 +219,9 @@ func (s *subtitler) write(n int, seg playlistSegment) error {
 
 const ptsMask = 1<<33 - 1
 
-// firstPTS reads the presentation time of a segment's first picture, in
-// 90 kHz ticks.
-func firstPTS(path string) (int64, error) {
+// firstPTS reads the presentation time of a segment's first picture, or
+// with audio its first sound, in 90 kHz ticks.
+func firstPTS(path string, audio bool) (int64, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return 0, err
@@ -209,8 +243,11 @@ func firstPTS(path string) (int64, error) {
 			}
 			p = pkt[5+int(pkt[4]):]
 		}
-		// A video PES with a PTS.
-		if len(p) >= 14 && p[0] == 0 && p[1] == 0 && p[2] == 1 && p[3]&0xf0 == 0xe0 && p[7]&0x80 != 0 {
+		// A video (or audio) PES with a PTS.
+		if len(p) < 14 || p[0] != 0 || p[1] != 0 || p[2] != 1 || p[7]&0x80 == 0 {
+			continue
+		}
+		if !audio && p[3]&0xf0 == 0xe0 || audio && p[3]&0xe0 == 0xc0 {
 			return int64(p[9]>>1&7)<<30 | int64(p[10])<<22 | int64(p[11]>>1)<<15 | int64(p[12])<<7 | int64(p[13]>>1), nil
 		}
 	}

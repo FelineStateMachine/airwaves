@@ -176,3 +176,39 @@ func TestMasterPlaylistForSubtitles(t *testing.T) {
 		t.Error("a recording has no subtitle rendition")
 	}
 }
+
+// TestSubtitlesByAudio: a copied picture starts at the key frame before
+// where the stream was asked to, the sound there; the captions, timed
+// from where it was asked to, come that much after the first picture. The
+// subtitles' playlist is of the video's kind, and ends with it.
+func TestSubtitlesByAudio(t *testing.T) {
+	dir := t.TempDir()
+	pes := func(id byte, pts int64) []byte {
+		p := []byte{0x47, 0x41, 0x00, 0x10, 0, 0, 1, id, 0, 0, 0x80, 0x80, 5,
+			byte(pts>>29&0x0e | 0x21), byte(pts >> 22), byte(pts>>14 | 1), byte(pts >> 7), byte(pts<<1 | 1)}
+		return append(p, make([]byte, 188-len(p))...)
+	}
+	picture := int64(900000)
+	seg := append(pes(0xe0, picture), pes(0xc0, picture+180000)...) // the sound two seconds on
+	if err := os.WriteFile(filepath.Join(dir, "seg_0_00000.ts"), seg, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	list := "#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-TARGETDURATION:4\n#EXT-X-PLAYLIST-TYPE:EVENT\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:4.000000,\nseg_0_00000.ts\n#EXT-X-ENDLIST\n"
+	if err := os.WriteFile(filepath.Join(dir, "stream_0.m3u8"), []byte(list), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var script cc.Script
+	script.Set(0, time.Hour, []cc.Cue{{Start: time.Second, End: 1500 * time.Millisecond, Text: "one second in"}})
+	s := newSubtitler(dir, &script).byAudio()
+	if err := s.update(); err != nil {
+		t.Fatal(err)
+	}
+	vtt, _ := os.ReadFile(filepath.Join(dir, subName(0)))
+	if !strings.Contains(string(vtt), "00:00:03.000 --> 00:00:03.500\none second in") {
+		t.Errorf("segment:\n%s", vtt)
+	}
+	subs, _ := os.ReadFile(filepath.Join(dir, subsPlaylist))
+	if !strings.Contains(string(subs), "#EXT-X-PLAYLIST-TYPE:EVENT\n") || !strings.HasSuffix(string(subs), "#EXT-X-ENDLIST\n") {
+		t.Errorf("playlist:\n%s", subs)
+	}
+}
