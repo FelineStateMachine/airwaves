@@ -39,8 +39,10 @@ func TestTV(t *testing.T) {
 		return resp, string(body)
 	}
 
-	if resp, _ := get("/tv"); resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/tv/" {
-		t.Errorf("/tv: %d to %q", resp.StatusCode, resp.Header.Get("Location"))
+	for _, path := range []string{"/tv", "/"} {
+		if resp, _ := get(path); resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/tv/" {
+			t.Errorf("%s: %d to %q", path, resp.StatusCode, resp.Header.Get("Location"))
+		}
 	}
 	resp, body := get("/tv/")
 	if resp.StatusCode != 200 || body != "<!doctype html><title>Airwaves</title>" {

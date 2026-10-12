@@ -286,6 +286,9 @@ func (s *Server) Handler() http.Handler {
 	if s.TV != nil {
 		mux.Handle("GET /tv/", http.StripPrefix("/tv", tvFiles(s.TV)))
 		mux.Handle("GET /tv", http.RedirectHandler("/tv/", http.StatusFound))
+		// The server's own address leads to the TV app, as a name of its
+		// own (a Tailscale Service, say) would be expected to.
+		mux.Handle("GET /{$}", http.RedirectHandler("/tv/", http.StatusFound))
 	}
 	// For container health checks: up, without the token.
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
