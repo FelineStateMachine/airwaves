@@ -29,7 +29,7 @@
   <div id="entry" aria-live="assertive"></div>
 
   <!-- The channel banner, and with OK the on-screen controls: a timeline
-       and a row of buttons below it (app.js, on-screen controls). -->
+       and a row of buttons below it (js/player.js, on-screen controls). -->
   <div id="banner" aria-live="polite">
     <div class="bn-chan">
       <div class="bn-num" data-f="num"></div>
@@ -97,7 +97,7 @@
       <div class="wx-now" data-f="now"></div>
       <button type="button" class="btn ghost fx wx-watch" data-act="watch" hidden>Watch the weather channel</button>
     </nav>
-    <!-- Each part takes the focus in turn, Up and Down (app.js, weather). -->
+    <!-- Each part takes the focus in turn, Up and Down (js/weather.js). -->
     <div class="main wx-main">
       <div class="wx-alerts fx" data-f="alerts" tabindex="-1"></div>
       <div class="wx-block fx" tabindex="-1">
@@ -128,7 +128,7 @@
 
   <!-- More: Settings, a tab for each area, in the rail; most are a list of
        rows for a remote or a controller, Reception is what the tuners
-       measured (app.js, settings and reception). -->
+       measured (js/settings.js, js/reception.js). -->
   <section id="settings" class="view railed" aria-label="Settings">
     <nav class="rail"><div class="rail-menu s-tabs" data-f="tabs" role="tablist"></div></nav>
     <div class="main s-main">
@@ -183,7 +183,7 @@
       <div class="boot-sub" data-f="sub">Over-the-air television</div>
       <ol class="boot-log"></ol>
       <!-- The arrows move between the fields and Connect; OK on a field
-           puts the cursor in it (app.js, bootKey). -->
+           puts the cursor in it (js/input.js, bootKey). -->
       <form class="boot-connect" hidden autocomplete="off">
         <label class="boot-field fx" tabindex="-1"><input name="server" placeholder="Server address" autocapitalize="off" spellcheck="false"></label>
         <label class="boot-field fx" tabindex="-1"><input name="token" type="password" placeholder="Token, if set"></label>
@@ -200,6 +200,17 @@
   <script src="vendor/hls.min.js"></script>
   <!-- The web app's stand-in for Wails, at /tv/ on airwavesd (web.js) -->
   <script src="web.js"></script>
-  <script src="app.js"></script>
+  <!-- The app, by area, in this order: what runs as a file loads uses only
+       what the files before it define (init starts once all are in). -->
+  <script src="js/core.js"></script>
+  <script src="js/player.js"></script>
+  <script src="js/input.js"></script>
+  <script src="js/guide.js"></script>
+  <script src="js/reception.js"></script>
+  <script src="js/settings.js"></script>
+  <script src="js/recordings.js"></script>
+  <script src="js/captions.js"></script>
+  <script src="js/playback.js"></script>
+  <script src="js/weather.js"></script>
 </body>
 </html>

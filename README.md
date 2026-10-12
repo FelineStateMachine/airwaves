@@ -180,7 +180,7 @@ an amber ring.
 
 ### Desktop, console and TV
 
-The app is three experiences, kept apart in the code (`platform` in app.js, `pf-*`
+The app is three experiences, kept apart in the code (`platform` in js/core.js, `pf-*`
 classes in style.css):
 
 | | Where | In hand | Hints |
@@ -673,6 +673,7 @@ internal/jellyfin         Jellyfin client: sign-in, Quick Connect, browsing, str
 deploy/, scripts/         Docker files for the server and the deploy script
 deploy/standalone         Docker Compose for custom channels only, built from source (docs/self-hosting.md)
 frontend/dist             the UI: plain HTML, CSS and JS, no build step; also served at /tv/
+frontend/dist/js          the app by area (core, player, input, guide, settings...), loaded in order
 ```
 
 `go test ./...` covers the parsers, the propagation model, the tuner sharing, recording,

@@ -12,7 +12,7 @@
 // "AirwavesTV/<version>". It may offer window.AirwavesAndroid: getServer(),
 // setServer(url) (it saves the address and loads <url>/tv/), copyText(s),
 // openUrl(u), log(level, msg) and exit(). Its Back key calls
-// window.airwavesBack() (app.js).
+// window.airwavesBack() (js/input.js).
 (() => {
   if (window.go) return;
 
@@ -137,7 +137,7 @@
   // width, which an on-screen keyboard leaves alone. Elsewhere 1.
   const fit = () => (tvApp && innerWidth > 0 ? innerWidth / 1920 : 1);
   let lastBoot = null;
-  // Before app.js's resize handler, which reads it.
+  // Before the app's resize handler (js/settings.js), which reads it.
   addEventListener('resize', () => { if (lastBoot) lastBoot.fit = fit(); });
 
   // The Android TV app is the TV experience, a browser a desktop's;
@@ -287,7 +287,7 @@
   const titlebar = document.getElementById('titlebar');
   if (titlebar) titlebar.hidden = true;
 
-  // The Wails runtime calls app.js makes: events, and full screen.
+  // The Wails runtime calls the app makes: events, and full screen.
   window.runtime = {
     EventsOn(name, cb) {
       (listeners[name] = listeners[name] || []).push(cb);

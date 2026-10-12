@@ -24,9 +24,9 @@
   --f-display: "Shoulders", "Impact", sans-serif;
   --f-body: "Schibsted", "Helvetica Neue", sans-serif;
   --f-mono: "Plex Mono", "Menlo", monospace;
-  /* Interface size: app.js zooms the root by --zoom. Viewport units go
+  /* Interface size: js/settings.js zooms the root by --zoom. Viewport units go
      through --vw and --vh, which undo the zoom so full screen stays full;
-     app.js sets them in pixels, and these stand in until it does. */
+     applyScale sets them in pixels, and these stand in until it does. */
   --zoom: 1;
   --vw: calc(1vw / var(--zoom));
   --vh: calc(1vh / var(--zoom));
@@ -213,7 +213,7 @@ body.mode-guide #guide, body.mode-settings #settings, body.mode-recordings #reco
 .tight .gd-meta { margin: 6px 0; }
 .tight .gd-desc { -webkit-line-clamp: 2; }
 /* A narrow window gives the program's picture's room to its details
-   (app.js decides, by width). */
+   (js/guide.js decides, by width). */
 .g-top.no-art { grid-template-columns: var(--pv-w) minmax(0, 1fr); }
 .g-top.no-art .gd-art { display: none; }
 .g-top.no-art .gd-desc, .g-top.no-art .gd-hint { max-width: none; }
@@ -396,7 +396,7 @@ body.mode-guide #guide, body.mode-settings #settings, body.mode-recordings #reco
 .ng-host span i { font: 400 11px var(--f-mono); font-style: normal; color: var(--teal); }
 
 /* ---------- Settings ---------- */
-/* One list of rows (settingsRows in app.js), moved through with a remote or
+/* One list of rows (settingsRows in js/settings.js), moved through with a remote or
    a controller: the focused row is filled and outlined in amber. */
 #settings { grid-template-rows: minmax(0, 1fr); }
 .s-main { display: grid; grid-template-rows: minmax(0, 1fr) auto; min-height: 0; max-width: 940px; }
@@ -460,7 +460,7 @@ body:not(.has-dvr) #dock [data-view="recordings"] { display: none; }
 #dock button kbd { padding: 1px 5px; border-radius: 3px; box-shadow: inset 0 0 0 1px var(--line-2); color: var(--faint); }
 #dock button.on { background: var(--ink-4); color: var(--paper); }
 #dock button.on kbd { color: var(--amber); }
-/* Controller buttons in place of keys (renderHints in app.js). */
+/* Controller buttons in place of keys (renderHints in js/input.js). */
 .glyph { height: 1.4em; width: auto; vertical-align: middle; margin: -.25em 0; opacity: .9; }
 body.pad-input #dock kbd { padding: 0; box-shadow: none; }
 #dock .glyph { height: 17px; margin: -3px 0; }
@@ -593,7 +593,7 @@ body:not(.mode-guide) .g-cell.rec-on::after { animation: none; } /* hidden, so s
 
 /* ---------- Weather ---------- */
 /* The frame never takes focus, so channel keys keep working on WX. */
-/* Always 854x480, the display's own size, scaled by fitWX in app.js to
+/* Always 854x480, the display's own size, scaled by fitWX in js/weather.js to
    fill the stage. */
 #wx { position: absolute; left: 0; top: 0; width: 854px; height: 480px; transform-origin: 0 0; border: 0; background: #000; pointer-events: none; }
 #crawl {
@@ -649,7 +649,7 @@ body.has-crawl #banner { bottom: 56px; }
 .wx-maps figcaption { order: -1; font: 500 11px var(--f-mono); letter-spacing: .16em; text-transform: uppercase; color: var(--faint); }
 
 /* ---------- Captions ---------- */
-/* Drawn by app.js, which sets the size and the lines: like broadcast TV,
+/* Drawn by js/captions.js, which sets the size and the lines: like broadcast TV,
    white text on a black bar per line, low on the picture. A timed line's
    bar grows behind its words as they're said (--r). */
 #captions {
@@ -665,9 +665,9 @@ body:not(.mode-tv) #captions { display: none; }
 .cap-bar .wait { visibility: hidden; }
 
 /* ---------- Playback state ---------- */
-/* The badge at the picture's bottom right (renderPlayState in app.js):
+/* The badge at the picture's bottom right (renderPlayState in js/playback.js):
    paused and buffering stay; a skip, how far behind live and "Live" flash.
-   app.js places it. */
+   placePlayState places it. */
 #pstate {
   position: absolute; z-index: 3; right: 3%; bottom: 5%;
   display: flex; align-items: center; gap: 9px; padding: 7px 11px; border-radius: 3px;
@@ -686,7 +686,7 @@ body:not(.mode-tv) #pstate { display: none; }
 @keyframes ps-spin { to { transform: rotate(1turn); } }
 
 /* ---------- Lite ---------- */
-/* Linux (WebKitGTK on a TV box, see LITE in app.js): the same look, flat.
+/* Linux (WebKitGTK on a TV box, see setLite in js/core.js): the same look, flat.
    No backdrop blurs, film grain, big soft shadows or transitions, and
    nothing animates over the video but a weather alert's crawl. */
 body.lite::after { display: none; }
@@ -703,7 +703,7 @@ body.lite .boot-mark { background: none; color: var(--paper); }
 body.lite .ps-spin { animation-timing-function: steps(8); }
 
 /* ---------- On-screen controls ---------- */
-/* OK on live TV (app.js, on-screen controls): the banner grows a timeline
+/* OK on live TV (js/player.js, on-screen controls): the banner grows a timeline
    and a row of buttons, and the dock shows above as the way to the views. */
 #banner .tl, #banner .osd-bar { grid-column: 1 / -1; }
 #banner:not(.osd) .tl, #banner:not(.osd) .osd-bar { display: none; }
@@ -745,7 +745,7 @@ body.mouse-active .ob:hover { color: var(--paper); background: var(--ink-3); }
    focus system: an outline and a raise). Buttons, fields and blocks take
    the page's focus (.fx, only ever from keys); the guide's grid, the lists
    and the dock mark their pick with a class, only while their part of the
-   view has the focus (data-zone in app.js). The ring is drawn inside where
+   view has the focus (data-zone, set in js/). The ring is drawn inside where
    a scrolling box would clip it. */
 :root {
   --ring: 0 0 0 3px var(--amber);

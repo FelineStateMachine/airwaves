@@ -90,7 +90,7 @@ const quantile = (xs, q) => {
 };
 const secs = (ms) => (ms == null ? '-' : (ms / 1000).toFixed(2));
 
-// The page plays a stream as the app does (frontend/dist/app.js attempt()),
+// The page plays a stream as the app does (frontend/dist/js/player.js attempt()),
 // and keeps a record of what happened when.
 const pageScript = () => {
   window.bench = (src, watchMs) => new Promise((resolve) => {

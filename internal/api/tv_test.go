@@ -14,7 +14,7 @@ import (
 func TestTV(t *testing.T) {
 	files := fstest.MapFS{
 		"index.html":           {Data: []byte("<!doctype html><title>Airwaves</title>")},
-		"app.js":               {Data: []byte("'use strict';")},
+		"js/core.js":           {Data: []byte("'use strict';")},
 		"fonts/plex.woff2":     {Data: []byte("font")},
 		"vendor/hls.min.js":    {Data: []byte("hls")},
 		"vendor/kenney/a.svg":  {Data: []byte("<svg/>")},
@@ -58,11 +58,11 @@ func TestTV(t *testing.T) {
 	if resp, _ := get("/tv/", "If-None-Match", etag); resp.StatusCode != http.StatusNotModified {
 		t.Errorf("/tv/ again: %d, want 304", resp.StatusCode)
 	}
-	if resp, body := get("/tv/app.js"); resp.StatusCode != 200 || body != "'use strict';" || resp.Header.Get("Cache-Control") != "no-cache" {
-		t.Errorf("app.js: %d %q %q", resp.StatusCode, body, resp.Header.Get("Cache-Control"))
+	if resp, body := get("/tv/js/core.js"); resp.StatusCode != 200 || body != "'use strict';" || resp.Header.Get("Cache-Control") != "no-cache" {
+		t.Errorf("js/core.js: %d %q %q", resp.StatusCode, body, resp.Header.Get("Cache-Control"))
 	}
-	if resp, _ := get("/tv/app.js", "If-None-Match", etag); resp.StatusCode != 200 {
-		t.Errorf("app.js with index.html's ETag: %d", resp.StatusCode)
+	if resp, _ := get("/tv/js/core.js", "If-None-Match", etag); resp.StatusCode != 200 {
+		t.Errorf("js/core.js with index.html's ETag: %d", resp.StatusCode)
 	}
 	for _, path := range []string{"/tv/fonts/plex.woff2", "/tv/vendor/hls.min.js", "/tv/vendor/kenney/a.svg"} {
 		if resp, _ := get(path); resp.StatusCode != 200 || resp.Header.Get("Cache-Control") != "public, max-age=86400" {
