@@ -553,7 +553,9 @@ body:not(.mode-guide) .g-cell.rec-on::after { animation: none; } /* hidden, so s
 .r-detail .rd-art { align-self: stretch; aspect-ratio: 16 / 9; border-radius: 3px; background: var(--ink-2) center/cover no-repeat;
   -webkit-mask-image: linear-gradient(90deg, transparent, #000 35%); mask-image: linear-gradient(90deg, transparent, #000 35%); }
 .r-detail .rd-empty { font: 600 28px/1.15 var(--f-display); color: var(--muted); max-width: 30ch; }
-.r-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 18px; align-content: start; overflow: auto; min-height: 0; padding: 7px; scrollbar-width: thin; }
+/* Rows as tall as their cards: a card clips what it holds, which would
+   otherwise let a long list squeeze it to a sliver to fit. */
+.r-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); grid-auto-rows: max-content; gap: 18px; align-content: start; overflow: auto; min-height: 0; padding: 7px; scrollbar-width: thin; }
 .r-card { background: var(--ink-2); border-radius: 3px; overflow: hidden; cursor: pointer; box-shadow: 0 0 0 1px var(--line); transition: box-shadow .15s, transform .15s; }
 .r-card:hover { box-shadow: 0 0 0 1px var(--line-2); }
 .r-card.sel { box-shadow: 0 0 0 1px var(--amber-2); }
