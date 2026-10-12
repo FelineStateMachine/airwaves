@@ -161,6 +161,7 @@ const state = {
   config: null,    // location the lineup is built for
   dvr: null,       // recording state from the server
   dvrKeys: new Map(), // "7.1@1791058239" -> upcoming item
+  recPick: '',        // the airing whose Record is open to its choices
   recording: null, // recording being played instead of live TV
   captionsFor: null, // captions turned off or on for one program: { key, on }
   recTab: 'library',
@@ -1556,6 +1557,7 @@ function restoreFocus() {
 // recording's actions, the guide's filters): it goes to the view's main
 // part, and reports whether it did.
 function viewBack() {
+  if (state.view === 'guide' && state.recPick) { closeRecordPick(); return true; }
   if (state.view === 'guide' && guideUI.zone !== 'grid') { guideZone('grid'); return true; }
   if (state.view === 'recordings' && recUI.zone === 'actions') { recZone('list'); return true; }
   return false;
@@ -1877,9 +1879,10 @@ function wireGuide() {
     const ch = list[state.gRow];
     switch (b.dataset.act) {
       case 'watch': return watchChannel(ch);
-      case 'once': return recordSelected('once');
-      case 'series': return recordSelected('series', false);
-      case 'new': return recordSelected('series', true);
+      case 'record': return openRecordPick(ch, selectedProgram(list));
+      case 'once': state.recPick = ''; return recordSelected('once');
+      case 'series': state.recPick = ''; return recordSelected('series', false);
+      case 'new': state.recPick = ''; return recordSelected('series', true);
       case 'fav': return toggleFavorite(ch);
       case 'hide': guideZone('grid'); return hideChannel(ch);
       default: return null;
@@ -2180,13 +2183,18 @@ function renderGuideActions(ch, p) {
       const label = { recording: 'Recording now', unavailable: 'Channel not available', conflict: 'Conflict: every tuner records then' }[it.status] || 'Recording scheduled';
       parts.push(`<span class="chip ${it.status === 'unavailable' || it.status === 'conflict' ? 'warn' : 'live'}">${label}</span>`);
       parts.push(act('once', it.status === 'recording' ? 'Stop recording' : 'Cancel'));
+    } else if (!rule && p.seriesId) {
+      // One Record, which opens to this airing, every episode or new ones;
+      // another program closes it.
+      if (state.recPick !== airingKey(ch, p)) state.recPick = '';
+      parts.push(state.recPick === airingKey(ch, p)
+        ? act('once', '<i></i>This one', 'rec') + act('series', 'Every episode') + act('new', 'New only')
+        : act('record', '<i></i>Record', 'rec'));
     } else {
       parts.push(act('once', '<i></i>Record', 'rec'));
     }
     if (rule) {
       parts.push(`<span class="chip new">Series${rule.newOnly ? ', new only' : ''}</span>${act('series', 'Stop series')}`);
-    } else if (p.seriesId) {
-      parts.push(act('series', 'Record series') + act('new', 'New episodes only'));
     }
   }
   if (!airing) parts.push(act('watch', `Watch ${esc(ch.number)}`));
@@ -2217,6 +2225,23 @@ function fitGuideDetail() {
     el.classList.add('gd-gone');
   }
   if (box.offsetHeight > room) box.classList.add('one-row');
+}
+
+// openRecordPick opens Record into its three choices, the first focused.
+function openRecordPick(ch, p) {
+  if (!ch || !p) return;
+  state.recPick = airingKey(ch, p);
+  renderGuideActions(ch, p);
+  focusEl(f($('#guide'), 'actions').querySelector('[data-act="once"]'));
+}
+
+// closeRecordPick folds the choices back into Record, focused.
+function closeRecordPick() {
+  state.recPick = '';
+  const list = guideChannels();
+  renderGuideActions(list[state.gRow], selectedProgram(list));
+  const rec = f($('#guide'), 'actions').querySelector('[data-act="record"]');
+  if (rec && guideUI.zone === 'actions') focusEl(rec);
 }
 
 function recordSelected(kind, newOnly) {
