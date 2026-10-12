@@ -141,19 +141,22 @@ const androidTV = /\bAirwavesTV\//.test(navigator.userAgent);
 //   tv: the Android TV app. A remote with arrows, OK, Back and media keys
 //     but no letters or pointer: hints name the remote's keys, holding OK
 //     offers more, and the on-screen controls lead to everything.
+//   touch: a phone or a tablet, the web app installed or in a browser.
+//     Taps, swipes and holds (js/touch.js), no hints, sized to fit, and
+//     held sideways.
 // The app says which it is (Boot's platform: AIRWAVES_PLATFORM, else a
-// console's under gamescope; web.js: the Android TV app's TV, else a
-// desktop's, or ?platform=), and Settings, Display, Layout can say
+// console's under gamescope; web.js: the Android TV app's TV, a touch
+// screen's touch, else a desktop's, or ?platform=), and Settings, Display, Layout can say
 // otherwise on this device. What's pressed still counts: a controller on a
 // desktop brings its buttons to the hints, a keyboard on a TV its keys.
-const PLATFORMS = [['desktop', 'Desktop'], ['console', 'Console'], ['tv', 'TV']];
+const PLATFORMS = [['desktop', 'Desktop'], ['console', 'Console'], ['tv', 'TV'], ['touch', 'Touch']];
 const platformKey = 'airwaves.platform';
 let platform = 'desktop';
 let detectedPlatform = 'desktop';
 // onRemote: the hints and the ways to do things are a TV remote's.
 const onRemote = () => platform === 'tv' && !prompts.pad;
 // onKeys: they're a keyboard's, letters and all.
-const onKeys = () => platform !== 'tv' && !prompts.pad;
+const onKeys = () => (platform === 'desktop' || platform === 'console') && !prompts.pad;
 
 function applyPlatform(detected) {
   if (detected) detectedPlatform = PLATFORMS.some(([k]) => k === detected) ? detected : 'desktop';
@@ -416,6 +419,7 @@ async function init() {
   wirePodcasts();
   wireWeather();
   wirePads();
+  wireTouch();
   wireMediaSession();
   renderHints();
   // Keys work from launch, without a click first.

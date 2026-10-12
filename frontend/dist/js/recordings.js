@@ -190,8 +190,14 @@ function wireRecordings() {
     if (b) return recAct(b.dataset.act);
     const item = e.target.closest('[data-i]');
     if (item && state.recSelBy) {
-      state.recSelBy[state.recTab || 'library'] = Number(item.dataset.i);
+      const tab = state.recTab || 'library';
+      const was = state.recSelBy[tab];
+      state.recSelBy[tab] = Number(item.dataset.i);
       renderRecordings();
+      if (tab === 'library' && tappedAgain(was, state.recSelBy[tab])) {
+        const it = recLists().library[was];
+        if (it) playOnDemand(it, resumable(it) ? it.position : 0);
+      }
     }
     return null;
   });

@@ -153,8 +153,10 @@ function wirePodcasts() {
     if (b) return podAct(b.dataset.act);
     const card = e.target.closest('[data-i]');
     if (card) {
+      const was = podUI.sel[podUI.list] || 0;
       podUI.sel[podUI.list] = Number(card.dataset.i);
       renderPodcasts();
+      if (tappedAgain(was, podUI.sel[podUI.list])) podAct('play');
     }
     return null;
   });

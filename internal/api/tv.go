@@ -12,8 +12,8 @@ import (
 // tvFiles serves the TV interface (frontend/dist) with the prefix /tv
 // stripped. Pages, scripts and styles are checked again on every load
 // (no-cache, with an ETag, so it's a 304 when unchanged) and a new
-// airwavesd shows its own at once; fonts and the vendored libraries are
-// kept for a day. There are no directory listings.
+// airwavesd shows its own at once; fonts, icons and the vendored libraries
+// are kept for a day. There are no directory listings.
 func tvFiles(fsys fs.FS) http.Handler {
 	etags := map[string]string{}
 	err := fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, err error) error {
@@ -43,7 +43,10 @@ func tvFiles(fsys fs.FS) http.Handler {
 			return
 		}
 		w.Header().Set("ETag", etag)
-		if strings.HasPrefix(name, "fonts/") || strings.HasPrefix(name, "vendor/") {
+		if strings.HasSuffix(name, ".webmanifest") {
+			w.Header().Set("Content-Type", "application/manifest+json")
+		}
+		if strings.HasPrefix(name, "fonts/") || strings.HasPrefix(name, "vendor/") || strings.HasPrefix(name, "icons/") {
 			w.Header().Set("Cache-Control", "public, max-age=86400")
 		} else {
 			w.Header().Set("Cache-Control", "no-cache")

@@ -570,7 +570,7 @@ async function saveServer(name, value) {
 const SCALES = [0, 100, 115, 130, 150]; // 0 is Auto
 // Auto is the app's for the platform it says it is; for another, chosen in
 // Settings, a desktop's 100% or 125% across a room.
-const autoScale = () => (platform === detectedPlatform ? (state.boot && state.boot.autoScale) || 100 : platform === 'desktop' ? 100 : 125);
+const autoScale = () => (platform === detectedPlatform ? (state.boot && state.boot.autoScale) || 100 : platform === 'desktop' || platform === 'touch' ? 100 : 125);
 let pageZoom = 0;
 
 function applyScale() {
@@ -604,6 +604,7 @@ const PLATFORM_SUBS = {
   desktop: 'For a mouse and a keyboard',
   console: 'For a controller, across a room',
   tv: 'For a TV remote: arrows, OK and Back',
+  touch: 'For a phone or a tablet: tap, swipe and hold',
 };
 
 async function setPlatform(k) {

@@ -131,18 +131,28 @@
 
   const query = new URLSearchParams(location.search);
 
-  // fit is the zoom that fits a 1080p screen's interface into this one:
-  // the Android TV app's WebView is often 960x540 (the TV's 1080p at twice
-  // the density), where 125% is what 125% is on a 1080p TV. It goes by the
-  // width, which an on-screen keyboard leaves alone. Elsewhere 1.
-  const fit = () => (tvApp && innerWidth > 0 ? innerWidth / 1920 : 1);
+  // A phone or a tablet: a touch screen, and no mouse or trackpad.
+  const touchScreen = !tvApp && matchMedia('(pointer: coarse)').matches && !matchMedia('(any-pointer: fine)').matches;
+
+  // The Android TV app is the TV experience, a touch screen the touch
+  // experience, a browser a desktop's; ?platform=desktop, console, tv or
+  // touch says otherwise.
+  const platform = query.get('platform') || (tvApp ? 'tv' : touchScreen ? 'touch' : 'desktop');
+
+  // fit is the zoom that fits the interface into this screen. The Android TV
+  // app's WebView is often 960x540 (the TV's 1080p at twice the density),
+  // where it shows a 1080p screen's interface, so 125% is what 125% is on a
+  // 1080p TV. A phone shows a 960-pixel-wide one, a phone on its side
+  // being 700 to 950 wide; a tablet its own. It goes by the width, which an
+  // on-screen keyboard leaves alone. Elsewhere 1.
+  const fit = () => {
+    if (tvApp && innerWidth > 0) return innerWidth / 1920;
+    if (platform === 'touch' && innerWidth > 0) return Math.min(1, innerWidth / 960);
+    return 1;
+  };
   let lastBoot = null;
   // Before the app's resize handler (js/settings.js), which reads it.
   addEventListener('resize', () => { if (lastBoot) lastBoot.fit = fit(); });
-
-  // The Android TV app is the TV experience, a browser a desktop's;
-  // ?platform=desktop, console or tv says otherwise.
-  const platform = query.get('platform') || (tvApp ? 'tv' : 'desktop');
 
   async function boot() {
     const out = {
@@ -153,7 +163,7 @@
       // ?lite=1 or 0 turns it on or off anywhere, as AIRWAVES_LITE does.
       lite: query.get('lite') || (tvApp ? '1' : ''),
       // Auto is 125% across a room, as under gamescope, else 100%.
-      autoScale: platform === 'desktop' ? 100 : 125,
+      autoScale: platform === 'desktop' || platform === 'touch' ? 100 : 125,
       fit: fit(),
       nativeZoom: false,
       version: tvApp,
@@ -315,6 +325,13 @@
       if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
     },
   };
+
+  // Installable (manifest.webmanifest): the browser wants a service worker
+  // for that, which only a secure page (https, as through Tailscale) may
+  // have.
+  if ('serviceWorker' in navigator && window.isSecureContext && !tvApp) {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  }
 
   // The desktop app stops its stream when it quits; a page, when it goes.
   // A page kept for Back and Forward starts over when shown again.

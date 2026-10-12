@@ -116,10 +116,13 @@ function wireGuide() {
   rows.addEventListener('click', (e) => {
     const cell = e.target.closest('[data-row]');
     if (!cell) return;
+    const picked = () => `${state.gRow}|${(selectedProgram(guideChannels()) || {})._s}`;
+    const was = guideUI.zone === 'grid' ? picked() : '';
     guideZone('grid');
     state.gRow = Number(cell.dataset.row);
     if (cell.dataset.t) state.gTime = Number(cell.dataset.t);
     renderGuide();
+    if (tappedAgain(was, picked())) guideActivate();
   });
   rows.addEventListener('dblclick', (e) => {
     const cell = e.target.closest('[data-row]');

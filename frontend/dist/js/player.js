@@ -128,6 +128,11 @@ function attempt(how, src) {
       if (err && err.name === 'NotAllowedError') {
         video.muted = true;
         video.play().catch(() => {});
+        // A touch screen's next touch, which lets sound play, turns it on.
+        if (platform === 'touch') {
+          document.addEventListener('pointerdown', () => { if (!state.userMuted) video.muted = false; }, { once: true, capture: true });
+          return toast('Started muted. Tap for sound.', 3500);
+        }
         const m = keyHint('m', 'M');
         if (m) return toast(`Started muted. Press ${m} for sound.`, 3500, true);
         // A remote has no M: its next key, which lets sound play, turns it on.

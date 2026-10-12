@@ -42,3 +42,27 @@ func TestDist(t *testing.T) {
 		}
 	}
 }
+
+// TestNoNameTwice: the app's files share one scope, as plain scripts do,
+// so a name declared at the top of two of them stops the second loading.
+func TestNoNameTwice(t *testing.T) {
+	d := Dist()
+	files, err := fs.Glob(d, "js/*.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	decl := regexp.MustCompile(`(?m)^(?:const|let|var|class|function|async function) ([A-Za-z_$][\w$]*)`)
+	where := map[string]string{}
+	for _, f := range files {
+		src, err := fs.ReadFile(d, f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range decl.FindAllStringSubmatch(string(src), -1) {
+			if prev, ok := where[m[1]]; ok {
+				t.Errorf("%s is declared in %s and %s", m[1], prev, f)
+			}
+			where[m[1]] = f
+		}
+	}
+}

@@ -1,5 +1,6 @@
 // Renders the Android TV app's banner, launcher icon and setup wordmark from
-// the HTML sources next to this file, into android/app/src/main/res. They share
+// the HTML sources next to this file, into android/app/src/main/res, and the
+// web app's icons into frontend/dist/icons. They share
 // the Steam art's look (build/linux/steam-art: art.css, art.js, the app's fonts).
 //
 //   node android/art/render.mjs [banner|mark|icon ...]   (needs the playwright package resolvable)
@@ -27,6 +28,10 @@ const ART = {
   mark: ["mark.html", null, null, true, "drawable-nodpi/mark.png"],
   ...Object.fromEntries(Object.entries(ICON).map(([d, px]) =>
     [`icon-${d}`, [`icon.html?px=${px}`, px, px, true, `mipmap-${d}/ic_launcher_foreground.png`]])),
+  // The web app's: the W on its white tile, edge to edge, which a phone
+  // masks or rounds to its own shape (outputs from the repo's root).
+  ...Object.fromEntries([[192, "icon-192"], [512, "icon-512"], [180, "apple-touch-icon"]].map(([px, n]) =>
+    [`web-${n}`, [`icon.html?px=${px}`, px, px, false, `/frontend/dist/icons/${n}.png`]])),
 };
 
 const TYPES = { ".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".mjs": "text/javascript", ".woff2": "font/woff2", ".png": "image/png" };
@@ -54,7 +59,7 @@ try {
     tab.on("requestfailed", (r) => console.error(`${name}: failed ${r.url()}`));
     await tab.goto(base + page);
     await tab.waitForSelector("body[data-ready]", { timeout: 15000 });
-    const file = join(res, out);
+    const file = out.startsWith("/") ? join(root, out) : join(res, out);
     await mkdir(dirname(file), { recursive: true });
     await tab.locator("#art").screenshot({ path: file, omitBackground: transparent });
     const box = await tab.locator("#art").boundingBox();

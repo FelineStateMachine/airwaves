@@ -2,8 +2,16 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Airwaves</title>
+  <!-- Installable from a browser (manifest.webmanifest, sw.js in web.js). -->
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="theme-color" content="#07080a">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Airwaves">
   <link rel="stylesheet" href="style.css">
 </head>
 <body class="mode-tv booting">
@@ -208,6 +216,9 @@
 
   <div id="toast" role="status"></div>
 
+  <!-- A phone held upright, on the touch platform (style.css, Touch). -->
+  <div id="rotate" aria-live="polite"><div><div class="rotate-mark" aria-hidden="true"></div>Turn your phone sideways</div></div>
+
   <script src="vendor/hls.min.js"></script>
   <!-- The web app's stand-in for Wails, at /tv/ on airwavesd (web.js) -->
   <script src="web.js"></script>
@@ -216,6 +227,7 @@
   <script src="js/core.js"></script>
   <script src="js/player.js"></script>
   <script src="js/input.js"></script>
+  <script src="js/touch.js"></script>
   <script src="js/guide.js"></script>
   <script src="js/reception.js"></script>
   <script src="js/settings.js"></script>

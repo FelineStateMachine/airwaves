@@ -558,6 +558,7 @@ const REMOTE_KEYS = { Enter: 'OK', Escape: 'Back', ' ': 'Play/Pause', Arrows: 'A
 const keyHint = (key, label) => {
   if (prompts.pad) return glyph(key, label) || null;
   if (platform === 'tv') return REMOTE_KEYS[key] ? esc(REMOTE_KEYS[key]) : null;
+  if (platform === 'touch') return null; // nothing to press
   return esc(label);
 };
 

@@ -279,7 +279,7 @@ body.mode-guide #guide, body.mode-settings #settings, body.mode-recordings #reco
    sits at the top of a left rail, with that view's menu beneath it. */
 .view.railed { display: grid; grid-template-columns: var(--pip-w) minmax(0, 1fr); gap: 34px; padding: 46px 28px 22px; }
 .rail { padding-top: calc(var(--pip-h) + 24px); display: flex; flex-direction: column; gap: 30px; min-height: 0; }
-.rail-menu { display: grid; gap: 2px; }
+.rail-menu { display: grid; grid-auto-rows: max-content; gap: 2px; } /* rows whole, however many */
 .rm-item {
   border: 0; background: none; text-align: left; cursor: pointer; color: var(--muted);
   display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 3px 10px;
@@ -748,6 +748,66 @@ body.mouse-active .ob:hover { color: var(--paper); background: var(--ink-3); }
 .ob.on svg { color: var(--amber); }
 .ob[data-act="record"] svg, .ob[data-act="live"].at svg { color: var(--red); }
 .ob[data-act="record"].on svg { animation: pulse 1.4s ease-in-out infinite; }
+
+/* ---------- Touch ---------- */
+/* A phone or a tablet (body.pf-touch, js/touch.js): fingers tap, swipe and
+   hold, so nothing selects as text or zooms on a double tap, the picture's
+   swipes are the app's, lists scroll under a finger, what's tapped is big
+   enough to hit, and the notch and the home bar are left clear. */
+body.pf-touch { -webkit-tap-highlight-color: transparent; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; touch-action: manipulation; overscroll-behavior: none; }
+body.pf-touch input { -webkit-user-select: text; user-select: text; }
+body.pf-touch #stage { touch-action: none; }
+body.pf-touch .g-rows { touch-action: pan-y; }
+body.pf-touch .r-grid, body.pf-touch .s-list, body.pf-touch .a-tablewrap, body.pf-touch .p-menu, body.pf-touch .r-list { overflow-y: auto; touch-action: pan-y; }
+body.pf-touch .wx-main { overflow-y: auto; touch-action: pan-y; }
+body.pf-touch #dock { top: max(7px, env(safe-area-inset-top)); }
+body.pf-touch #dock button { min-height: 40px; padding: 8px 16px; font-size: 13px; }
+body.pf-touch #dock kbd { display: none; }
+body.pf-touch .act, body.pf-touch .btn { min-height: 44px; }
+body.pf-touch .rm-item { min-height: 48px; }
+body.pf-touch .view { padding-left: max(28px, env(safe-area-inset-left)); padding-right: max(28px, env(safe-area-inset-right)); }
+body.pf-touch #banner { left: max(28px, env(safe-area-inset-left)); right: max(28px, env(safe-area-inset-right)); bottom: max(26px, env(safe-area-inset-bottom)); }
+/* Nothing to press, so no hints of keys. */
+body.pf-touch .s-hint, body.pf-touch .rd-hint, body.pf-touch .gd-hint, body.pf-touch .r-hint { display: none; }
+body.pf-touch .s-main { grid-template-rows: minmax(0, 1fr); }
+
+/* A phone on its side is short: the picture-in-picture in the rail goes
+   (it plays on, heard), the guide's top and the banner keep to the
+   essentials, and a picked item's details take less of the height. */
+@media (max-height: 520px) {
+  body.pf-touch:not(.mode-tv):not(.mode-guide) #stage { visibility: hidden; }
+  body.pf-touch .rail { padding-top: 0; }
+  body.pf-touch .view.railed { padding-top: 64px; grid-template-columns: 190px minmax(0, 1fr); gap: 20px; }
+  body.pf-touch .rm-item .rm-label { font-size: 19px; }
+  body.pf-touch .p-menu .rm-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  body.pf-touch .r-detail { min-height: 0; grid-template-columns: minmax(0, 1fr) min(30%, 300px); gap: 20px; }
+  body.pf-touch .r-detail .rd-title { font-size: 30px; -webkit-line-clamp: 2; display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
+  body.pf-touch .r-detail .rd-desc { -webkit-line-clamp: 2; }
+  body.pf-touch .p-main, body.pf-touch .r-lib.on { gap: 14px; }
+  body.pf-touch #banner { padding: 16px 20px 14px; grid-template-columns: 130px minmax(0, 1fr); gap: 8px 20px; }
+  body.pf-touch .bn-num { font-size: 64px; }
+  body.pf-touch .bn-title { font-size: 30px; margin-top: 6px; }
+  body.pf-touch .bn-desc, body.pf-touch .bn-cast, body.pf-touch .bn-logo { display: none; }
+  body.pf-touch .bn-next { margin-top: 6px; }
+  /* The guide's top clears the dock, and leaves the grid more rows. */
+  body.pf-touch { --gtop: calc(40 * var(--vh)); --pv-h: calc(var(--gtop) - 62px - 14px); --pv-w: calc(var(--pv-h) * 16 / 9); }
+  body.pf-touch .g-top { padding-top: 62px; padding-bottom: 14px; }
+  body.pf-touch.mode-guide #stage { top: 62px; }
+}
+
+/* Held upright, a phone is asked to turn sideways: the TV and its views
+   are laid out for a wide screen. */
+#rotate { display: none; }
+@media (orientation: portrait) and (max-width: 700px) {
+  body.pf-touch #rotate {
+    position: fixed; inset: 0; z-index: 200; display: grid; place-items: center; text-align: center;
+    background: var(--ink); color: var(--paper); letter-spacing: .03em; text-transform: uppercase;
+    /* The screen's own size, whatever the page's zoom. */
+    font: 600 calc(22px / var(--zoom, 1))/1.3 var(--f-display);
+  }
+}
+.rotate-mark { width: 2.4em; height: 3.9em; margin: 0 auto 1em; border: calc(3px / var(--zoom, 1)) solid var(--amber); border-radius: .45em; animation: rotate-hint 2.4s var(--ease) infinite; }
+@keyframes rotate-hint { 0%, 30% { transform: rotate(0); } 60%, 100% { transform: rotate(-90deg); } }
 
 /* ---------- Focus ---------- */
 /* One mark for wherever the remote, a controller or the arrow keys are, in

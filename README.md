@@ -179,9 +179,9 @@ reached from the views above it: Up from a view's top, or Left from its left
 edge, and on TV, Up through the on-screen controls. Whatever the arrows are on has
 an amber ring.
 
-### Desktop, console and TV
+### Desktop, console, TV and touch
 
-The app is three experiences, kept apart in the code (`platform` in js/core.js, `pf-*`
+The app is four experiences, kept apart in the code (`platform` in js/core.js, `pf-*`
 classes in style.css):
 
 | | Where | In hand | Hints |
@@ -189,11 +189,25 @@ classes in style.css):
 | Desktop | The app in a window on a Mac, Linux or Windows, or a browser | Mouse and keyboard; letters are shortcuts | Keys |
 | Console | The Linux app under gamescope (SteamOS Game Mode) | A controller | Its buttons, from the start |
 | TV | The Android TV app | A remote: arrows, OK, Back and media keys | The remote's keys; hold OK for more |
+| Touch | A phone or a tablet, at `/tv/` or installed from it | Taps, swipes and holds | None |
 
 The app says which it is (`AIRWAVES_PLATFORM=desktop`, `console` or `tv` overrides the
 desktop app's guess; `?platform=` does the same at `/tv/`), and Settings, Display, Layout
 can change it on one device. Console and TV start at 125%, sized for across a room. A
 controller or a keyboard used on any of them still brings its own hints.
+
+On touch, a tap on TV brings up the controls (and puts them away); a swipe left or right
+skips back 10 seconds or ahead 30, up or down changes channel. In the guide a swipe moves
+the hours shown, a tap picks a program and a second tap watches it, and holding one shows
+its actions; in Recordings and Podcasts a second tap plays. A phone is used on its side,
+with a compact banner and guide; held upright it asks to be turned.
+
+The web app is installable (`manifest.webmanifest`, and `sw.js`, which keeps nothing
+offline): from a secure address, such as a [Tailscale Service](https://tailscale.com/kb/1552/tailscale-services)
+in front of `airwavesd` (`tailscale serve --service=svc:airwaves --https=443
+http://<server>:8089`), Add to Home Screen on a phone or Install in a desktop browser
+opens it full screen with its own icon. A plain `http://` address works in a browser but
+can't be installed.
 
 ## Data sources
 
