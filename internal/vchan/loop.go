@@ -34,6 +34,12 @@ type item struct {
 	Season      string
 	Episode     string
 	Image       string
+	// Aired, Cast, Rating and Genres describe it further, as Program's.
+	Aired  string
+	Year   int
+	Cast   []string
+	Rating string
+	Genres []string
 	// Input, when set, returns ffmpeg input options (ending "-i <url>") that
 	// play the video from offset in, for sources that seek on their side.
 	// Otherwise Path is read with a local seek. The stream's pace is set
@@ -145,11 +151,20 @@ func programs(items []item, from, to time.Time) []Program {
 
 // programOf is an item's guide entry, airing from start to end.
 func programOf(it item, start, end time.Time) Program {
-	return Program{
+	p := Program{
 		Start: start, End: end, Title: it.Title, Subtitle: it.Subtitle, Description: it.Description,
 		Category: it.Category, Season: it.Season, Episode: it.Episode, Image: it.Image,
 		AudioLang: it.AudioLang, Captions: it.Captions != nil,
+		Aired: it.Aired, Cast: it.Cast, Rating: it.Rating, Genres: it.Genres,
 	}
+	switch {
+	case p.Date != "":
+	case len(it.Aired) == len("2006-01-02"):
+		p.Date = strings.ReplaceAll(it.Aired, "-", "")
+	case it.Year > 0:
+		p.Date = strconv.Itoa(it.Year)
+	}
+	return p
 }
 
 // lineup gives a looping channel's items, and its schedule (nil for none),

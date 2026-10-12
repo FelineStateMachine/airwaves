@@ -28,7 +28,8 @@ func library() []jellyfintest.Item {
 		{ID: "fut-1-9", Type: "Episode", Name: "Not Downloaded", Parent: "fut-1", Season: 1, Episode: 9, Missing: true},
 		{ID: "btas", Type: "Series", Name: "Batman: The Animated Series", Parent: "lib-shows", Year: 1992},
 		{ID: "btas-1-1", Type: "Episode", Name: "On Leather Wings", Parent: "btas", Season: 1, Episode: 1, Runtime: 22 * time.Minute},
-		{ID: "thing82", Type: "Movie", Name: "The Thing", Parent: "lib-movies", Year: 1982, Runtime: 109 * time.Minute, Image: true},
+		{ID: "thing82", Type: "Movie", Name: "The Thing", Parent: "lib-movies", Year: 1982, Runtime: 109 * time.Minute, Image: true,
+			Rating: "R", Genres: []string{"Horror"}, Cast: []string{"Kurt Russell/MacReady", "Wilford Brimley/Blair", "Keith David/"}},
 		{ID: "thing11", Type: "Movie", Name: "The Thing", Parent: "lib-movies", Year: 2011, Runtime: 103 * time.Minute},
 		{ID: "giant", Type: "Movie", Name: "The Iron Giant", Parent: "lib-movies", Year: 1999, Runtime: 86 * time.Minute},
 		{ID: "sat", Type: "BoxSet", Name: "Saturday Morning", Children: []string{"btas", "giant"}},
@@ -232,7 +233,9 @@ func TestVideos(t *testing.T) {
 	if v := got["fut-1-2"]; v.Audio || !strings.Contains(v.Image, "/Items/fut/Images/Primary") {
 		t.Errorf("silent episode without a still = %+v", v)
 	}
-	if v := got["thing82"]; v.Type != "Movie" || v.Year != 1982 || !strings.Contains(v.Image, "/Items/thing82/Images/Primary") {
+	if v := got["thing82"]; v.Type != "Movie" || v.Year != 1982 || !strings.Contains(v.Image, "/Items/thing82/Images/Primary") ||
+		v.Rating != "R" || !slices.Equal(v.Genres, []string{"Horror"}) ||
+		!slices.Equal(v.Cast, []string{"Kurt Russell (MacReady)", "Wilford Brimley (Blair)", "Keith David"}) {
 		t.Errorf("movie = %+v", v)
 	}
 	if v := got["giant"]; v.Image != "" {

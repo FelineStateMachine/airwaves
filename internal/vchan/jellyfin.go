@@ -420,8 +420,8 @@ func jellyfinItem(c *jellyfin.Client, v jellyfin.Video, mbps float64) (item, boo
 		return item{}, false
 	}
 	it := item{
-		Frames: frames, Audio: v.Audio, Title: v.Name, Description: firstParagraph(v.Overview, 300), Image: v.Image,
-		Input: jellyfinInput(c, v, mbps),
+		Frames: frames, Audio: v.Audio, Title: v.Name, Description: firstParagraph(v.Overview, 1000), Image: v.Image,
+		Input: jellyfinInput(c, v, mbps), Aired: v.Premiere, Year: v.Year, Cast: v.Cast, Rating: v.Rating, Genres: v.Genres,
 	}
 	if v.Type == "Movie" {
 		it.Category = "Movie"

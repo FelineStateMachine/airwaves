@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -218,7 +219,7 @@ func TestScheduledFolderGuide(t *testing.T) {
 	}
 	// Without a schedule, the folder loops on the clock as ever.
 	writeFile(t, filepath.Join(f.Dir, DetailsFile), `{"callSign": "HOTD"}`)
-	if progs := f.Programs(at(4, 9, 30), at(4, 12, 0)); !slices.Equal(progs, programs(f.items, at(4, 9, 30), at(4, 12, 0))) {
+	if progs := f.Programs(at(4, 9, 30), at(4, 12, 0)); !reflect.DeepEqual(progs, programs(f.items, at(4, 9, 30), at(4, 12, 0))) {
 		t.Errorf("without a schedule: %+v", progs)
 	}
 	// One that can't be read is logged and left out.

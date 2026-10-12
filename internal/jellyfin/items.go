@@ -57,8 +57,13 @@ type Video struct {
 	Premiere string // first aired, "2006-01-02", or "" when unknown
 	Year     int
 	Overview string
-	Runtime  time.Duration
-	Audio    bool
+	// Cast lists the actors, as "Name (Role)", leads first; Rating is the
+	// content rating ("TV-14"); Genres as the library has them.
+	Cast    []string
+	Rating  string
+	Genres  []string
+	Runtime time.Duration
+	Audio   bool
 	// Image is artwork on the server, which loads without signing in: an
 	// episode's still or its series' backdrop, a movie's backdrop or poster.
 	Image string
@@ -113,7 +118,13 @@ type dto struct {
 	BackdropImageTags       []string
 	ParentBackdropItemID    string `json:"ParentBackdropItemId"`
 	ParentBackdropImageTags []string
-	MediaSources            []struct {
+	OfficialRating          string
+	People                  []struct {
+		Name string
+		Role string
+		Type string // "Actor", "GuestStar", "Director"...
+	}
+	MediaSources []struct {
 		ID           string `json:"Id"`
 		RunTimeTicks int64
 		MediaStreams []mediaStream
@@ -321,7 +332,7 @@ func (c *Client) contents(ctx context.Context, id, kind string) ([]dto, error) {
 }
 
 func videoQuery(q url.Values) url.Values {
-	q.Set("fields", "Overview,MediaSources")
+	q.Set("fields", "Overview,MediaSources,People,OfficialRating,Genres")
 	q.Set("excludeLocationTypes", "Virtual")
 	q.Set("enableUserData", "false")
 	return q
@@ -353,7 +364,20 @@ func (c *Client) video(d dto) Video {
 	v := Video{
 		ID: d.ID, Source: d.ID, Type: d.Type, Name: d.Name, Series: d.SeriesName, SeriesID: d.SeriesID,
 		Season: d.ParentIndexNumber, Episode: d.IndexNumber, Year: d.ProductionYear, Overview: d.Overview,
-		Runtime: ticks(d.RunTimeTicks), Audio: true, Image: c.artwork(d),
+		Runtime: ticks(d.RunTimeTicks), Audio: true, Image: c.artwork(d), Rating: d.OfficialRating, Genres: d.Genres,
+	}
+	// Actors come in billing order, guest stars after them.
+	for _, kind := range []string{"Actor", "GuestStar"} {
+		for _, p := range d.People {
+			if p.Type != kind || p.Name == "" || len(v.Cast) == 6 {
+				continue
+			}
+			if p.Role != "" {
+				v.Cast = append(v.Cast, p.Name+" ("+p.Role+")")
+			} else {
+				v.Cast = append(v.Cast, p.Name)
+			}
+		}
 	}
 	if len(d.PremiereDate) >= len("2006-01-02") {
 		v.Premiere = d.PremiereDate[:len("2006-01-02")]

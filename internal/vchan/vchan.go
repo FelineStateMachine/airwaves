@@ -24,6 +24,13 @@ type Program struct {
 	// Date is when it was made, as XMLTV writes it: "2014", "202603" or
 	// "20140304".
 	Date string
+	// Aired is when it first aired ("2014-03-04"), Cast its actors as
+	// "Name (Role)", Rating its content rating ("TV-14") and Genres its
+	// genres, where the source knows them.
+	Aired  string
+	Cast   []string
+	Rating string
+	Genres []string
 	// AudioLang is the sound's language as tagged ("eng", "jpn"), "" when
 	// unknown, which is taken for English.
 	AudioLang string

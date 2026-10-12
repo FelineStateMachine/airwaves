@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -461,7 +462,7 @@ func TestYouTubeGuide(t *testing.T) {
 	}
 	// A restart reads the same schedule.
 	again := &YouTube{Num: "1.8", Title: "Northernlion", Dir: dir}
-	if got := again.Programs(now, now.Add(12*time.Hour)); len(got) != len(progs) || got[5] != progs[5] {
+	if got := again.Programs(now, now.Add(12*time.Hour)); len(got) != len(progs) || !reflect.DeepEqual(got[5], progs[5]) {
 		t.Error("schedule differs after a restart")
 	}
 }

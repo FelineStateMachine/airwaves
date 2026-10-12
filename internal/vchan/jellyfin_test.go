@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -124,7 +125,7 @@ func TestJellyfinChannelResolvesNames(t *testing.T) {
 
 	// The same videos keep the same schedule.
 	cartoons.refresh()
-	if again := cartoons.Programs(from, from.Add(6*time.Hour)); !slices.Equal(progs, again) {
+	if again := cartoons.Programs(from, from.Add(6*time.Hour)); !reflect.DeepEqual(progs, again) {
 		t.Error("schedule changed on refresh")
 	}
 

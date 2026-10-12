@@ -539,6 +539,10 @@ func (s *Service) custom() []CustomChannel {
 				gp := guide.Program{
 					Start: p.Start, End: p.End, Title: p.Title, EpisodeTitle: p.Subtitle, Description: p.Description,
 					Season: p.Season, Episode: p.Episode, Image: p.Image, AudioLang: p.AudioLang,
+					OriginalAirDate: p.Aired, Cast: p.Cast, Rating: p.Rating, Genres: p.Genres,
+				}
+				if len(p.Date) >= 4 {
+					gp.Year = p.Date[:4]
 				}
 				if p.New {
 					gp.Flags = []string{"New"}

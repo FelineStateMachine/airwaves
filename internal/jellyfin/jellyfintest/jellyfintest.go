@@ -30,12 +30,15 @@ type Item struct {
 	Premiere  string // "2006-01-02"
 	Overview  string
 	Genres    []string
-	Season    int
-	Episode   int
-	Runtime   time.Duration
-	Silent    bool // no sound
-	Image     bool // has a primary image
-	Missing   bool // known to the server, with no file
+	// Cast are actors as "Name/Role"; Rating the content rating.
+	Cast    []string
+	Rating  string
+	Season  int
+	Episode int
+	Runtime time.Duration
+	Silent  bool // no sound
+	Image   bool // has a primary image
+	Missing bool // known to the server, with no file
 	// Streams are a video's sound and subtitles, after its picture. Without
 	// them it has one AAC track, unless Silent.
 	Streams []Stream
@@ -413,6 +416,18 @@ func (s *Server) dto(it Item, fields []string, userData bool) map[string]any {
 	}
 	if slices.Contains(fields, "Genres") {
 		m["Genres"] = it.Genres
+	}
+	if slices.Contains(fields, "OfficialRating") && it.Rating != "" {
+		m["OfficialRating"] = it.Rating
+	}
+	if slices.Contains(fields, "People") && len(it.Cast) > 0 {
+		var people []map[string]string
+		people = append(people, map[string]string{"Name": "Someone Behind", "Type": "Director"})
+		for _, c := range it.Cast {
+			name, role, _ := strings.Cut(c, "/")
+			people = append(people, map[string]string{"Name": name, "Role": role, "Type": "Actor"})
+		}
+		m["People"] = people
 	}
 	switch it.Type {
 	case "Episode":
