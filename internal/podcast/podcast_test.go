@@ -70,7 +70,7 @@ func fakeYtDlp(args []string) int {
 				{"id": "pb2", "title": "B 2", "duration": 3600, "timestamp": now - day},
 			}}
 	case strings.Contains(u, "playlist?list=PLtest00000002"):
-		out = map[string]any{"_type": "playlist", "id": "PLtest00000002", "title": "Every Episode", "channel": "Show C", "channel_id": "UCc",
+		out = map[string]any{"_type": "playlist", "id": "PLtest00000002", "title": "Every Episode", "channel": "TheShowC", "channel_id": "UCc",
 			"entries": []map[string]any{
 				{"id": "pc0"},
 				{"id": "pc1", "title": "C 1", "duration": 3600, "timestamp": now - day},
@@ -196,7 +196,7 @@ func TestAddStreamsAndPlaylist(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := ids(c.Episodes); c.Title != "Show C" || !slices.Equal(got, []string{"pc1"}) {
+	if got := ids(c.Episodes); c.Title != "The Show C" || !slices.Equal(got, []string{"pc1"}) {
 		t.Errorf("generic playlist: %q %v", c.Title, got)
 	}
 }
@@ -319,5 +319,13 @@ func TestSearchAndRemove(t *testing.T) {
 	}
 	if err := l.Remove(s.ID); !errors.Is(err, ErrNotFound) {
 		t.Errorf("remove again: %v", err)
+	}
+}
+
+func TestSpaced(t *testing.T) {
+	for in, want := range map[string]string{"TheStandupPod": "The Standup Pod", "Sad Boyz": "Sad Boyz", "mkbhd": "mkbhd", "nerd-snipe": "nerd-snipe", "SMN": "SMN"} {
+		if got := spaced(in); got != want {
+			t.Errorf("spaced(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

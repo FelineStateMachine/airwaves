@@ -251,13 +251,28 @@ func (s *show) fits(seconds int, live string, sr src) bool {
 
 // showTitle is what a listing calls the show: a playlist's title, unless
 // it names no show ("Every Episode", "Full Episodes", "Podcast"), then its
-// channel's name; a channel's name.
+// channel's name; a channel's name. A channel named as a handle is
+// ("TheStandupPod") reads as words ("The Standup Pod").
 func showTitle(lst youtube.Listing, sr src) string {
 	if sr.playlist && lst.Owner != "" && strings.TrimSpace(generic.ReplaceAllString(lst.Name, "")) == "" {
-		return lst.Owner
+		return spaced(lst.Owner)
 	}
-	return cmp.Or(lst.Name, lst.Owner)
+	if !sr.playlist {
+		return spaced(lst.Name)
+	}
+	return cmp.Or(lst.Name, spaced(lst.Owner))
 }
+
+// spaced puts spaces between the words of a name written as one
+// ("TheStandupPod"), leaving any other name as it is.
+func spaced(name string) string {
+	if strings.ContainsAny(name, " _-.") || !camel.MatchString(name) {
+		return name
+	}
+	return camel.ReplaceAllString(name, "$1 $2")
+}
+
+var camel = regexp.MustCompile(`(\p{Ll})(\p{Lu})`)
 
 // generic are the words of a playlist's title that say what it holds, not
 // which show.
