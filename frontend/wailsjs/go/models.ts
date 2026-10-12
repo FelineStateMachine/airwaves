@@ -369,6 +369,7 @@ export namespace guide {
 	    callSign: string;
 	    network: string;
 	    logo: string;
+	    logoDark?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Channel(source);
@@ -381,6 +382,7 @@ export namespace guide {
 	        this.callSign = source["callSign"];
 	        this.network = source["network"];
 	        this.logo = source["logo"];
+	        this.logoDark = source["logoDark"];
 	    }
 	}
 	export class Guide {
@@ -970,6 +972,7 @@ export namespace service {
 	    guideCallSign?: string;
 	    network: string;
 	    logo?: string;
+	    logoDark?: string;
 	    rf: number;
 	    facilityId: number;
 	    transmitter?: string;
@@ -995,6 +998,7 @@ export namespace service {
 	        this.guideCallSign = source["guideCallSign"];
 	        this.network = source["network"];
 	        this.logo = source["logo"];
+	        this.logoDark = source["logoDark"];
 	        this.rf = source["rf"];
 	        this.facilityId = source["facilityId"];
 	        this.transmitter = source["transmitter"];
