@@ -58,6 +58,9 @@ type Input struct {
 	// VOD marks a recording: transcode as fast as possible and keep every
 	// segment so the player can seek.
 	VOD bool
+	// Copy marks a picture that's H.264 already (a podcast's), copied as
+	// it is rather than transcoded; its sound is still made AAC.
+	Copy bool
 	// Offset is where in the recording this input starts, in seconds.
 	Offset float64
 	// Source, when set, writes the channel's MPEG-TS for ffmpeg to read on

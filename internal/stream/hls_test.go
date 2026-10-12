@@ -113,3 +113,18 @@ func TestMasterPlaylistForCaptions(t *testing.T) {
 		t.Errorf("ffmpeg args: %s", args)
 	}
 }
+
+// A picture that's H.264 already is copied, its segments kept to seek in;
+// the sound is still made AAC.
+func TestCopyArgs(t *testing.T) {
+	in := tuner.Input{Args: []string{"-i", "v.mp4", "-i", "a.m4a"}, Video: "0:v:0", Audio: []tuner.AudioTrack{{Map: "1:a:0"}}, VOD: true, Copy: true}
+	args := strings.Join(ffmpegArgs(in, "/tmp/x"), " ")
+	for _, want := range []string{"-map 0:v:0 -map 1:a:0", "-c:v copy", "-c:a aac", "-hls_list_size 0"} {
+		if !strings.Contains(args, want) {
+			t.Errorf("no %q in %s", want, args)
+		}
+	}
+	if strings.Contains(args, "libx264") || strings.Contains(args, "-force_key_frames") {
+		t.Errorf("transcodes: %s", args)
+	}
+}

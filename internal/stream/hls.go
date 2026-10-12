@@ -337,10 +337,11 @@ func playlists(in tuner.Input) []string {
 // live streams with their captions as text.
 func subtitled(in tuner.Input) bool { return in.Subtitles != nil && !in.VOD }
 
-// ffmpegArgs transcodes to H.264 and AAC in HLS. Several audio tracks become
-// separate renditions ("v:0 a:0 a:1"); closed captions (CEA-608 in the
-// picture of a broadcast or a custom channel) are carried into the H.264
-// stream by libx264.
+// ffmpegArgs transcodes to H.264 and AAC in HLS, or copies a picture
+// that's H.264 already (Copy). Several audio tracks become separate
+// renditions ("v:0 a:0 a:1"); closed captions (CEA-608 in the picture of a
+// broadcast or a custom channel) are carried into the H.264 stream by
+// libx264.
 func ffmpegArgs(in tuner.Input, dir string) []string {
 	args := []string{"-hide_banner", "-loglevel", "error", "-nostdin"}
 	args = append(args, probeArgs(in)...)
@@ -349,16 +350,22 @@ func ffmpegArgs(in tuner.Input, dir string) []string {
 	for _, a := range in.Audio {
 		args = append(args, "-map", a.Map)
 	}
-	if in.Broadcast {
+	switch {
+	case in.Copy:
+		// Segments then start at the picture's own key frames.
+		args = append(args, "-c:v", "copy")
+	case in.Broadcast:
 		// Deinterlace only frames flagged interlaced (1080i, 480i).
 		args = append(args, "-vf", "bwdif=mode=send_frame:deint=interlaced")
 	}
-	args = append(args,
-		"-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency", "-pix_fmt", "yuv420p",
-		"-profile:v", "high", "-crf", "21", "-maxrate", "8M", "-bufsize", "12M",
-		"-g", "60", "-keyint_min", "60", "-sc_threshold", "0",
-		"-force_key_frames", "expr:gte(t,n_forced*2)", "-a53cc", "1",
-	)
+	if !in.Copy {
+		args = append(args,
+			"-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency", "-pix_fmt", "yuv420p",
+			"-profile:v", "high", "-crf", "21", "-maxrate", "8M", "-bufsize", "12M",
+			"-g", "60", "-keyint_min", "60", "-sc_threshold", "0",
+			"-force_key_frames", "expr:gte(t,n_forced*2)", "-a53cc", "1",
+		)
+	}
 	streamMap := "v:0"
 	switch len(in.Audio) {
 	case 0:

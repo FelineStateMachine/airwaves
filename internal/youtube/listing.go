@@ -51,6 +51,9 @@ type Listing struct {
 	Entries  []Entry // a channel's newest first; a playlist's in its order
 	// Owner and OwnerID are a playlist's channel (see ParsePlaylist).
 	Owner, OwnerID string
+	// Image is a channel's avatar, or a playlist's first video's
+	// thumbnail; "" when the listing has none.
+	Image string
 }
 
 // Entry is a video in a listing.
@@ -62,8 +65,10 @@ type Entry struct {
 	Published time.Time
 	// Skip is "upcoming" for a premiere or a stream to come, "live" for
 	// one on now or not yet processed (and in a channel's tab, one that
-	// was live), else "".
-	Skip string
+	// was live), else "". LiveStatus is yt-dlp's own word for it
+	// ("is_upcoming", "is_live", "post_live", "was_live", "not_live"), ""
+	// when the listing doesn't say.
+	Skip, LiveStatus string
 	// Channel is a playlist's video's channel, which may not be the
 	// playlist's.
 	Channel string
@@ -79,9 +84,8 @@ var PlaylistArgs = []string{"--flat-playlist", "-J"}
 // ParseListing reads a channel tab's listing.
 func ParseListing(raw []byte) (Listing, error) {
 	var p struct {
-		Channel   string `json:"channel"`
-		ChannelID string `json:"channel_id"`
-		Entries   []struct {
+		channelInfo
+		Entries []struct {
 			ID         string  `json:"id"`
 			Title      string  `json:"title"`
 			Duration   float64 `json:"duration"`
@@ -95,12 +99,12 @@ func ParseListing(raw []byte) (Listing, error) {
 	if p.ChannelID == "" {
 		return Listing{}, errors.New("not a YouTube channel")
 	}
-	l := Listing{ID: p.ChannelID, Name: p.Channel}
+	l := Listing{ID: p.ChannelID, Name: p.Channel, Image: p.channel().Image}
 	for _, e := range p.Entries {
 		if e.ID == "" {
 			continue
 		}
-		v := Entry{ID: e.ID, Title: e.Title, Seconds: int(math.Round(e.Duration))}
+		v := Entry{ID: e.ID, Title: e.Title, Seconds: int(math.Round(e.Duration)), LiveStatus: e.LiveStatus}
 		if e.Timestamp > 0 {
 			v.Published = time.Unix(int64(e.Timestamp), 0).UTC()
 		}
@@ -158,7 +162,8 @@ func ParsePlaylist(raw []byte) (Listing, error) {
 			continue
 		}
 		seen[e.ID] = true
-		v := Entry{ID: e.ID, Title: e.Title, Seconds: int(math.Round(e.Duration)), Channel: cmp.Or(e.Channel, e.Uploader)}
+		v := Entry{ID: e.ID, Title: e.Title, Seconds: int(math.Round(e.Duration)), Channel: cmp.Or(e.Channel, e.Uploader),
+			LiveStatus: e.LiveStatus}
 		if e.Timestamp > 0 {
 			v.Published = time.Unix(int64(e.Timestamp), 0).UTC()
 		}
@@ -169,6 +174,9 @@ func ParsePlaylist(raw []byte) (Listing, error) {
 			v.Skip = "live"
 		}
 		l.Entries = append(l.Entries, v)
+	}
+	if len(l.Entries) > 0 {
+		l.Image = Thumbnail(l.Entries[0].ID)
 	}
 	return l, nil
 }
