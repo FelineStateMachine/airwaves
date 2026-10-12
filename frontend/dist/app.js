@@ -122,11 +122,49 @@ function setLite(on) {
 setLite(/Linux/.test(navigator.userAgent) && !/Android/.test(navigator.userAgent));
 
 // The Android TV app is a WebView whose user agent ends in
-// AirwavesTV/<version>, showing this page from the server (web.js): a TV
-// with a remote, which has arrows, OK, Back and media keys but no letters
-// or pointer.
+// AirwavesTV/<version>, showing this page from the server (web.js). This
+// says only what's the WebView's own (its keyboard, the Home key); what a
+// TV is like is the platform's.
 const androidTV = /\bAirwavesTV\//.test(navigator.userAgent);
-document.body.classList.toggle('android-tv', androidTV);
+
+// ---------- platform ----------
+// Airwaves is three experiences, each whole and kept apart (body.pf-*,
+// and the checks of platform):
+//   desktop: the app in a window on a Mac, Linux or Windows, or a browser.
+//     A mouse and a keyboard: hints name keys, letters are shortcuts, the
+//     dock shows with the pointer.
+//   console: the Linux app under gamescope, SteamOS's Game Mode on a TV.
+//     A controller: hints show its buttons from the start, sized for
+//     across a room.
+//   tv: the Android TV app. A remote with arrows, OK, Back and media keys
+//     but no letters or pointer: hints name the remote's keys, holding OK
+//     offers more, and the on-screen controls lead to everything.
+// The app says which it is (Boot's platform: AIRWAVES_PLATFORM, else a
+// console's under gamescope; web.js: the Android TV app's TV, else a
+// desktop's, or ?platform=), and Settings, Display, Layout can say
+// otherwise on this device. What's pressed still counts: a controller on a
+// desktop brings its buttons to the hints, a keyboard on a TV its keys.
+const PLATFORMS = [['desktop', 'Desktop'], ['console', 'Console'], ['tv', 'TV']];
+const platformKey = 'airwaves.platform';
+let platform = 'desktop';
+let detectedPlatform = 'desktop';
+// onRemote: the hints and the ways to do things are a TV remote's.
+const onRemote = () => platform === 'tv' && !prompts.pad;
+// onKeys: they're a keyboard's, letters and all.
+const onKeys = () => platform !== 'tv' && !prompts.pad;
+
+function applyPlatform(detected) {
+  if (detected) detectedPlatform = PLATFORMS.some(([k]) => k === detected) ? detected : 'desktop';
+  const forced = localStorage.getItem(platformKey) || '';
+  const next = PLATFORMS.some(([k]) => k === forced) ? forced : detectedPlatform;
+  for (const [k] of PLATFORMS) document.body.classList.toggle(`pf-${k}`, k === next);
+  const changed = next !== platform;
+  platform = next;
+  // A console starts with its controller's buttons in the hints.
+  if (platform === 'console') setPrompts(true);
+  else if (changed) setPrompts(false);
+  return changed;
+}
 
 // ---------- state ----------
 const state = {
@@ -415,7 +453,14 @@ async function init() {
   } else if (view) setView(view);
   setInterval(tick, 30_000);
   setInterval(() => scan(false).then(renderAll).catch((e) => log('warn', e)), 30 * MIN);
-  setInterval(() => { if (state.view === 'guide' || state.view === 'recordings') loadDVR(); }, MIN);
+  let dvrAt = Date.now();
+  setInterval(() => {
+    if (state.view === 'guide' || state.view === 'recordings' || Date.now() - dvrAt > 5 * MIN - 1000) {
+      dvrAt = Date.now();
+      loadDVR();
+    }
+  }, MIN);
+  setInterval(heartbeat, 30_000);
   setInterval(loadWeather, 2 * MIN);
   setInterval(signalTick, 2000);
   loadDVR();
@@ -454,10 +499,10 @@ function applyBoot(b) {
   state.info = b.info || { name: '', tuner: {}, dvr: false };
   state.config = b.config || {};
   document.body.classList.toggle('has-dvr', !!state.info.dvr);
-  // A server without an antenna (custom channels only) has no reception.
-  $('#dock [data-view="antenna"]').style.display = state.info.antenna === false ? 'none' : '';
   if (b.lite === '1' || b.lite === '0') setLite(b.lite === '1');
+  applyPlatform(b.platform || (androidTV ? 'tv' : 'desktop'));
   applyScale();
+  renderHints();
 }
 
 // ---------- recordings ----------
@@ -471,7 +516,45 @@ async function loadDVR() {
   }
   state.dvrKeys = new Map((state.dvr.upcoming || []).map((it) => [it.key, it]));
   if (state.view === 'guide') renderGuide();
-  if (state.view === 'recordings') renderRecordings();
+  if (state.view === 'recordings') {
+    renderRecordings();
+    seeFailed();
+  }
+  renderFailed();
+}
+
+// ---------- failed recordings ----------
+// A recording that failed puts a count on Recordings in the dock, and says
+// so once, until Recordings is opened.
+const failedSeenKey = 'airwaves.failedSeen';
+const failedTold = new Set();
+const failedRecordings = () => ((state.dvr && state.dvr.recorded) || []).filter((it) => it.status === 'failed');
+
+function renderFailed() {
+  const b = $('#dock [data-view="recordings"]');
+  const seen = new Set(JSON.parse(localStorage.getItem(failedSeenKey) || '[]'));
+  const unseen = failedRecordings().filter((it) => !seen.has(it.id));
+  let badge = $('.badge', b);
+  if (!unseen.length) {
+    if (badge) badge.remove();
+    return;
+  }
+  if (!badge) {
+    badge = document.createElement('span');
+    badge.className = 'badge';
+    b.append(badge);
+  }
+  badge.textContent = String(unseen.length);
+  badge.title = `${unseen.length} recording${unseen.length > 1 ? 's' : ''} failed`;
+  const news = unseen.filter((it) => !failedTold.has(it.id));
+  for (const it of news) failedTold.add(it.id);
+  if (news.length === 1) toast(`Recording failed: ${news[0].title}${news[0].detail ? `. ${news[0].detail}` : ''}`, 7000);
+  else if (news.length) toast(`${news.length} recordings failed. Recordings has them.`, 7000);
+}
+
+function seeFailed() {
+  localStorage.setItem(failedSeenKey, JSON.stringify(failedRecordings().map((it) => it.id)));
+  renderFailed();
 }
 
 const airingKey = (ch, p) => `${ch.number}@${Math.floor(p._s / 1000)}`;
@@ -524,8 +607,9 @@ function setView(v) {
     video.muted = !!state.userMuted;
     if (!(state.current && state.current.weather)) showWX(false);
   }
-  if (v === 'antenna') openAntenna();
   if (v === 'settings') openSettings();
+  if (v === 'tv' && state.staleStream) restartStream();
+  if (v === 'recordings') seeFailed();
   return undefined;
 }
 
@@ -576,6 +660,7 @@ async function tune(ch, { quiet = false, at = performance.now() } = {}) {
   state.current = ch;
   state.note = '';
   state.recording = null;
+  state.staleStream = false;
   const token = ++state.tuneToken;
   if (!quiet) showBanner(); else renderBanner();
   stage.classList.add('tuning');
@@ -1282,7 +1367,11 @@ function wireKeys() {
       return hideBanner();
     }
     if (k === 'g' || k === 'G') return setView(state.view === 'guide' ? 'tv' : 'guide');
-    if ((k === 'a' || k === 'A') && state.info.antenna !== false) return setView(state.view === 'antenna' ? 'tv' : 'antenna');
+    if ((k === 'a' || k === 'A') && state.info.antenna !== false) {
+      if (receptionShown()) return setView('tv');
+      if (state.view !== 'settings') setView('settings');
+      return openSettings('reception', 'list');
+    }
     if ((k === 'd' || k === 'D') && state.info.dvr) return setView(state.view === 'recordings' ? 'tv' : 'recordings');
     if ((k === 'w' || k === 'W') && state.view !== 'recordings') return setView(state.view === 'weather' ? 'tv' : 'weather');
     if (k === ',' || k === 's' || k === 'S') return setView(state.view === 'settings' ? 'tv' : 'settings');
@@ -1302,7 +1391,6 @@ function wireKeys() {
     if (k === 'f') return toggleFullscreen();
 
     if (state.view === 'guide') return guideKey(e);
-    if (state.view === 'antenna') return antennaKey(e);
     if (state.view === 'recordings') return recordingsKey(e);
     if (state.view === 'weather') return weatherKey(e);
     if (state.view !== 'tv') return;
@@ -1549,7 +1637,7 @@ function restoreFocus() {
   if (state.view === 'tv' && osd.open) osdFocus(osd.last);
   else if (state.view === 'guide') guideZone(guideUI.zone);
   else if (state.view === 'recordings') recZone(recUI.zone);
-  else if (state.view === 'antenna') antZone(antUI.zone);
+  else if (state.view === 'settings') settingsRefocus();
   else if (state.view === 'weather') wxFocus();
 }
 
@@ -1560,6 +1648,8 @@ function viewBack() {
   if (state.view === 'guide' && state.recPick) { closeRecordPick(); return true; }
   if (state.view === 'guide' && guideUI.zone !== 'grid') { guideZone('grid'); return true; }
   if (state.view === 'recordings' && recUI.zone === 'actions') { recZone('list'); return true; }
+  // In a tab of Settings, Back goes to the tabs, as on Android TV.
+  if (state.view === 'settings' && settingsUI.zone === 'list') { settingsZone('tabs'); return true; }
   return false;
 }
 
@@ -1757,7 +1847,7 @@ const REMOTE_KEYS = { Enter: 'OK', Escape: 'Back', ' ': 'Play/Pause', Arrows: 'A
 // controller or the remote has no such button.
 const keyHint = (key, label) => {
   if (prompts.pad) return glyph(key, label) || null;
-  if (androidTV) return REMOTE_KEYS[key] ? esc(REMOTE_KEYS[key]) : null;
+  if (platform === 'tv') return REMOTE_KEYS[key] ? esc(REMOTE_KEYS[key]) : null;
   return esc(label);
 };
 
@@ -2138,7 +2228,7 @@ function renderGuide() {
 
 // guideStatusHints names the guide's keys beside its filters.
 function guideStatusHints() {
-  if (androidTV && !prompts.pad) return 'Filters: Left to the top bar, then Down';
+  if (onRemote()) return 'Filters: Left to the top bar, then Down';
   return hints([['i', 'I', 'more'], ['', 'Shift F', 'favorite'], ['h', 'H', 'hide'], ['[', '[ ]', 'filter']]);
 }
 
@@ -2314,7 +2404,7 @@ function renderGuideDetail(ch, p) {
   const ok = keyHint('Enter', 'Enter');
   const when = !live ? `Starts in ${humanMinutes(Math.round((p._s - now) / MIN))}  |  ${ok} for more` : p && p._e <= now ? `Ended ${clock(p._e)}  |  ${ok} to watch ${esc(ch.number)}` : `${ok} to watch`;
   const more = !live ? '' : prompts.pad ? hints([['i', 'I', 'for more']]) : `hold ${ok} for more`;
-  const rec = state.info.dvr && p && p._e > now && !ch.weather && !ch.custom && !prompts.pad && !androidTV ? '  |  R record, Shift R series, N new only' : '';
+  const rec = state.info.dvr && p && p._e > now && !ch.weather && !ch.custom && onKeys() ? '  |  R record, Shift R series, N new only' : '';
   f(g, 'hint').innerHTML = `${when}${more ? `, ${more}` : ''}${rec}`;
   renderGuideActions(ch, p);
   const art = f(g, 'art');
@@ -2344,7 +2434,7 @@ function applySignal(sig) {
   }
   state.sigStamp++;
   const sw = state.antenna.sweep;
-  if (was && was.running && !sw.running && state.view === 'antenna') {
+  if (was && was.running && !sw.running && receptionShown()) {
     toast(sw.note ? `Measure now ${sw.note}` : `Measured ${sw.done} RF channels`, 4000);
   }
   // A channel scan just finished: its channels are the lineup now.
@@ -2372,7 +2462,7 @@ async function loadSignal() {
     signalBusy = false;
     signalAt = Date.now();
   }
-  if (state.view === 'antenna') renderAntenna();
+  if (receptionShown()) renderAntenna();
   if (state.view === 'guide') renderGuide();
   if (state.view === 'tv' && $('#banner').classList.contains('show')) renderBanner();
 }
@@ -2384,7 +2474,7 @@ function signalTick() {
   if (!state.info || state.info.antenna === false || document.hidden) return;
   const running = !!(state.antenna && (state.antenna.sweep.running || state.antenna.tuner.scanning));
   const banner = state.view === 'tv' && state.current && !state.current.own && $('#banner').classList.contains('show');
-  const every = running ? 2000 : state.view === 'antenna' || banner ? 10_000 : state.view === 'guide' ? 30_000 : 0;
+  const every = running ? 2000 : receptionShown() || banner ? 10_000 : state.view === 'guide' ? 30_000 : 0;
   if (every && Date.now() - signalAt >= every - 100) loadSignal();
 }
 
@@ -2456,84 +2546,79 @@ function wireAntenna() {
 }
 
 // Reception's parts take the focus in turn (data-zone): the RF channels'
-// table, and the rail beside it, Left from the table: the tuner's card and
-// Measure now. OK on an RF channel with channels watches the first.
+// table, and above it a row of the tuner's card, Measure now and Scan. OK
+// on an RF channel with channels watches the first. Left from either goes
+// back to Settings' tabs.
 const antUI = { zone: 'table', key: 'measure' };
 
-function openAntenna() {
-  renderAntenna();
-  signalAt = 0;
-  antZone(antRows().length ? 'table' : 'rail');
-}
-
-const antRail = () => $$('#antenna .rail .fx').filter(isShown);
+const antHead = () => $$('#antenna .a-head .fx').filter(isShown);
 
 function antZone(zone, key = '') {
   antUI.zone = zone;
   $('#antenna').dataset.zone = zone;
   if (key) antUI.key = key;
-  if (state.dock >= 0 || state.view !== 'antenna') return;
+  if (state.dock >= 0 || !receptionShown() || settingsUI.zone !== 'list') return;
   renderRFDetail(); // its OK hint is the table's
   if (zone === 'table') {
     blurIn($('#antenna'));
     scrollRF();
     return;
   }
-  const items = antRail();
-  focusEl(items.find((el) => el.dataset.act === antUI.key) || items[items.length - 1]);
+  const items = antHead();
+  focusEl(items.find((el) => el.dataset.act === antUI.key) || items[0]);
 }
 
 function antRefocus() {
-  if (state.view !== 'antenna' || state.dock >= 0 || antUI.zone !== 'rail') return;
+  if (!receptionShown() || state.dock >= 0 || settingsUI.zone !== 'list' || antUI.zone !== 'head') return;
   const el = document.activeElement;
-  if (!$('#antenna').contains(el) || !isShown(el)) antZone('rail');
+  if (!$('#antenna').contains(el) || !isShown(el)) antZone('head');
 }
 
+// antennaKey handles a key in Reception, reporting whether it did.
 function antennaKey(e) {
-  if (antUI.zone === 'rail') {
-    const items = antRail();
+  if (antUI.zone === 'head') {
+    const items = antHead();
     const el = document.activeElement;
     const i = items.indexOf(el);
     switch (e.key) {
-      case 'ArrowUp': if (i > 0) focusEl(items[i - 1]); else openDock(); break;
-      case 'ArrowDown': if (i < 0) antZone('rail'); else if (i < items.length - 1) focusEl(items[i + 1]); break;
-      case 'ArrowRight': if (antRows().length) antZone('table'); break;
-      case 'ArrowLeft': openDock(); break;
+      case 'ArrowUp': openDock(); break;
+      case 'ArrowLeft': if (i > 0) focusEl(items[i - 1]); else settingsZone('tabs'); break;
+      case 'ArrowRight': if (i < 0) antZone('head'); else if (i < items.length - 1) focusEl(items[i + 1]); break;
+      case 'ArrowDown': if (antRows().length) antZone('table'); break;
       case 'Enter':
         if (el && el.dataset.act === 'measure') measureNow();
         else if (el && el.dataset.act === 'scan') scanChannels();
-        else if (i < 0) antZone('rail');
+        else if (i < 0) antZone('head');
         break;
-      default: return;
+      default: return false;
     }
     // Where the focus comes back to, from the dock.
     const now = document.activeElement;
     if (now && now.dataset.act && $('#antenna').contains(now)) antUI.key = now.dataset.act;
     e.preventDefault();
-    return;
+    return true;
   }
   const rows = antRows();
   let i = rows.indexOf(state.aRF);
   switch (e.key) {
     case 'ArrowUp':
-      if (i <= 0) { e.preventDefault(); openDock(); return; }
+      if (i <= 0) { e.preventDefault(); antZone('head'); return true; }
       i--;
       break;
     case 'ArrowDown': i = Math.min(rows.length - 1, i + 1); break;
-    case 'PageDown': i = Math.min(rows.length - 1, i + 8); break;
-    case 'PageUp': i = Math.max(0, i - 8); break;
-    case 'ArrowLeft': e.preventDefault(); antZone('rail'); return;
+    case 'ArrowLeft': e.preventDefault(); settingsZone('tabs'); return true;
     case 'Enter': {
       e.preventDefault();
       const m = state.byRF.get(state.aRF);
       const ch = m && m.channels.length && findChannel(m.channels[0]);
       if (ch) watchChannel(ch);
-      return;
+      return true;
     }
-    default: return;
+    default: return false;
   }
   e.preventDefault();
   pickRF(rows[Math.max(0, i)]);
+  return true;
 }
 
 // antMuxes is the RF channels to list: those the scan found (by RF), then
@@ -2817,14 +2902,22 @@ function renderNextGen() {
 }
 
 // ---------- settings ----------
-// Settings is one list of rows by section, for a remote or a controller
-// first (a mouse and a keyboard work too): Up and Down move, Left and Right
+// More is Settings: a tab for each area in the rail, and beside it the
+// tab's rows, or Reception's measurements. For a remote or a controller
+// first (a mouse and a keyboard work too). On the tabs Up and Down pick
+// one, Right or OK goes into it. In a list Up and Down move, Left and Right
 // change a choice or a switch, Enter switches, runs or opens a list (hidden
-// channels, the controls, data sources), Esc goes back. Up from the first
-// row, or Left on a row with nothing to change, moves to the dock. Changes
-// are saved as they're made. The server's address and token need a
-// keyboard: Enter on their row puts the cursor in them.
-const settingsUI = { at: 0, sub: null, from: 0, rows: [], sections: [], pending: {}, timers: {}, tested: '' };
+// channels, the controls, data sources), and Left on a row with nothing to
+// change goes back to the tabs. Page Up and Down (a controller's LB and
+// RB) change tab anywhere, Up from the top moves to the dock, and Esc goes
+// back. Changes are saved as they're made. The server's address and token
+// need a keyboard: Enter on their row puts the cursor in them.
+const settingsUI = { tab: 'display', zone: 'tabs', at: 0, sub: null, from: 0, rows: [], pending: {}, timers: {}, tested: '' };
+
+// SETTINGS_TABS are the areas in the rail's order, [id, label]; a row's
+// section is its tab's label.
+const SETTINGS_TABS = [['display', 'Display'], ['watching', 'Watching'], ['channels', 'Channels'], ['reception', 'Reception'],
+  ['recordings', 'Recordings'], ['server', 'Server'], ['about', 'About']];
 
 const AUDIO_LANGS = [['', 'As broadcast'], ['en', 'English'], ['es', 'Spanish'], ['fr', 'French'], ['ko', 'Korean'],
   ['vi', 'Vietnamese'], ['zh', 'Chinese'], ['ru', 'Russian'], ['pt', 'Portuguese']];
@@ -2832,7 +2925,7 @@ const GUIDE_HOURS = [6, 12, 24, 36, 48, 72];
 const WATCHED = [[0, 'Keep them'], [1, 'Delete after a day'], [7, 'Delete after a week'], [30, 'Delete after a month']];
 const SETTINGS_LISTS = { hidden: 'Hidden channels', controls: 'Remote, controller and keys', sources: 'Data sources' };
 // How to hide a channel, with the keys there are.
-const HIDE_HOW = () => (androidTV && !prompts.pad ? 'In the guide, hold OK on a channel\'s program: Hide channel' : 'In the guide, H hides a channel');
+const HIDE_HOW = () => (onRemote() ? 'In the guide, hold OK on a channel\'s program: Hide channel' : 'In the guide, H hides a channel');
 
 // padNames names face buttons ("A, Y") as the pad in use labels them, by
 // their place in the standard mapping.
@@ -2888,19 +2981,79 @@ function wireSettings() {
     if (e.target.name === 'server' || e.target.name === 'token') saveServer(e.target.name, e.target.value);
   });
   list.addEventListener('focusout', () => setTimeout(renderSettings));
-  f(v, 'index').addEventListener('click', (e) => {
-    const b = e.target.closest('[data-section]');
-    if (!b) return;
-    if (settingsUI.sub) closeSettingsList();
-    moveSetting(settingsUI.rows.findIndex((r) => r.section === b.dataset.section));
+  f(v, 'tabs').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-tab]');
+    if (b) pickSettingsTab(b.dataset.tab, 'list');
   });
 }
 
-// openSettings shows the list from the top level, where it was left.
-function openSettings() {
+// settingsTabs are the tabs there are: Reception with an antenna, and
+// those with rows.
+function settingsTabs() {
+  const sections = new Set(settingsRows().map((r) => r.section));
+  return SETTINGS_TABS.filter(([k, label]) => (k === 'reception' ? !!state.info && state.info.antenna !== false : sections.has(label)));
+}
+
+const receptionShown = () => state.view === 'settings' && settingsUI.tab === 'reception';
+
+// openSettings shows a tab, the one left open when none is asked for, with
+// the focus on the tabs or in the tab (zone 'list').
+function openSettings(tab = settingsUI.tab, zone = 'tabs') {
   settingsUI.sub = null;
+  pickSettingsTab(tab, zone);
+}
+
+function pickSettingsTab(tab, zone = settingsUI.zone) {
+  const tabs = settingsTabs();
+  if (!tabs.some(([k]) => k === tab)) tab = tabs.length ? tabs[0][0] : 'display';
+  if (tab !== settingsUI.tab) {
+    settingsUI.at = 0;
+    settingsUI.sub = null;
+  }
+  settingsUI.tab = tab;
+  const reception = tab === 'reception';
+  $('#settings').dataset.tab = tab;
+  f($('#settings'), 'list').hidden = reception;
+  $('#antenna').hidden = !reception;
   renderSettings();
-  moveSetting(settingsUI.at);
+  if (reception) {
+    renderAntenna();
+    signalAt = 0; // fresh measurements
+    if (zone === 'list') antUI.zone = antRows().length ? 'table' : 'head';
+  } else f($('#settings'), 'list').scrollTop = 0;
+  settingsZone(zone);
+}
+
+// settingsZone puts the focus on the tabs, or in the tab.
+function settingsZone(zone) {
+  settingsUI.zone = zone;
+  $('#settings').dataset.zone = zone;
+  if (state.dock >= 0 || state.view !== 'settings') return;
+  if (zone === 'tabs') {
+    blurIn($('#settings .s-main'));
+    focusEl($(`#settings [data-tab="${settingsUI.tab}"]`));
+  } else if (settingsUI.tab === 'reception') {
+    blurIn($('#settings .rail'));
+    antZone(antUI.zone);
+  } else {
+    blurIn($('#settings .rail'));
+    moveSetting(settingsUI.at);
+  }
+  renderSettingsHint();
+}
+
+function settingsRefocus() {
+  if (state.view !== 'settings' || state.dock >= 0) return;
+  settingsZone(settingsUI.zone);
+}
+
+// stepSettingsTab moves to the tab before or after, staying in tabs or
+// in the tab.
+function stepSettingsTab(dir) {
+  const tabs = settingsTabs();
+  const i = tabs.findIndex(([k]) => k === settingsUI.tab);
+  const next = tabs[Math.max(0, Math.min(tabs.length - 1, i + dir))];
+  if (next && next[0] !== settingsUI.tab) pickSettingsTab(next[0]);
 }
 
 const settingsValue = (r) => (r.id in settingsUI.pending ? settingsUI.pending[r.id] : r.get());
@@ -2916,6 +3069,11 @@ function settingsRows() {
   add('Display', {
     id: 'scale', kind: 'choice', label: 'Interface size', sub: 'Larger reads better across a room',
     choices: SCALES.map((x) => [x, x ? `${x}%` : `Auto, ${autoScale()}%`]), get: () => s.scale || 0, set: setScale,
+  });
+  const auto = PLATFORMS.find(([k]) => k === detectedPlatform)[1];
+  add('Display', {
+    id: 'platform', kind: 'choice', label: 'Layout', subFor: (k) => PLATFORM_SUBS[k || detectedPlatform],
+    choices: [['', `Auto, ${auto}`], ...PLATFORMS], get: () => localStorage.getItem(platformKey) || '', set: setPlatform,
   });
   const detected = PAD_LABELS.find(([k]) => k === prompts.detected)[1];
   add('Display', {
@@ -3009,21 +3167,13 @@ function renderSettings() {
   // Not under the cursor while something is typed.
   if (list.contains(document.activeElement) && document.activeElement.matches('input')) return;
   if (state.view !== 'settings') settingsUI.sub = null;
-  const main = settingsRows();
-  settingsUI.sections = [...new Set(main.map((r) => r.section))];
-  const rows = settingsUI.rows = settingsUI.sub ? settingsList(settingsUI.sub) : main;
+  renderSettingsTabs();
+  const label = (SETTINGS_TABS.find(([k]) => k === settingsUI.tab) || [])[1];
+  const rows = settingsUI.rows = settingsUI.sub ? settingsList(settingsUI.sub) : settingsRows().filter((r) => r.section === label);
   settingsUI.at = Math.min(settingsUI.at, Math.max(0, rows.length - 1));
   let html = '';
-  let section = '';
-  rows.forEach((r, i) => {
-    if (r.section !== section) {
-      html += `${section ? '</div>' : ''}<h2 class="s-head">${esc(r.section)}</h2><div class="s-group">`;
-      section = r.section;
-    }
-    html += settingsRowHTML(r, i);
-  });
-  if (section) html += '</div>';
-  if (settingsUI.sub === 'controls' && androidTV) {
+  if (rows.length) html += `<h2 class="s-head">${esc(rows[0].section)}</h2><div class="s-group">${rows.map(settingsRowHTML).join('')}</div>`;
+  if (settingsUI.sub === 'controls' && platform === 'tv') {
     html += '<p class="s-note">On the remote: OK brings up the controls over the picture, with Guide first, so OK twice opens the guide. In them Left and Right move along a row, Up and Down between rows: the timeline (Left and Right skip), the buttons (play, captions, record, last channel and more), and the views at the top. On live TV Up and Down change channel, and Left and Right skip. In the guide OK watches what\'s on, and holding OK offers more: record, series, favorite, hide. Back goes back. Remotes with them: digits tune a channel, Channel up and down change channel, Play/Pause pauses.</p>';
   } else if (settingsUI.sub === 'controls') {
     html += '<p class="s-note">Enter on TV brings up the controls, with the guide, captions, recording, the last channel and the views; Esc puts them away. Digits tune a channel. The remote\'s Fast forward and Rewind skip, Record records. Keyboard only: L last channel, C captions, V audio track, Shift F favorite, R record, D recordings, A reception, F full screen. In the guide hold Enter, or press I, for a program\'s actions. In Steam, give Airwaves the Gamepad controller layout, not a keyboard one.</p>';
@@ -3031,7 +3181,6 @@ function renderSettings() {
   const keep = list.scrollTop;
   list.innerHTML = html;
   list.scrollTop = keep;
-  renderSettingsIndex();
   renderSettingsHint();
 }
 
@@ -3055,16 +3204,27 @@ function settingsRowHTML(r, i) {
     <div class="s-label"><b>${esc(r.label)}</b>${sub ? `<small>${esc(sub)}</small>` : ''}</div><div class="s-value">${value}</div></div>`;
 }
 
-// renderSettingsIndex lists the sections beside the rows, marking where the
-// focus is. It follows the focus; the arrows never land on it.
-function renderSettingsIndex() {
-  const r = settingsUI.sub ? null : settingsUI.rows[settingsUI.at];
-  const cur = r ? r.section : (settingsUI.from >= 0 && settingsRows()[settingsUI.from] || {}).section;
-  f($('#settings'), 'index').innerHTML = settingsUI.sections.map((s) => `<button type="button" class="rm-item ${s === cur ? 'on' : ''}" data-section="${esc(s)}" tabindex="-1">
-    <span class="rm-label">${esc(s)}</span></button>`).join('');
+// renderSettingsTabs lists the tabs in the rail, the open one marked.
+function renderSettingsTabs() {
+  const box = f($('#settings'), 'tabs');
+  const html = settingsTabs().map(([k, label]) => `<button type="button" class="rm-item fx ${k === settingsUI.tab ? 'on' : ''}" data-tab="${k}" role="tab" aria-selected="${k === settingsUI.tab}">
+    <span class="rm-label">${esc(label)}</span></button>`).join('');
+  if (box.innerHTML === html) return;
+  const had = box.contains(document.activeElement);
+  box.innerHTML = html;
+  if (had) focusEl($(`[data-tab="${settingsUI.tab}"]`, box), false);
 }
 
 function renderSettingsHint() {
+  const hint = f($('#settings'), 'hint');
+  if (settingsUI.zone === 'tabs') {
+    hint.innerHTML = hints([['UpDown', 'Up, Down', 'picks'], ['Enter', 'Enter', 'goes in'], ['Escape', 'Esc', 'leaves']]);
+    return;
+  }
+  if (settingsUI.tab === 'reception') {
+    hint.innerHTML = hints([['Arrows', 'Arrows', 'move'], ['Enter', 'Enter', 'measures, or watches the RF channel picked'], ['Escape', 'Esc', 'back to the tabs']]);
+    return;
+  }
   const r = settingsUI.rows[settingsUI.at];
   const top = settingsUI.at === 0 && !settingsUI.sub;
   const items = [['UpDown', 'Up, Down', top ? 'move, Up to the menu' : 'move']];
@@ -3073,8 +3233,8 @@ function renderSettingsHint() {
   if (r && r.kind === 'open') items.push(['Enter', 'Enter', 'opens']);
   if (r && r.kind === 'action') items.push(['Enter', 'Enter', r.verb || 'runs']);
   if (r && r.kind === 'text') items.push(['Enter', 'Enter', androidTV ? 'types in it' : 'types in it, with a keyboard']);
-  items.push(['Escape', 'Esc', settingsUI.sub ? 'back' : 'leaves Settings']);
-  f($('#settings'), 'hint').innerHTML = hints(items);
+  items.push(['Escape', 'Esc', settingsUI.sub ? 'back' : 'back to the tabs']);
+  hint.innerHTML = hints(items);
 }
 
 function moveSetting(i, scroll = true) {
@@ -3089,13 +3249,19 @@ function moveSetting(i, scroll = true) {
     if (scroll && settingsUI.at === 0) list.scrollTop = 0;
     else if (scroll) el.scrollIntoView({ block: 'nearest' });
   }
-  renderSettingsIndex();
   renderSettingsHint();
 }
 
 // settingsKey handles a key in Settings, or returns false to leave it to
-// the keys every view has (Esc at the top level goes back to TV).
+// the keys every view has (Esc goes back to TV).
 function settingsKey(e) {
+  if (!settingsUI.sub && (e.key === 'PageUp' || e.key === 'PageDown' || e.key === '[' || e.key === ']')) {
+    e.preventDefault();
+    stepSettingsTab(e.key === 'PageDown' || e.key === ']' ? 1 : -1);
+    return true;
+  }
+  if (settingsUI.zone === 'tabs') return settingsTabsKey(e);
+  if (settingsUI.tab === 'reception') return antennaKey(e);
   const r = settingsUI.rows[settingsUI.at];
   switch (e.key) {
     case 'ArrowUp':
@@ -3103,12 +3269,12 @@ function settingsKey(e) {
       else if (!settingsUI.sub) openDock();
       break;
     case 'ArrowDown': moveSetting(settingsUI.at + 1); break;
-    case 'PageUp': case 'PageDown': moveSetting(settingsPage(e.key === 'PageDown' ? 1 : -1)); break;
+    case 'PageUp': case 'PageDown': moveSetting(settingsUI.at + (e.key === 'PageDown' ? 8 : -8)); break;
     case 'ArrowLeft':
       if (r && r.kind === 'choice') stepSetting(r, -1);
       else if (r && r.kind === 'switch') { if (settingsValue(r)) changeSetting(r, false); }
       else if (settingsUI.sub) closeSettingsList();
-      else openDock();
+      else settingsZone('tabs');
       break;
     case 'ArrowRight':
       if (r && r.kind === 'choice') stepSetting(r, 1);
@@ -3129,24 +3295,20 @@ function settingsKey(e) {
   return true;
 }
 
-// settingsPage is where Page Up or Down goes: the next section, or the
-// start of this one (the one before when already there); in a list, eight
-// rows on.
-function settingsPage(dir) {
-  const rows = settingsUI.rows;
-  const at = settingsUI.at;
-  if (settingsUI.sub) return at + dir * 8;
-  const cur = rows[at].section;
-  if (dir > 0) {
-    const i = rows.findIndex((r, j) => j > at && r.section !== cur);
-    return i < 0 ? rows.length - 1 : i;
+// settingsTabsKey: Up and Down pick a tab (Up from the first to the dock),
+// Right or OK goes into it, Left to the dock.
+function settingsTabsKey(e) {
+  const tabs = settingsTabs();
+  const i = tabs.findIndex(([k]) => k === settingsUI.tab);
+  switch (e.key) {
+    case 'ArrowUp': if (i > 0) stepSettingsTab(-1); else openDock(); break;
+    case 'ArrowDown': stepSettingsTab(1); break;
+    case 'ArrowRight': case 'Enter': settingsZone('list'); break;
+    case 'ArrowLeft': openDock(); break;
+    default: return false;
   }
-  let i = at;
-  while (i > 0 && rows[i - 1].section === cur) i--;
-  if (i < at || i === 0) return i;
-  const prev = rows[i - 1].section;
-  while (i > 0 && rows[i - 1].section === prev) i--;
-  return i;
+  e.preventDefault();
+  return true;
 }
 
 function stepSetting(r, dir, wrap = false) {
@@ -3300,7 +3462,9 @@ async function saveServer(name, value) {
 // On the Android TV app sizes are a 1080p screen's, whatever the WebView's
 // (fit, from web.js).
 const SCALES = [0, 100, 115, 130, 150]; // 0 is Auto
-const autoScale = () => (state.boot && state.boot.autoScale) || 100;
+// Auto is the app's for the platform it says it is; for another, chosen in
+// Settings, a desktop's 100% or 125% across a room.
+const autoScale = () => (platform === detectedPlatform ? (state.boot && state.boot.autoScale) || 100 : platform === 'desktop' ? 100 : 125);
 let pageZoom = 0;
 
 function applyScale() {
@@ -3328,6 +3492,21 @@ function applyScale() {
   root.classList.toggle('tight', z / fit > 1 && (native ? innerHeight : innerHeight / z) < 900);
   fitWX();
   if (state.view === 'guide' && state.report) renderGuide();
+}
+
+const PLATFORM_SUBS = {
+  desktop: 'For a mouse and a keyboard',
+  console: 'For a controller, across a room',
+  tv: 'For a TV remote: arrows, OK and Back',
+};
+
+async function setPlatform(k) {
+  if (k) localStorage.setItem(platformKey, k); else localStorage.removeItem(platformKey);
+  if (applyPlatform()) {
+    applyScale();
+    renderHints();
+  }
+  toast(`Layout: ${k ? PLATFORMS.find(([x]) => x === k)[1] : `automatic, ${PLATFORMS.find(([x]) => x === detectedPlatform)[1]}`}`, 1800);
 }
 
 function setPadLabels(k) {
@@ -3369,7 +3548,7 @@ function renderRecordingBanner(b, it) {
   const pos = (state.recOffset || 0) + (video.currentTime || 0);
   f(b, 'progress').style.width = it.duration ? `${Math.min(100, (pos / it.duration) * 100)}%` : '0';
   f(b, 'desc').textContent = it.description || '';
-  f(b, 'next').innerHTML = hints([['LeftRight', 'Arrows', 'skip'], ...(androidTV || prompts.pad ? [] : [[' ', 'Space', 'pauses']]), ['Enter', 'Enter', 'controls'], ['Escape', 'Esc', 'returns to live TV']]);
+  f(b, 'next').innerHTML = hints([['LeftRight', 'Arrows', 'skip'], ...(onKeys() ? [[' ', 'Space', 'pauses']] : []), ['Enter', 'Enter', 'controls'], ['Escape', 'Esc', 'returns to live TV']]);
   f(b, 'meter').innerHTML = '';
   f(b, 'tier').textContent = sizeLabel(it.sizeBytes);
   f(b, 'tier').style.color = '';
@@ -3474,7 +3653,7 @@ function renderRecordings() {
   const tab = state.recTab || 'library';
   const sel = state.recSelBy || (state.recSelBy = { library: 0, upcoming: 0, series: 0 });
   for (const k of Object.keys(sel)) sel[k] = Math.min(sel[k], Math.max(0, lists[k].length - 1));
-  const act = (name, label, it, cls = '') => `<button type="button" class="act fx${cls ? ` ${cls}` : ''}${armed(name, it) ? ' armed' : ''}" data-act="${name}">${armed(name, it) ? `${androidTV ? 'OK' : 'Press'} again to ${ARMED[name]}` : label}</button>`;
+  const act = (name, label, it, cls = '') => `<button type="button" class="act fx${cls ? ` ${cls}` : ''}${armed(name, it) ? ' armed' : ''}" data-act="${name}">${armed(name, it) ? `${onRemote() ? 'OK' : 'Press'} again to ${ARMED[name]}` : label}</button>`;
 
   f(v, 'menu').innerHTML = REC_TABS.map(([k, label]) => `<button type="button" class="rm-item fx ${k === tab ? 'on' : ''}" data-tab="${k}"><span class="rm-label">${label}</span><span class="rm-count">${lists[k].length}</span></button>`).join('');
   $$('.r-panel', v).forEach((p) => p.classList.toggle('on', p.dataset.panel === tab));
@@ -3519,12 +3698,12 @@ function renderRecordings() {
       <div class="r-what"><div class="r-name">${esc(r.title)}</div><div class="r-sub">${esc(r.channel)}  |  ${r.newOnly ? 'New episodes' : 'Every episode'}  |  ${r.keep ? `Keep newest ${r.keep}` : 'Keep all'}</div></div>
       <div class="r-acts">${i === sel.series ? act('keep', r.keep ? `Keeps newest ${r.keep}` : 'Keeps all', r) + act('newonly', r.newOnly ? 'New episodes only' : 'Every episode', r) + act('stop', 'Stop series', r) : ''}</div>
     </li>`).join('') : '<li class="r-empty">No series recordings. In the guide, OK on a show to come, then Record series.</li>';
-  if (lists.series.length && !prompts.pad && !androidTV) f(v, 'rules').insertAdjacentHTML('beforeend', '<li class="r-hint">K changes how many to keep  |  N new episodes only  |  Delete stops the series</li>');
+  if (lists.series.length && onKeys()) f(v, 'rules').insertAdjacentHTML('beforeend', '<li class="r-hint">K changes how many to keep  |  N new episodes only  |  Delete stops the series</li>');
   recRefocus();
 }
 
 function recHint(cur) {
-  if (androidTV && !prompts.pad) return 'OK for the actions, Left for the other lists';
+  if (onRemote()) return 'OK for the actions, Left for the other lists';
   return hints([['Enter', 'Enter', 'for the actions'], ...(resumable(cur) ? [['', 'Shift Enter', 'plays from the start']] : []), ['w', 'W', cur.watched ? 'unwatched' : 'watched'], ['', 'Delete', 'removes']]);
 }
 
@@ -3704,6 +3883,7 @@ const resumable = (it) => !!it && !it.watched && it.position > 30 && it.duration
 async function playRecording(it, from = 0) {
   if (!it || it.status === 'failed') return toast('That recording failed and cannot be played');
   const token = ++state.tuneToken;
+  state.staleStream = false;
   state.recording = it;
   showWX(false);
   setView('tv');
@@ -3746,7 +3926,7 @@ async function hideChannel(ch) {
   state.lastHidden = ch.key;
   await saveAppSettings({ ...state.settings, hidden: [...hidden] });
   buildLineup();
-  toast(`Hid ${ch.number} ${ch.network || displayCall(ch)}. ${androidTV && !prompts.pad ? 'Settings, Hidden channels shows it again.' : 'Press U to undo.'}`, 5000);
+  toast(`Hid ${ch.number} ${ch.network || displayCall(ch)}. ${onKeys() ? 'Press U to undo.' : 'Settings, Hidden channels shows it again.'}`, 5000);
   if (state.view === 'guide') renderGuide();
 }
 
@@ -3792,8 +3972,40 @@ function skip(seconds) {
 }
 
 function togglePause() {
+  if (video.paused && state.staleStream) return restartStream();
   if (video.paused) video.play().catch(() => {}); else video.pause();
   showTimeshift();
+}
+
+// ---------- heartbeat ----------
+// While a stream is open, playing or paused, the app says so every 30 s:
+// the server stops streams nobody fetches from for 2 minutes, freeing
+// their tuners. One it stopped anyway (the app was asleep, or in the
+// background) starts again at once if it was playing on TV, else on the
+// next Play or return to TV.
+async function heartbeat() {
+  if (!(video.src || state.hls) || state.staleStream) return;
+  let alive = true;
+  try {
+    alive = await api().Heartbeat();
+  } catch (e) {
+    return; // the server is away; the player has its own errors
+  }
+  if (alive) return;
+  log('info', 'the server had stopped the stream');
+  if (state.view === 'tv' && !video.paused) restartStream();
+  else state.staleStream = true;
+}
+
+// restartStream starts the stream on again: the channel, or the recording
+// from where it is.
+function restartStream() {
+  state.staleStream = false;
+  if (state.recording) {
+    const it = state.recording;
+    return playRecording(it, (state.recOffset || 0) + (video.currentTime || 0));
+  }
+  return state.current ? tune(state.current, { quiet: true }) : undefined;
 }
 
 function goLive() {

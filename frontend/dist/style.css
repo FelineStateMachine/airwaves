@@ -89,7 +89,7 @@ body.mode-guide #stage {
 }
 /* Every other view keeps the TV in the same top-left corner as the guide. */
 :root { --pip-w: 224px; --pip-h: 126px; --pip-gap: 252px; }
-body.mode-antenna #stage, body.mode-recordings #stage, body.mode-settings #stage, body.mode-weather #stage {
+body.mode-recordings #stage, body.mode-settings #stage, body.mode-weather #stage {
   z-index: 25; top: 46px; left: 28px; width: var(--pip-w); height: var(--pip-h);
   border-radius: 4px; box-shadow: 0 0 0 1px var(--line-2), 0 18px 40px rgba(0,0,0,.7); cursor: pointer;
 }
@@ -186,7 +186,7 @@ body.mode-tv #banner.show { transform: none; opacity: 1; }
   background: radial-gradient(120% 80% at 70% 0%, #11141a 0%, var(--ink) 60%);
   transition: opacity .35s, visibility 0s .35s;
 }
-body.mode-guide #guide, body.mode-antenna #antenna, body.mode-settings #settings, body.mode-recordings #recordings, body.mode-weather #weather {
+body.mode-guide #guide, body.mode-settings #settings, body.mode-recordings #recordings, body.mode-weather #weather {
   opacity: 1; pointer-events: auto; visibility: visible; transition: opacity .35s;
 }
 
@@ -274,8 +274,8 @@ body.mode-guide #guide, body.mode-antenna #antenna, body.mode-settings #settings
 .g-now { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--amber); pointer-events: none; box-shadow: 0 0 14px rgba(255,178,36,.45); }
 .g-now span { position: absolute; top: 0; left: -5px; border: 6px solid transparent; border-top: 8px solid var(--amber); }
 
-/* ---------- Reception ---------- */
-/* Rail layout shared by reception, recordings and settings: the TV preview
+/* ---------- Rail views ---------- */
+/* Rail layout shared by recordings, settings and weather: the TV preview
    sits at the top of a left rail, with that view's menu beneath it. */
 .view.railed { display: grid; grid-template-columns: var(--pip-w) minmax(0, 1fr); gap: 34px; padding: 46px 28px 22px; }
 .rail { padding-top: calc(var(--pip-h) + 24px); display: flex; flex-direction: column; gap: 30px; min-height: 0; }
@@ -296,7 +296,15 @@ body.mode-guide #guide, body.mode-antenna #antenna, body.mode-settings #settings
 .rail-stats dd { margin: 4px 0 0; font: 800 36px/1 var(--f-display); color: var(--paper); }
 .rail-stats dd small { display: block; margin-top: 5px; font: 400 12px/1.35 var(--f-body); color: var(--muted); }
 .main { min-height: 0; }
-/* The tuner, and Measure now with its progress, in the rail. */
+/* ---------- Reception (a tab of Settings) ---------- */
+/* Above the map and the table: the tuner, Measure now with its progress,
+   Scan, and how many channels there are. */
+#antenna { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 22px; min-height: 0; }
+#antenna[hidden] { display: none; }
+.a-head { display: grid; grid-template-columns: minmax(220px, 1.2fr) minmax(190px, 1fr) minmax(190px, 1fr) auto; gap: 18px; align-items: start; }
+.a-head .a-measure { margin-top: 0; }
+.a-stats { grid-auto-flow: column; gap: 26px; padding: 4px 6px 0; }
+.a-stats dd { font-size: 30px; }
 .a-tuner { display: grid; gap: 3px; padding: 12px 14px; border-radius: 3px; background: var(--ink-2); box-shadow: inset 3px 0 0 var(--line-2); }
 .at-label { font: 500 10px var(--f-mono); letter-spacing: .16em; text-transform: uppercase; color: var(--faint); }
 .at-name { font: 800 30px/1 var(--f-display); color: var(--paper); margin: 3px 0 2px; }
@@ -392,6 +400,7 @@ body.mode-guide #guide, body.mode-antenna #antenna, body.mode-settings #settings
    a controller: the focused row is filled and outlined in amber. */
 #settings { grid-template-rows: minmax(0, 1fr); }
 .s-main { display: grid; grid-template-rows: minmax(0, 1fr) auto; min-height: 0; max-width: 940px; }
+#settings[data-tab="reception"] .s-main { max-width: none; }
 .s-list { overflow: auto; min-height: 0; padding: 4px 2px 48px; scrollbar-width: none; }
 .s-list::-webkit-scrollbar { display: none; }
 .s-head { margin: 28px 0 10px 18px; font: 500 11px var(--f-mono); letter-spacing: .16em; text-transform: uppercase; color: var(--amber); }
@@ -430,10 +439,9 @@ body.mouse-active .s-row:hover { background: var(--ink-3); } /* not under a rest
 .s-row.k-info { cursor: default; }
 .s-note { margin: 16px 20px 0; max-width: 80ch; font-size: 13px; color: var(--muted); }
 .s-hint { padding: 12px 20px 0; border-top: 1px solid var(--line); font: 400 12px var(--f-mono); letter-spacing: .04em; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* The sections beside the list: where the focus is, not a second menu. */
-.s-index .rm-item { padding: 6px 14px; color: var(--faint); }
-.s-index .rm-item .rm-label { font-size: 19px; }
-.s-index .rm-item.on { background: none; color: var(--amber); }
+/* The tabs, in the rail. */
+.s-tabs .rm-item { padding: 9px 14px; }
+.s-tabs .rm-item .rm-label { font-size: 21px; }
 .btn { border: 0; cursor: pointer; padding: 12px 18px; border-radius: 3px; background: var(--amber); color: var(--ink); font: 500 11px var(--f-mono); letter-spacing: .14em; text-transform: uppercase; justify-self: start; }
 .btn.ghost { background: none; color: var(--paper); box-shadow: inset 0 0 0 1px var(--line-2); }
 .btn:hover { filter: brightness(1.1); }
@@ -460,8 +468,10 @@ body.pad-input #dock kbd { padding: 0; box-shadow: none; }
 body.dock-nav #dock { opacity: 1; transform: translate(-50%, 0); }
 #dock button.pick kbd { color: var(--amber); }
 body.osd-open #dock { opacity: 1; transform: translate(-50%, 0); }
-/* Larger on a TV, where it's the way to every view. */
-body.android-tv #dock button { padding: 7px 15px 7px 11px; font-size: 13px; }
+/* Recordings that failed, until Recordings is opened. */
+#dock .badge { min-width: 17px; padding: 1px 5px; border-radius: 999px; background: var(--red); color: var(--paper); font: 600 10px/15px var(--f-mono); letter-spacing: 0; text-align: center; }
+/* Larger across a room, where it's the way to every view. */
+body.pf-tv #dock button, body.pf-console #dock button { padding: 7px 15px 7px 11px; font-size: 13px; }
 
 #boot { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; background: radial-gradient(90% 70% at 50% 40%, #12151b, var(--ink) 70%); transition: opacity .9s .2s, visibility 0s 1.1s; }
 body:not(.booting) #boot { opacity: 0; visibility: hidden; }
@@ -753,9 +763,9 @@ body.lite { --glow: 0 0 0 0 transparent; }
 .btn.fx:not(.ghost):focus { background-color: var(--amber); color: var(--ink); box-shadow: 0 0 0 2px var(--ink), 0 0 0 5px var(--amber), var(--glow); }
 .wx-main .fx:focus, .a-tuner.fx:focus { box-shadow: var(--ring-in), var(--glow); }
 body:not(.dock-nav) #guide[data-zone="grid"] .g-cell.sel,
-body:not(.dock-nav) .s-row.focus,
+body:not(.dock-nav) #settings[data-zone="list"] .s-row.focus,
 body:not(.dock-nav) #recordings[data-zone="list"] .r-item.sel,
-body:not(.dock-nav) #antenna[data-zone="table"] .a-table tr.sel {
+body:not(.dock-nav) #settings[data-zone="list"] #antenna[data-zone="table"] .a-table tr.sel {
   box-shadow: var(--ring-in), var(--glow); background: var(--focus-fill); transform: var(--lift);
 }
 body:not(.dock-nav) #recordings[data-zone="list"] .r-card.sel { box-shadow: var(--ring), var(--glow); transform: var(--lift); }
@@ -778,4 +788,4 @@ body:not(.dock-nav) #recordings[data-zone="list"] .r-card.sel { box-shadow: var(
 .act.fx.armed:focus { box-shadow: var(--ring), var(--glow); color: var(--red); }
 /* A field being typed in has the ring, not its row. */
 .boot-connect input:focus, .s-row input:focus { box-shadow: var(--ring); border-color: var(--amber); }
-body:not(.dock-nav) .s-row.focus:focus-within { box-shadow: inset 0 0 0 1px var(--line-2); transform: none; }
+body:not(.dock-nav) #settings[data-zone="list"] .s-row.focus:focus-within { box-shadow: inset 0 0 0 1px var(--line-2); transform: none; }

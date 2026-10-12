@@ -140,6 +140,10 @@
   // Before app.js's resize handler, which reads it.
   addEventListener('resize', () => { if (lastBoot) lastBoot.fit = fit(); });
 
+  // The Android TV app is the TV experience, a browser a desktop's;
+  // ?platform=desktop, console or tv says otherwise.
+  const platform = query.get('platform') || (tvApp ? 'tv' : 'desktop');
+
   async function boot() {
     const out = {
       settings: load(), info: { name: '', mode: '', version: '', tuner: {}, dvr: false, antenna: false }, config: {},
@@ -148,11 +152,12 @@
       // Lite on the Android TV app, a TV box like the Linux ones;
       // ?lite=1 or 0 turns it on or off anywhere, as AIRWAVES_LITE does.
       lite: query.get('lite') || (tvApp ? '1' : ''),
-      // Auto is 125% on a TV across the room, as under gamescope, else 100%.
-      autoScale: tvApp ? 125 : 100,
+      // Auto is 125% across a room, as under gamescope, else 100%.
+      autoScale: platform === 'desktop' ? 100 : 125,
       fit: fit(),
       nativeZoom: false,
       version: tvApp,
+      platform,
       // In a browser the server is the page's own; only the Android TV app
       // can switch to another.
       fixedServer: !(shell && shell.setServer),

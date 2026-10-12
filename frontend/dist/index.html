@@ -91,40 +91,6 @@
     </div>
   </section>
 
-  <!-- Reception: what the tuners measured, by RF channel (app.js) -->
-  <section id="antenna" class="view railed" aria-label="Reception">
-    <nav class="rail">
-      <div class="a-tuner fx" data-f="tuner" data-act="tuner" tabindex="-1"></div>
-      <div class="a-measure">
-        <button type="button" class="btn fx" data-act="measure" data-f="measure"><span data-f="mlabel">Measure now</span></button>
-        <div class="a-mprog" data-f="mprog" hidden><i data-f="mbar"></i></div>
-        <div class="a-mnote" data-f="mnote"></div>
-      </div>
-      <div class="a-measure">
-        <button type="button" class="btn fx" data-act="scan" data-f="scan">Scan for channels</button>
-        <div class="a-mnote" data-f="snote"></div>
-      </div>
-      <dl class="rail-stats" data-f="stats"></dl>
-    </nav>
-    <div class="main a-body">
-      <div class="a-left">
-        <div class="radar-box"><svg class="radar" viewBox="-226 -226 452 452" role="img" aria-label="Transmitter map"></svg></div>
-        <div class="a-detail" data-f="detail"></div>
-      </div>
-      <div class="a-right">
-        <div class="a-tablewrap">
-          <table class="a-table">
-            <thead><tr>
-              <th>RF</th><th>Transmitter</th><th>Channels</th><th class="c">Signal</th><th class="r">Quality</th><th class="r">Errors</th><th class="r">Measured</th>
-            </tr></thead>
-            <tbody></tbody>
-          </table>
-        </div>
-        <div class="a-nextgen" data-f="nextgen"></div>
-      </div>
-    </div>
-  </section>
-
   <!-- Weather -->
   <section id="weather" class="view railed" aria-label="Weather">
     <nav class="rail">
@@ -160,11 +126,45 @@
     </div>
   </section>
 
-  <!-- Settings: one list of rows for a remote or a controller (app.js) -->
+  <!-- More: Settings, a tab for each area, in the rail; most are a list of
+       rows for a remote or a controller, Reception is what the tuners
+       measured (app.js, settings and reception). -->
   <section id="settings" class="view railed" aria-label="Settings">
-    <nav class="rail"><div class="rail-menu s-index" data-f="index" aria-hidden="true"></div></nav>
+    <nav class="rail"><div class="rail-menu s-tabs" data-f="tabs" role="tablist"></div></nav>
     <div class="main s-main">
       <div class="s-list" data-f="list" role="list"></div>
+      <div id="antenna" class="s-pane" aria-label="Reception" hidden>
+        <div class="a-head">
+          <div class="a-tuner fx" data-f="tuner" data-act="tuner" tabindex="-1"></div>
+          <div class="a-measure">
+            <button type="button" class="btn fx" data-act="measure" data-f="measure"><span data-f="mlabel">Measure now</span></button>
+            <div class="a-mprog" data-f="mprog" hidden><i data-f="mbar"></i></div>
+            <div class="a-mnote" data-f="mnote"></div>
+          </div>
+          <div class="a-measure">
+            <button type="button" class="btn fx" data-act="scan" data-f="scan">Scan for channels</button>
+            <div class="a-mnote" data-f="snote"></div>
+          </div>
+          <dl class="rail-stats a-stats" data-f="stats"></dl>
+        </div>
+        <div class="a-body">
+          <div class="a-left">
+            <div class="radar-box"><svg class="radar" viewBox="-226 -226 452 452" role="img" aria-label="Transmitter map"></svg></div>
+            <div class="a-detail" data-f="detail"></div>
+          </div>
+          <div class="a-right">
+            <div class="a-tablewrap">
+              <table class="a-table">
+                <thead><tr>
+                  <th>RF</th><th>Transmitter</th><th>Channels</th><th class="c">Signal</th><th class="r">Quality</th><th class="r">Errors</th><th class="r">Measured</th>
+                </tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+            <div class="a-nextgen" data-f="nextgen"></div>
+          </div>
+        </div>
+      </div>
       <div class="s-hint" data-f="hint"></div>
     </div>
   </section>
@@ -174,8 +174,7 @@
     <button data-view="guide"><kbd data-key="g" data-label="G">G</kbd>Guide</button>
     <button data-view="recordings"><kbd data-key="d" data-label="D">D</kbd>Recordings</button>
     <button data-view="weather"><kbd data-key="w" data-label="W">W</kbd>Weather</button>
-    <button data-view="antenna"><kbd data-key="a" data-label="A">A</kbd>Reception</button>
-    <button data-view="settings"><kbd data-key="," data-label=",">,</kbd>Settings</button>
+    <button data-view="settings"><kbd data-key="," data-label=",">,</kbd>More</button>
   </nav>
 
   <div id="boot">

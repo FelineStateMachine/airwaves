@@ -61,7 +61,7 @@ path for recordings, default `~/airwaves/recordings`); `MUSIC` and `CHANNELS` (h
 folders for the custom channels); `TZ`. Location is deployment
 configuration only; the app never shows or edits it.
 
-In the app, open Settings and set **Airwaves server** to the server's name, `nas`
+In the app, open More, the Server tab, and set **Address** to the server's name, `nas`
 in these examples.
 
 **The TV in a browser**: `airwavesd` also serves the app itself at `/tv/`, for example
@@ -91,7 +91,7 @@ HDHomeRun's scan found; the FCC's records, the Gracenote listings and the ATSC 3
 only describe them (call sign, network, transmitter, listings), never add one. Without a
 tuner there are no antenna channels. A channel that won't lock right now stays listed,
 and tuning it says so: "No signal on RF 31 (KTVD 20.x) right now". The HDHomeRun scans
-when it powers up; **Scan for channels** in Reception (`POST /api/tuner/scan`) scans
+when it powers up; **Scan for channels** in Settings, Reception (`POST /api/tuner/scan`) scans
 again, after moving the antenna, taking every tuner for the few minutes it runs.
 
 **Signal is measured, never estimated.** `airwavesd` records, per RF channel, readings
@@ -117,6 +117,11 @@ minutes, or stopped, keeping what it recorded. Losing the signal or the tuner ma
 gap, not an end: it tries again until its time is up, and after a restart a recording
 whose time isn't up carries on. A finished recording says what it's missing: "Began 12
 minutes into the program", "About 3 minutes are missing in between".
+
+`dvr.json`, `signal.json` and `config.json` are written whole or not at all, each
+keeping its last version as `.bak` and a copy a day in `<data>/backups` for a week. One
+that won't read is set aside as `.corrupt-<time>` and the newest good copy takes its
+place, so a crash or a bad write loses at most the last change.
 
 ## Without an antenna
 
@@ -160,15 +165,34 @@ had.
 | --- | --- |
 | G | Guide: arrows move, and Up and Down wrap round the channels. The filters (Favorites, Sports...; also `[` `]`) are Down from the top bar, which is Left from the earliest program. Enter watches what's on, or shows a program to come's actions; hold Enter, or I, for any program's: watch, record (which opens to this one, every episode or new only), favorite, hide. Home jumps to now, R / Shift R / N record, Shift F favorite, H hide (U undoes) |
 | D | Recordings: Left (or `[` `]`) for Library, Coming up, Series. Enter shows a recording's actions: resume, from the start, watched, delete (press twice); for one recording now, watch from the start, 30 more minutes, stop (keeping it) and delete; Shift Enter starts over, W marks watched, Delete twice removes; on a series K sets how many to keep, N new episodes only |
-| A | Reception: what the tuners measured, by RF channel (the ones the scan found first), with the transmitters licensed on each. Up and Down pick one, Enter watches its first channel; Left for the tuner, Measure now, which reads every RF channel on a free tuner and shows its progress, and Scan for channels (press twice) |
 | W | Weather: current conditions, alerts, the next 24 hours, 7-day, radar loop and satellite; Up and Down move through them, Left to watch the weather channel |
-| `,` or S | Settings: server, guide hours, deleting watched recordings, hidden channels, the tuner |
+| `,` or S | More: Settings, a tab for each area in the rail (Display, Watching, Channels, Reception, Recordings, Server, About). Up and Down pick a tab, Enter goes in, Back returns to the tabs; Page Up and Down (a controller's LB and RB, also `[` `]`) change tab |
+| A | Settings' Reception tab: what the tuners measured, by RF channel (the ones the scan found first), with the transmitters licensed on each. Up and Down pick one, Enter watches its first channel; above them the tuner, Measure now, which reads every RF channel on a free tuner and shows its progress, and Scan for channels (press twice) |
 | Esc | Back to TV; from a recording, back to live |
+
+A recording that fails puts a count on Recordings in the top bar, and says so once,
+until Recordings is opened.
 
 With only a remote's arrows, OK and Back (an Android TV remote), every view is
 reached from the views above it: Up from a view's top, or Left from its left
 edge, and on TV, Up through the on-screen controls. Whatever the arrows are on has
 an amber ring.
+
+### Desktop, console and TV
+
+The app is three experiences, kept apart in the code (`platform` in app.js, `pf-*`
+classes in style.css):
+
+| | Where | In hand | Hints |
+| --- | --- | --- | --- |
+| Desktop | The app in a window on a Mac, Linux or Windows, or a browser | Mouse and keyboard; letters are shortcuts | Keys |
+| Console | The Linux app under gamescope (SteamOS Game Mode) | A controller | Its buttons, from the start |
+| TV | The Android TV app | A remote: arrows, OK, Back and media keys | The remote's keys; hold OK for more |
+
+The app says which it is (`AIRWAVES_PLATFORM=desktop`, `console` or `tv` overrides the
+desktop app's guess; `?platform=` does the same at `/tv/`), and Settings, Display, Layout
+can change it on one device. Console and TV start at 125%, sized for across a room. A
+controller or a keyboard used on any of them still brings its own hints.
 
 ## Data sources
 
@@ -617,7 +641,10 @@ refused, and the Jellyfin account isn't among the tools.
 
 Live channels are read from the HDHomeRun, and recordings from their files, as MPEG-TS
 and transcoded by `airwavesd` to H.264 and AAC in HLS, which the app plays natively. Custom channels come
-from `airwavesd` itself and play the same way. ATSC 1.0 (MPEG-2 video, AC-3 audio) plays
+from `airwavesd` itself and play the same way. While a stream is open, playing or paused,
+the app says so every 30 seconds (`POST /api/heartbeat`); `airwavesd` stops a stream
+nobody has fetched from or vouched for in 2 minutes, which frees its tuner when an app
+goes away without saying so. ATSC 1.0 (MPEG-2 video, AC-3 audio) plays
 fully; ATSC 3.0 is out of scope (AC-4 audio and A3SA DRM).
 
 ## Layout
