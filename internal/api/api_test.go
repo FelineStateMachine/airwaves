@@ -81,7 +81,7 @@ func (f *fake) Stop(_ context.Context, client string) error { f.stopped = client
 func (f *fake) Heartbeat(_ context.Context, client string) (bool, error) {
 	return client == "mac" && f.stopped == "", nil
 }
-func (f *fake) DVR(context.Context) (*dvr.State, error)     { return &dvr.State{Available: true}, nil }
+func (f *fake) DVR(context.Context) (*dvr.State, error) { return &dvr.State{Available: true}, nil }
 func (f *fake) Record(_ context.Context, r dvr.Request) (*dvr.Rule, error) {
 	return &dvr.Rule{ID: "r1", Kind: r.Kind, Channel: r.Channel}, nil
 }
@@ -137,8 +137,11 @@ func TestClientServerRoundTrip(t *testing.T) {
 	if be.tuned != "mac:7.1" || pb.URL != srv.URL+"/live/abc/index.m3u8" {
 		t.Errorf("tune: backend saw %q, playback URL %q", be.tuned, pb.URL)
 	}
-	if _, err := c.SetConfig(ctx, service.Config{ZIP: "80302"}); err != nil || be.cfg.ZIP != "80302" {
-		t.Errorf("set config: %v, backend has %+v", err, be.cfg)
+	// An app changes the hours of listings, never the location.
+	be.cfg = service.Config{ZIP: "80302", RadiusKm: 160, GuideHours: 24}
+	if got, err := c.SetConfig(ctx, service.Config{ZIP: "10001", Lat: 40.7, Lon: -74, GuideHours: 48}); err != nil ||
+		be.cfg != (service.Config{ZIP: "80302", RadiusKm: 160, GuideHours: 48}) || got != be.cfg {
+		t.Errorf("set config: %+v, %v, backend has %+v", got, err, be.cfg)
 	}
 	if err := c.DeleteRecording(ctx, "e/1"); err != nil || be.deleted != "e/1" {
 		t.Errorf("delete: %v, backend saw %q", err, be.deleted)

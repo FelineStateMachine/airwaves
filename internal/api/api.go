@@ -136,12 +136,20 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/config", func(w http.ResponseWriter, r *http.Request) {
 		reply(w)(b.Config(r.Context()))
 	})
+	// Apps change only the hours of listings: the location is the
+	// server's own, from its flags.
 	mux.HandleFunc("PUT /api/config", func(w http.ResponseWriter, r *http.Request) {
 		var c service.Config
 		if !decode(w, r, &c) {
 			return
 		}
-		reply(w)(b.SetConfig(r.Context(), c))
+		cur, err := b.Config(r.Context())
+		if err != nil {
+			reply(w)(nil, err)
+			return
+		}
+		cur.GuideHours = c.GuideHours
+		reply(w)(b.SetConfig(r.Context(), cur))
 	})
 	mux.HandleFunc("GET /api/snapshot", func(w http.ResponseWriter, r *http.Request) {
 		reply(w)(b.Snapshot(r.Context(), r.URL.Query().Get("refresh") == "1"))
