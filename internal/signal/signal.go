@@ -15,12 +15,11 @@ import (
 	"fmt"
 	"io/fs"
 	"math"
-	"os"
-	"path/filepath"
 	"slices"
 	"sync"
 	"time"
 
+	"airwaves/internal/store"
 	"airwaves/internal/tuner"
 )
 
@@ -272,24 +271,30 @@ type file struct {
 }
 
 // Open loads the measurements saved at path, if any. An empty path keeps
-// them in memory only. A file that can't be read is set aside (as
-// path.bad) and the store starts empty.
+// them in memory only. A file that can't be read is set aside and its
+// backup read instead (store.ReadFile); with none, the store starts empty
+// and the error says so.
 func Open(path string) (*Store, error) {
 	s := &Store{path: path, muxes: map[int64]*Mux{}}
 	if path == "" {
 		return s, nil
 	}
-	raw, err := os.ReadFile(path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return s, nil
-	}
-	if err != nil {
-		return nil, err
-	}
 	var f file
-	if err := json.Unmarshal(raw, &f); err != nil {
-		_ = os.Rename(path, path+".bad")
-		return s, fmt.Errorf("signal measurements in %s unreadable, set aside: %w", path, err)
+	err := store.ReadFile(path, func(raw []byte) error {
+		var x file
+		if err := json.Unmarshal(raw, &x); err != nil {
+			return err
+		}
+		f = x
+		return nil
+	})
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return s, nil
+	case errors.Is(err, store.ErrCorrupt):
+		return s, fmt.Errorf("signal measurements: %w; starting empty", err)
+	case err != nil:
+		return nil, err
 	}
 	for _, m := range f.Muxes {
 		if m != nil && m.FrequencyHz > 0 {
@@ -383,7 +388,7 @@ func (s *Store) Save() error {
 	slices.SortFunc(f.Muxes, func(a, b *Mux) int { return cmp.Compare(a.FrequencyHz, b.FrequencyHz) })
 	raw, err := json.MarshalIndent(f, "", " ")
 	if err == nil {
-		err = writeAtomic(s.path, raw)
+		err = store.WriteFile(s.path, raw, 0o644)
 	}
 	if err != nil {
 		s.mu.Lock()
@@ -403,30 +408,6 @@ func (s *Store) SaveEvery(every time.Duration) error {
 		return nil
 	}
 	return s.Save()
-}
-
-func writeAtomic(path string, raw []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".signal-*")
-	if err != nil {
-		return err
-	}
-	if _, err := tmp.Write(raw); err != nil {
-		tmp.Close()
-		os.Remove(tmp.Name())
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmp.Name())
-		return err
-	}
-	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
-		os.Remove(tmp.Name())
-		return err
-	}
-	return os.Rename(tmp.Name(), path)
 }
 
 // Frequency is the center frequency (Hz) of US broadcast RF channel rf,

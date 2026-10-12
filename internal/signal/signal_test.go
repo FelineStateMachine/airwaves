@@ -143,7 +143,8 @@ func TestStoreSaves(t *testing.T) {
 		t.Errorf("RF 36 = %+v", m)
 	}
 
-	// An unreadable file is set aside rather than lost or fatal.
+	// An unreadable file is set aside rather than lost or fatal, with no
+	// backup (one save made none) starting empty.
 	if err := os.WriteFile(path, []byte("{not json"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +152,7 @@ func TestStoreSaves(t *testing.T) {
 	if err == nil || bad == nil || len(bad.All()) != 0 {
 		t.Errorf("unreadable: %v, %+v", err, bad)
 	}
-	if _, err := os.Stat(path + ".bad"); err != nil {
-		t.Errorf("not set aside: %v", err)
+	if aside, _ := filepath.Glob(path + ".corrupt-*"); len(aside) != 1 {
+		t.Errorf("not set aside: %v", aside)
 	}
 }

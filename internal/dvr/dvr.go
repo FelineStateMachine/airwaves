@@ -24,6 +24,7 @@ import (
 
 	"airwaves/internal/guide"
 	"airwaves/internal/lineup"
+	"airwaves/internal/store"
 	"airwaves/internal/tuner"
 )
 
@@ -216,23 +217,27 @@ type Manager struct {
 }
 
 // Open loads the rules and recordings kept at path (created on first
-// save), recording into dir. A file that can't be read is set aside, as
-// path.bad, and the DVR starts empty rather than not at all.
+// save), recording into dir. A file that can't be read is set aside and
+// its backup read instead (store.ReadFile); with none, the DVR starts
+// empty rather than not at all.
 func Open(path, dir string, tuners Tuners, locate Locate) (*Manager, error) {
 	m := &Manager{path: path, dir: dir, tuners: tuners, locate: locate, jobs: map[string]*job{},
 		st: fileState{Progress: map[string]Progress{}}}
 	m.ctx, m.cancel = context.WithCancelCause(context.Background())
-	raw, err := os.ReadFile(path)
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-	case err != nil:
-		return nil, err
-	default:
-		if err := json.Unmarshal(raw, &m.st); err != nil {
-			log.Printf("recordings: %s can't be read (%v); set aside as %s.bad, starting empty", path, err, path)
-			_ = os.Rename(path, path+".bad")
-			m.st = fileState{}
+	err := store.ReadFile(path, func(raw []byte) error {
+		var st fileState
+		if err := json.Unmarshal(raw, &st); err != nil {
+			return err
 		}
+		m.st = st
+		return nil
+	})
+	switch {
+	case err == nil, errors.Is(err, os.ErrNotExist):
+	case errors.Is(err, store.ErrCorrupt):
+		log.Printf("recordings: %v; starting empty", err)
+	default:
+		return nil, err
 	}
 	if m.st.Progress == nil {
 		m.st.Progress = map[string]Progress{}
@@ -246,27 +251,7 @@ func (m *Manager) save() error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(m.path), 0o755); err != nil {
-		return err
-	}
-	f, err := os.CreateTemp(filepath.Dir(m.path), filepath.Base(m.path)+".*")
-	if err != nil {
-		return err
-	}
-	_, err = f.Write(raw)
-	if err == nil {
-		err = f.Sync()
-	}
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-	if err == nil {
-		err = os.Rename(f.Name(), m.path)
-	}
-	if err != nil {
-		os.Remove(f.Name())
-	}
-	return err
+	return store.WriteFile(m.path, raw, 0o644)
 }
 
 // saveLogged saves, logging a failure. Called with m.mu held.

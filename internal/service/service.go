@@ -14,11 +14,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -244,13 +244,22 @@ func New(opt Options) (*Service, error) {
 	s := &Service{opt: opt, http: web.NewClient(), timing: defaultTiming}
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 	s.cfg = s.withDefaults(opt.Config)
+	// A saved config that can't be read, nor any backup of it, leaves the
+	// defaults rather than a server that won't start.
 	if opt.ConfigPath != "" {
-		if raw, err := os.ReadFile(opt.ConfigPath); err == nil {
+		err := store.ReadFile(opt.ConfigPath, func(raw []byte) error {
 			var c Config
 			if err := json.Unmarshal(raw, &c); err != nil {
-				return nil, fmt.Errorf("parse %s: %w", opt.ConfigPath, err)
+				return err
 			}
 			s.cfg = s.withDefaults(c)
+			return nil
+		})
+		switch {
+		case errors.Is(err, store.ErrCorrupt):
+			log.Printf("config: %v; using the defaults", err)
+		case err != nil && !errors.Is(err, fs.ErrNotExist):
+			return nil, err
 		}
 	}
 	var err error
@@ -472,10 +481,7 @@ func (s *Service) SetConfig(_ context.Context, c Config) (Config, error) {
 	s.mu.Unlock()
 	if s.opt.ConfigPath != "" {
 		raw, _ := json.MarshalIndent(c, "", "  ")
-		if err := os.MkdirAll(filepath.Dir(s.opt.ConfigPath), 0o755); err != nil {
-			return c, err
-		}
-		if err := os.WriteFile(s.opt.ConfigPath, raw, 0o644); err != nil {
+		if err := store.WriteFile(s.opt.ConfigPath, raw, 0o644); err != nil {
 			return c, err
 		}
 	}

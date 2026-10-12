@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -199,5 +200,46 @@ func TestWeatherStarElsewhere(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "http://tv.local:8089/weatherstar", nil))
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("redirect to a display that's gone: %d", rec.Code)
+	}
+}
+
+// TestConfigSurvives: a damaged config is read from its backup, and with
+// none the server starts with the defaults rather than not at all.
+func TestConfigSurvives(t *testing.T) {
+	ctx := t.Context()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	open := func() *Service {
+		t.Helper()
+		s, err := New(Options{Mode: "server", NoAntenna: true, CacheDir: dir, ConfigPath: path})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(s.Close)
+		return s
+	}
+	s := open()
+	for _, h := range []int{48, 36} {
+		if _, err := s.SetConfig(ctx, Config{GuideHours: h}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(path, []byte(`{"guideHours": 3`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, _ := open().Config(ctx); cfg.GuideHours != 48 {
+		t.Errorf("from the backup: %+v", cfg)
+	}
+
+	for _, p := range []string{path, path + ".bak"} {
+		if err := os.WriteFile(p, []byte("nonsense"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.RemoveAll(filepath.Join(dir, "backups")); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, _ := open().Config(ctx); cfg.GuideHours != 24 {
+		t.Errorf("with no backup: %+v", cfg)
 	}
 }

@@ -334,6 +334,25 @@ func TestPersistence(t *testing.T) {
 	if len(again.st.Rules) != 1 || again.st.Rules[0].SeriesID != "SH1" {
 		t.Fatalf("reloaded rules %+v", again.st.Rules)
 	}
+
+	// Damaged, the file is read from its backup.
+	e.m.mu.Lock()
+	e.m.st.Prefs.DeleteWatchedAfterDays = 7
+	err = e.m.save()
+	e.m.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(e.m.path, []byte(`{"rules": [`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := Open(e.m.path, e.m.dir, e.m.tuners, locate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(restored.st.Rules) != 1 || restored.st.Prefs.DeleteWatchedAfterDays != 0 {
+		t.Fatalf("from the backup: rules %+v, prefs %+v", restored.st.Rules, restored.st.Prefs)
+	}
 }
 
 // TestCorruptFile: a state file that can't be read is set aside, and the
@@ -352,7 +371,11 @@ func TestCorruptFile(t *testing.T) {
 	if len(m.st.Rules) != 0 {
 		t.Fatal("rules from a corrupt file")
 	}
-	if raw, err := os.ReadFile(path + ".bad"); err != nil || string(raw) != "{not json" {
+	aside, _ := filepath.Glob(path + ".corrupt-*")
+	if len(aside) != 1 {
+		t.Fatalf("the corrupt file wasn't kept aside: %v", aside)
+	}
+	if raw, err := os.ReadFile(aside[0]); err != nil || string(raw) != "{not json" {
 		t.Fatalf("the corrupt file wasn't kept aside: %v", err)
 	}
 }
