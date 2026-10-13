@@ -131,8 +131,10 @@
 
   const query = new URLSearchParams(location.search);
 
-  // A phone or a tablet: a touch screen, and no mouse or trackpad.
-  const touchScreen = !tvApp && matchMedia('(pointer: coarse)').matches && !matchMedia('(any-pointer: fine)').matches;
+  // A phone or a tablet: its main pointer is a finger. Not that it has no
+  // fine one besides: a Galaxy phone's S Pen is one, and a tablet's
+  // keyboard case may bring a trackpad.
+  const touchScreen = !tvApp && matchMedia('(pointer: coarse)').matches;
 
   // The Android TV app is the TV experience, a touch screen the touch
   // experience, a browser a desktop's; ?platform=desktop, console, tv or

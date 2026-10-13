@@ -756,7 +756,7 @@ body.mouse-active .ob:hover { color: var(--paper); background: var(--ink-3); }
    enough to hit, and the notch and the home bar are left clear. */
 body.pf-touch { -webkit-tap-highlight-color: transparent; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; touch-action: manipulation; overscroll-behavior: none; }
 body.pf-touch input { -webkit-user-select: text; user-select: text; }
-body.pf-touch #stage { touch-action: none; }
+body.pf-touch #stage, body.pf-touch #banner { touch-action: none; }
 body.pf-touch .g-rows { touch-action: pan-y; }
 body.pf-touch .r-grid, body.pf-touch .s-list, body.pf-touch .a-tablewrap, body.pf-touch .p-menu, body.pf-touch .r-list { overflow-y: auto; touch-action: pan-y; }
 body.pf-touch .wx-main { overflow-y: auto; touch-action: pan-y; }

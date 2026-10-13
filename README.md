@@ -189,12 +189,13 @@ classes in style.css):
 | Desktop | The app in a window on a Mac, Linux or Windows, or a browser | Mouse and keyboard; letters are shortcuts | Keys |
 | Console | The Linux app under gamescope (SteamOS Game Mode) | A controller | Its buttons, from the start |
 | TV | The Android TV app | A remote: arrows, OK, Back and media keys | The remote's keys; hold OK for more |
-| Touch | A phone or a tablet, at `/tv/` or installed from it | Taps, swipes and holds | None |
+| Touch | A phone or a tablet (a browser whose main pointer is a finger), at `/tv/` or installed from it | Taps, swipes and holds | None |
 
 The app says which it is (`AIRWAVES_PLATFORM=desktop`, `console` or `tv` overrides the
 desktop app's guess; `?platform=` does the same at `/tv/`), and Settings, Display, Layout
 can change it on one device. Console and TV start at 125%, sized for across a room. A
-controller or a keyboard used on any of them still brings its own hints.
+controller or a keyboard used on any of them still brings its own hints, and a finger its
+gestures.
 
 On touch, a tap on TV brings up the controls, and a tap anywhere off a button puts them
 away, as a phone's video players do; a swipe left or right

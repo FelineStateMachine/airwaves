@@ -17,7 +17,9 @@ const TOUCH_SWIPE = 48;      // CSS pixels a finger travels for a swipe
 const TOUCH_HOLD_MS = 550;   // a press this long is a hold
 const TOUCH_MOUSE_MS = 1000; // a finger's stand-in mouse events follow it within this
 
-const touching = (e) => platform === 'touch' && e.pointerType !== 'mouse';
+// A finger's or a pen's pointer: its gestures are a finger's in any
+// layout, as on a laptop's touch screen.
+const touching = (e) => e.pointerType !== 'mouse';
 
 // A finger also sends a mouse's events after it, for pages made for one.
 // Here they'd act twice: its move is a pointer brought to the screen, which
@@ -25,9 +27,10 @@ const touching = (e) => platform === 'touch' && e.pointerType !== 'mouse';
 // double click, which plays what the second tap already played. What a
 // finger does is handled here, from its pointer events.
 const fromFinger = () => performance.now() - touch.at < TOUCH_MOUSE_MS;
+const fingerTap = () => platform === 'touch' || fromFinger();
 
 function wireTouch() {
-  const lastFinger = (e) => { if (e.pointerType !== 'mouse') touch.at = performance.now(); };
+  const lastFinger = (e) => { if (touching(e)) touch.at = performance.now(); };
   document.addEventListener('pointerdown', (e) => {
     lastFinger(e);
     if (!touching(e)) return;
@@ -68,17 +71,17 @@ function wireTouch() {
   // click only to what listens for one, and first (capture), so a tap on
   // the picture elsewhere, which goes back to TV (wireDock), isn't one.
   const tapTV = (e) => {
-    if (platform !== 'touch' || state.view !== 'tv' || document.body.classList.contains('booting')) return;
+    if (!fingerTap() || state.view !== 'tv' || document.body.classList.contains('booting')) return;
     if (e.target.closest('button, input, a, .tl, [data-act]')) return;
     if (osd.open) hideBanner(); else openOSD(null);
   };
   for (const el of [stage, $('#banner')]) el.addEventListener('click', tapTV, true);
 }
 
-// swipe acts on a swipe over el: on TV, the arrows; in the guide, the
-// hours shown.
+// swipe acts on a swipe over el: on TV, over the picture or the banner,
+// the arrows; in the guide, the hours shown.
 function swipe(el, dir) {
-  if (state.view === 'tv' && (stage.contains(el) || el === document.body)) {
+  if (state.view === 'tv' && !el.closest('#dock')) {
     if (dir === 'left' || dir === 'right') {
       skip(dir === 'right' ? 30 : -10);
       return openOSD('timeline');
@@ -105,4 +108,4 @@ function holdCell(cell) {
 
 // tappedAgain reports whether a tap lands on what was already picked: the
 // guide's, Recordings' and Podcasts' second tap does it.
-const tappedAgain = (was, now) => platform === 'touch' && was === now;
+const tappedAgain = (was, now) => fingerTap() && was === now;
