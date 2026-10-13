@@ -789,6 +789,17 @@ body.pf-touch .s-main { grid-template-rows: minmax(0, 1fr); }
   body.pf-touch .bn-title { font-size: 30px; margin-top: 6px; }
   body.pf-touch .bn-desc, body.pf-touch .bn-cast, body.pf-touch .bn-logo { display: none; }
   body.pf-touch .bn-next { margin-top: 6px; }
+  /* The controls leave most of the picture showing, there to tap: what's
+     next is in the guide, and the timeline and the buttons draw tighter. */
+  body.pf-touch #banner.osd { padding: 12px 20px 8px; gap: 4px 20px; }
+  body.pf-touch #banner.osd .bn-num { font-size: 48px; }
+  body.pf-touch #banner.osd .bn-call { margin-top: 8px; }
+  body.pf-touch #banner.osd .bn-next { display: none; }
+  body.pf-touch .bn-ep { min-height: 0; }
+  body.pf-touch #banner .tl { padding: 6px 12px; }
+  body.pf-touch .osd-bar { padding-top: 4px; }
+  body.pf-touch .ob { padding: 8px 4px 6px; gap: 5px; }
+  body.pf-touch .ob svg { width: 24px; height: 24px; }
   /* The guide's top clears the dock, and leaves the grid more rows. */
   body.pf-touch { --gtop: calc(40 * var(--vh)); --pv-h: calc(var(--gtop) - 62px - 14px); --pv-w: calc(var(--pv-h) * 16 / 9); }
   body.pf-touch .g-top { padding-top: 62px; padding-bottom: 14px; }

@@ -196,11 +196,12 @@ desktop app's guess; `?platform=` does the same at `/tv/`), and Settings, Displa
 can change it on one device. Console and TV start at 125%, sized for across a room. A
 controller or a keyboard used on any of them still brings its own hints.
 
-On touch, a tap on TV brings up the controls (and puts them away); a swipe left or right
+On touch, a tap on TV brings up the controls, and a tap anywhere off a button puts them
+away, as a phone's video players do; a swipe left or right
 skips back 10 seconds or ahead 30, up or down changes channel. In the guide a swipe moves
 the hours shown, a tap picks a program and a second tap watches it, and holding one shows
 its actions; in Recordings and Podcasts a second tap plays. A phone is used on its side,
-with a compact banner and guide; held upright it asks to be turned.
+with a compact banner, controls and guide; held upright it asks to be turned.
 
 The web app is installable (`manifest.webmanifest`, and `sw.js`, which keeps nothing
 offline): from a secure address, such as a [Tailscale Service](https://tailscale.com/kb/1552/tailscale-services)

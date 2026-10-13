@@ -128,9 +128,11 @@ function attempt(how, src) {
       if (err && err.name === 'NotAllowedError') {
         video.muted = true;
         video.play().catch(() => {});
-        // A touch screen's next touch, which lets sound play, turns it on.
+        // A touch screen's next tap, which lets sound play, turns it on: once
+        // it's a tap. As a finger lands the browser doesn't yet count it as
+        // the user's, and unmuted then, the picture would stop.
         if (platform === 'touch') {
-          document.addEventListener('pointerdown', () => { if (!state.userMuted) video.muted = false; }, { once: true, capture: true });
+          document.addEventListener('click', () => { if (!state.userMuted) video.muted = false; }, { once: true, capture: true });
           return toast('Started muted. Tap for sound.', 3500);
         }
         const m = keyHint('m', 'M');
