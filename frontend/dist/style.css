@@ -598,6 +598,12 @@ body:not(.mode-guide) .g-cell.rec-on::after { animation: none; } /* hidden, so s
 /* Recordings' library, for episodes: the one picked above a grid. */
 .p-main { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 24px; min-height: 0; }
 .p-menu { overflow: auto; min-height: 0; scrollbar-width: none; }
+/* Refresh, under the lists: every show listed again now. */
+.p-refresh { display: grid; gap: 8px; padding: 0 14px; }
+.p-refresh[hidden] { display: none; }
+.p-refresh .btn { justify-self: stretch; text-align: center; }
+.p-refresh .btn.busy:not(:focus) { color: var(--amber); box-shadow: inset 0 0 0 1px var(--amber-2); }
+.p-rnote { font-size: 12px; line-height: 1.35; color: var(--faint); }
 .p-name { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; min-height: 2.6em; line-height: 1.3; }
 .r-badge.p-len { color: var(--paper); }
 

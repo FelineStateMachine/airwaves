@@ -137,7 +137,13 @@
   <!-- Podcasts, an app: video podcasts from YouTube, played on demand, laid
        out as Recordings' library is (js/podcasts.js). -->
   <section id="podcasts" class="view railed" aria-label="Podcasts">
-    <nav class="rail"><div class="rail-menu p-menu" data-f="menu"></div></nav>
+    <nav class="rail">
+      <div class="rail-menu p-menu" data-f="menu"></div>
+      <div class="p-refresh" hidden>
+        <button type="button" class="btn ghost fx" data-f="refresh">Refresh</button>
+        <div class="p-rnote" data-f="rnote"></div>
+      </div>
+    </nav>
     <div class="main p-main">
       <article class="r-detail" data-f="detail"></article>
       <div class="r-grid" data-f="grid"></div>

@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/sync/errgroup"
+
 	"airwaves/internal/web"
 	"airwaves/internal/youtube"
 )
@@ -92,11 +94,14 @@ func (l *Library) update(ctx context.Context) {
 	}
 	l.updating = len(lists) > 0
 	l.mu.Unlock()
+	tool := l.tool()
 	for _, s := range lists {
 		if ctx.Err() != nil {
 			return
 		}
+		tool.Jobs.Lock() // one listing job at a time across yt-dlp's users
 		l.relist(ctx, s)
+		tool.Jobs.Unlock()
 	}
 	l.mu.Lock()
 	l.updating = false
@@ -119,16 +124,16 @@ func (l *Library) listDue(s *show, now time.Time) bool {
 	return now.Sub(s.Listed) >= listEvery
 }
 
-// list lists a show's newest videos, one listing job at a time across
-// yt-dlp's users.
+// list lists a show's newest videos, a few seconds' work. It doesn't take
+// its turn with yt-dlp's other listing jobs, which can be a channel's whole
+// catalog and take minutes: the background updates take turns (see
+// update), while someone adding a show or refreshing doesn't wait behind
+// them.
 func (l *Library) list(ctx context.Context, s src) (youtube.Listing, error) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	tool := l.tool()
 	args := append(slices.Clone(youtube.ListingArgs), "-I", "1:"+strconv.Itoa(listLimit), s.url)
-	tool.Jobs.Lock()
-	raw, err := tool.Run(ctx, args...)
-	tool.Jobs.Unlock()
+	raw, err := l.tool().Run(ctx, args...)
 	if err != nil {
 		return youtube.Listing{}, err
 	}
@@ -138,9 +143,39 @@ func (l *Library) list(ctx context.Context, s src) (youtube.Listing, error) {
 	return youtube.ParseListing(raw)
 }
 
+// refreshAtOnce is how many shows Refresh lists at the same time.
+const refreshAtOnce = 4
+
+// Refresh lists every show again now, rather than at its turn: for someone
+// at the screen, so a few at once, and not behind yt-dlp's other jobs (see
+// list). The new episodes are looked up after, in the background. It
+// returns the library as refreshed.
+func (l *Library) Refresh(ctx context.Context) State {
+	l.mu.Lock()
+	l.load()
+	shows := slices.Clone(l.st.Shows)
+	l.mu.Unlock()
+	var g errgroup.Group
+	g.SetLimit(refreshAtOnce)
+	for _, s := range shows {
+		g.Go(func() error {
+			l.relist(ctx, s)
+			return nil
+		})
+	}
+	g.Wait()
+	l.mu.Lock()
+	l.poke()
+	l.mu.Unlock()
+	return l.State()
+}
+
 // relist lists a show again and takes in what's new.
 func (l *Library) relist(ctx context.Context, s *show) {
 	lst, err := l.list(ctx, s.source())
+	if err != nil && ctx.Err() != nil {
+		return // stopped, not failed: it's listed at its turn
+	}
 	now := l.clock()
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -149,9 +184,6 @@ func (l *Library) relist(ctx context.Context, s *show) {
 	}
 	s.Listed = now
 	if err != nil {
-		if ctx.Err() != nil {
-			return
-		}
 		s.Error = err.Error()
 		log.Printf("podcasts: %s: %v", s.Title, err)
 		l.save()
@@ -383,10 +415,10 @@ func (l *Library) lookups(ctx context.Context) {
 // lookup looks up a video's details, and drops it from its show when it
 // isn't an episode after all.
 func (l *Library) lookup(ctx context.Context, s *show, id string) {
+	tool := l.tool()
+	tool.Jobs.Lock() // its turn first: its time starts when it runs
 	ctx, cancel := context.WithTimeout(ctx, resolveTime)
 	defer cancel()
-	tool := l.tool()
-	tool.Jobs.Lock()
 	raw, err := tool.Run(ctx, "-J", "--skip-download", "--no-playlist", "--ignore-no-formats-error", youtube.WatchURL(id))
 	tool.Jobs.Unlock()
 	var info youtube.Info

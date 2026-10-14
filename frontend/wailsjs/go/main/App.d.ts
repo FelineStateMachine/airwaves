@@ -43,6 +43,8 @@ export function Podcasts():Promise<podcast.State>;
 
 export function Record(arg1:dvr.Request):Promise<dvr.Rule>;
 
+export function RefreshPodcasts():Promise<podcast.State>;
+
 export function RemovePodcast(arg1:string):Promise<void>;
 
 export function SaveProgress(arg1:string,arg2:number,arg3:number):Promise<void>;

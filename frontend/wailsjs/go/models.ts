@@ -905,6 +905,7 @@ export namespace podcast {
 	export class State {
 	    shows: Show[];
 	    updating: boolean;
+	    listed: time.Time;
 	
 	    static createFrom(source: any = {}) {
 	        return new State(source);
@@ -914,6 +915,7 @@ export namespace podcast {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.shows = this.convertValues(source["shows"], Show);
 	        this.updating = source["updating"];
+	        this.listed = this.convertValues(source["listed"], time.Time);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

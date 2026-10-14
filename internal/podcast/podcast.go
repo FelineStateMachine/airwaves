@@ -101,11 +101,13 @@ type episode struct {
 	Watched     bool      `json:"watched,omitempty"`
 }
 
-// State is the library for the app: its shows, as they were added, and
-// whether a show is being listed.
+// State is the library for the app: its shows, as they were added,
+// whether a show is being listed, and since when every show has been (the
+// longest ago of their listings; zero without shows).
 type State struct {
-	Shows    []Show `json:"shows"`
-	Updating bool   `json:"updating"`
+	Shows    []Show    `json:"shows"`
+	Updating bool      `json:"updating"`
+	Listed   time.Time `json:"listed,omitzero"`
 }
 
 // Show is a show for the app.
@@ -191,8 +193,11 @@ func (l *Library) State() State {
 	defer l.mu.Unlock()
 	l.load()
 	out := State{Shows: make([]Show, 0, len(l.st.Shows)), Updating: l.updating}
-	for _, s := range l.st.Shows {
+	for i, s := range l.st.Shows {
 		out.Shows = append(out.Shows, s.view())
+		if i == 0 || s.Listed.Before(out.Listed) {
+			out.Listed = s.Listed
+		}
 	}
 	return out
 }
@@ -232,9 +237,9 @@ func (l *Library) Search(ctx context.Context, query string) ([]Found, error) {
 }
 
 // Add adds the show at raw (a channel, one of its tabs, or a playlist; see
-// source), listing it first, with minMinutes the shortest video that's an
-// episode (DefaultMinMinutes when 0). A show already there is returned
-// as it is.
+// source), listing it first, at once (see list), with minMinutes the
+// shortest video that's an episode (DefaultMinMinutes when 0). A show
+// already there is returned as it is.
 func (l *Library) Add(ctx context.Context, raw string, minMinutes float64) (Show, error) {
 	src, err := source(raw)
 	if err != nil {

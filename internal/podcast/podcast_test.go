@@ -29,8 +29,9 @@ func TestMain(m *testing.M) {
 
 // fakeYtDlp answers yt-dlp's command line, noting each run's arguments in
 // the file AIRWAVES_FAKE_YTDLP names. Show A (@showa) has three episodes,
-// a clip and a premiere to come in its videos, and a past and a current
-// stream in its streams; Show B is a playlist with a private video. Any
+// a clip and a premiere to come in its videos (and a fourth episode, new,
+// with AIRWAVES_FAKE_NEW set), and a past and a current stream in its
+// streams; Show B is a playlist with a private video. Any
 // video's details give it an hour, but "feedclip" lasts 200 seconds; with
 // a format asked for, an H.264 picture and AAC sound six hours long.
 func fakeYtDlp(args []string) int {
@@ -57,6 +58,10 @@ func fakeYtDlp(args []string) int {
 				{"id": "up1", "title": "Premiere", "live_status": "is_upcoming"},
 				{"id": "ep1", "title": "Episode 1", "duration": 4000, "timestamp": now - 3*day},
 			}}
+		if os.Getenv("AIRWAVES_FAKE_NEW") != "" {
+			out.(map[string]any)["entries"] = append([]map[string]any{{"id": "ep4", "title": "Episode 4", "duration": 3600, "timestamp": now}},
+				out.(map[string]any)["entries"].([]map[string]any)...)
+		}
 	case u == "https://www.youtube.com/@showa/streams":
 		out = map[string]any{"channel": "Show A", "channel_id": "UCa", "entries": []map[string]any{
 			{"id": "now1", "title": "Live now", "live_status": "is_live"},
@@ -249,6 +254,49 @@ func TestUpdate(t *testing.T) {
 	l.mu.Unlock()
 	if !slices.Contains(skipped, "feedclip") || !slices.Contains(skipped, "feedshort") || !slices.Contains(skipped, "clip1") {
 		t.Errorf("skipped: %v", skipped)
+	}
+}
+
+// Refresh lists every show again at once, a new upload joining, and
+// neither it nor Add waits behind yt-dlp's other listing jobs, which can
+// take minutes.
+func TestRefresh(t *testing.T) {
+	l, _ := library(t)
+	if _, err := l.Add(context.Background(), "@showa", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Add(context.Background(), "https://www.youtube.com/playlist?list=PLtest00000001", 0); err != nil {
+		t.Fatal(err)
+	}
+	before := l.State()
+	if before.Listed.IsZero() {
+		t.Fatal("never listed")
+	}
+	t.Setenv("AIRWAVES_FAKE_NEW", "1")
+	l.YtDlp.Jobs.Lock() // a channel's whole catalog, being listed
+	defer l.YtDlp.Jobs.Unlock()
+	done := make(chan State)
+	go func() {
+		st := l.Refresh(context.Background())
+		if _, err := l.Add(context.Background(), "https://www.youtube.com/playlist?list=PLtest00000002", 0); err != nil {
+			t.Error(err)
+		}
+		done <- st
+	}()
+	var st State
+	select {
+	case st = <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("waited behind the listing job")
+	}
+	if got := ids(st.Shows[0].Episodes); !slices.Equal(got, []string{"ep4", "ep3", "ep2", "ep1"}) {
+		t.Errorf("episodes: %v", got)
+	}
+	if !st.Listed.After(before.Listed) || st.Updating {
+		t.Errorf("listed %v, was %v; updating %v", st.Listed, before.Listed, st.Updating)
+	}
+	if n := len(l.State().Shows); n != 3 {
+		t.Errorf("%d shows", n)
 	}
 }
 

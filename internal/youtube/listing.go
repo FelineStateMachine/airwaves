@@ -99,7 +99,7 @@ func ParseListing(raw []byte) (Listing, error) {
 	if p.ChannelID == "" {
 		return Listing{}, errors.New("not a YouTube channel")
 	}
-	l := Listing{ID: p.ChannelID, Name: p.Channel, Image: p.channel().Image}
+	l := Listing{ID: p.ChannelID, Name: strings.TrimSpace(p.Channel), Image: p.channel().Image}
 	for _, e := range p.Entries {
 		if e.ID == "" {
 			continue
@@ -155,7 +155,7 @@ func ParsePlaylist(raw []byte) (Listing, error) {
 	if p.Type != "playlist" || p.ID == "" || p.ID == p.ChannelID { // not a channel's tab
 		return Listing{}, errors.New("not a YouTube playlist")
 	}
-	l := Listing{ID: p.ID, Name: p.Title, Owner: cmp.Or(p.Channel, p.Uploader), OwnerID: p.ChannelID}
+	l := Listing{ID: p.ID, Name: strings.TrimSpace(p.Title), Owner: strings.TrimSpace(cmp.Or(p.Channel, p.Uploader)), OwnerID: p.ChannelID}
 	seen := map[string]bool{}
 	for _, e := range p.Entries {
 		if e.ID == "" || seen[e.ID] || hidden[e.Title] || locked[e.Availability] {
@@ -381,7 +381,7 @@ type channelInfo struct {
 }
 
 func (e channelInfo) channel() Channel {
-	c := Channel{ID: e.ChannelID, Name: cmp.Or(e.Channel, e.Title), Subscribers: int64(e.Followers),
+	c := Channel{ID: e.ChannelID, Name: strings.TrimSpace(cmp.Or(e.Channel, e.Title)), Subscribers: int64(e.Followers),
 		Description: Blurb(e.Description)}
 	switch {
 	case strings.HasPrefix(e.UploaderID, "@"):

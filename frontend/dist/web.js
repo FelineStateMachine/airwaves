@@ -285,6 +285,7 @@
 
     // The Podcasts app.
     Podcasts: () => call('GET', '/api/podcasts'),
+    RefreshPodcasts: () => call('POST', '/api/podcasts/refresh'),
     SearchPodcasts: (q) => call('GET', `/api/podcasts/search?q=${enc(q)}`),
     AddPodcast: (url, minMinutes) => call('POST', '/api/podcasts/shows', { url, minMinutes: minMinutes || 0 }),
     RemovePodcast: (id) => call('DELETE', `/api/podcasts/shows/${enc(id)}`).then(() => undefined),

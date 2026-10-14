@@ -116,6 +116,12 @@ func (f *fake) Podcasts(context.Context) (*podcast.State, error) {
 	return &podcast.State{Shows: []podcast.Show{{ID: "s1", Title: "Show", Episodes: []podcast.Episode{{ID: "e1", ShowID: "s1", Duration: 3600}}}}}, nil
 }
 
+func (f *fake) RefreshPodcasts(ctx context.Context) (*podcast.State, error) {
+	st, _ := f.Podcasts(ctx)
+	st.Shows[0].Episodes = append([]podcast.Episode{{ID: "e2", ShowID: "s1", Duration: 1800}}, st.Shows[0].Episodes...)
+	return st, nil
+}
+
 func (f *fake) SearchPodcasts(_ context.Context, q string) ([]podcast.Found, error) {
 	return []podcast.Found{{ID: "UCa", Title: q}}, nil
 }
@@ -154,6 +160,9 @@ func TestPodcasts(t *testing.T) {
 	c := NewClient(srv.URL, "")
 	if st, err := c.Podcasts(ctx); err != nil || len(st.Shows) != 1 || st.Shows[0].Episodes[0].Duration != 3600 {
 		t.Errorf("podcasts: %+v, %v", st, err)
+	}
+	if st, err := c.RefreshPodcasts(ctx); err != nil || len(st.Shows[0].Episodes) != 2 || st.Shows[0].Episodes[0].ID != "e2" {
+		t.Errorf("refresh: %+v, %v", st, err)
 	}
 	if found, err := c.SearchPodcasts(ctx, "sad boyz"); err != nil || len(found) != 1 || found[0].Title != "sad boyz" {
 		t.Errorf("search: %+v, %v", found, err)

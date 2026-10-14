@@ -8,9 +8,10 @@
 // show's newest), Continue (episodes part watched) and each show; beside it
 // the episode picked, above a grid of the list's episodes. Its parts take
 // the focus in turn (data-zone): the grid, the rail's menu (Left from the
-// grid's left edge), and the episode's actions (OK): Play or Resume, From
-// the start, Watched. Back goes from the actions to the grid.
-const podUI = { zone: 'grid', act: '', list: 'latest', sel: {}, at: 0, timer: 0, searching: false };
+// grid's left edge) and Refresh under it, and the episode's actions (OK):
+// Play or Resume, From the start, Watched. Back goes from the actions to
+// the grid.
+const podUI = { zone: 'grid', act: '', list: 'latest', sel: {}, at: 0, timer: 0, searching: false, refreshing: false };
 
 // asEpisode marks an episode for the player (state.recording), which plays
 // recordings too.
@@ -66,6 +67,7 @@ function podZone(zone, act = '') {
   if (state.dock >= 0 || state.view !== 'podcasts') return;
   if (zone === 'grid') return blurIn($('#podcasts'));
   if (zone === 'menu') return void focusEl($(`#podcasts [data-list="${CSS.escape(podList()[0])}"]`));
+  if (zone === 'refresh') return void focusEl(f($('#podcasts'), 'refresh'));
   const acts = $$('#podcasts .rd-actions .act.fx').filter(isShown);
   if (!acts.length) return podZone('grid');
   focusEl(acts.find((b) => b.dataset.act === podUI.act) || acts[0]);
@@ -132,12 +134,55 @@ function renderPodcasts() {
     </article>`;
   }).join('') || (cur[0] !== 'latest' && cur[0] !== 'continue' && (shows.find((x) => x.id === cur[0]) || {}).error
     ? `<p class="r-empty">${esc(shows.find((x) => x.id === cur[0]).error)}</p>` : '');
+  renderPodRefresh(v);
   podRefocus();
+}
+
+// renderPodRefresh shows Refresh, under the lists when there are shows,
+// and when every show was last listed.
+function renderPodRefresh(v) {
+  const listed = state.podcasts && Date.parse(state.podcasts.listed);
+  $('.p-refresh', v).hidden = !podShows().length;
+  f(v, 'refresh').classList.toggle('busy', podUI.refreshing);
+  f(v, 'refresh').textContent = podUI.refreshing ? 'Refreshing' : 'Refresh';
+  f(v, 'rnote').textContent = podUI.refreshing ? 'Looking for new episodes'
+    : listed ? `Every show checked ${ago(listed)}` : '';
+}
+
+// refreshPodcasts has the server list every show again now, and says what
+// came of it. The new episodes are looked up after (their descriptions,
+// their dates to the minute), so they're loaded again in a bit.
+async function refreshPodcasts() {
+  if (podUI.refreshing || !podShows().length) return;
+  const had = new Set(podShows().flatMap((s) => (s.episodes || []).map((ep) => ep.id)));
+  podUI.refreshing = true;
+  renderPodcasts();
+  let st = null;
+  try {
+    st = await api().RefreshPodcasts();
+  } catch (e) {
+    toast(String(e && e.message ? e.message : e), 6000);
+  }
+  podUI.refreshing = false;
+  if (st) {
+    state.podcasts = st;
+    podUI.at = Date.now();
+    const fresh = podShows().flatMap((s) => s.episodes || []).filter((ep) => !had.has(ep.id)).length;
+    const failed = podShows().filter((s) => s.error);
+    const why = failed.length ? `. ${failed.length === 1 ? failed[0].title : `${failed.length} shows`} couldn't be checked` : '';
+    toast(`${fresh ? `${fresh} new episode${fresh === 1 ? '' : 's'}` : 'No new episodes'}${why}`, failed.length ? 5000 : 2500);
+    if (fresh) {
+      podUI.sel = {}; // the newest, where they are
+      clearTimeout(podUI.timer);
+      podUI.timer = setTimeout(loadPodcasts, 20_000);
+    }
+  }
+  if (state.view === 'podcasts') renderPodcasts();
 }
 
 function podHint(ep) {
   if (onRemote()) return 'OK for the actions, Left for the shows';
-  return hints([['Enter', 'Enter', 'for the actions'], ...(resumable(ep) ? [['', 'Shift Enter', 'plays from the start']] : []), ['w', 'W', ep.watched ? 'unwatched' : 'watched']]);
+  return hints([['Enter', 'Enter', 'for the actions'], ...(resumable(ep) ? [['', 'Shift Enter', 'plays from the start']] : []), ['w', 'W', ep.watched ? 'unwatched' : 'watched'], ['r', 'R', 'refreshes']]);
 }
 
 function wirePodcasts() {
@@ -148,6 +193,7 @@ function wirePodcasts() {
     podUI.list = b.dataset.list;
     renderPodcasts();
   });
+  f(v, 'refresh').addEventListener('click', refreshPodcasts);
   v.addEventListener('click', (e) => {
     const b = e.target.closest('[data-act]');
     if (b) return podAct(b.dataset.act);
@@ -200,12 +246,14 @@ async function podAct(act) {
 // library.
 function podcastsKey(e) {
   const lists = podLists();
+  if (e.key === 'r' || e.key === 'R') return void refreshPodcasts();
   if (e.key === '[' || e.key === ']') {
     const i = lists.findIndex(([k]) => k === podUI.list);
     podUI.list = lists[(i + (e.key === ']' ? 1 : lists.length - 1)) % lists.length][0];
     return renderPodcasts();
   }
   if (podUI.zone === 'menu') return podMenuKey(e, lists);
+  if (podUI.zone === 'refresh') return podRefreshKey(e);
   if (podUI.zone === 'actions' && podActionsKey(e)) return undefined;
   const eps = podList()[2];
   const sel = podUI.sel;
@@ -234,15 +282,18 @@ function podcastsKey(e) {
   return undefined;
 }
 
-// podMenuKey: Up and Down pick a list, Right or OK goes into it, Left (or
-// Up from the first) to the dock.
+// podMenuKey: Up and Down pick a list (Down from the last to Refresh),
+// Right or OK goes into it, Left (or Up from the first) to the dock.
 function podMenuKey(e, lists) {
   const i = lists.findIndex(([k]) => k === podUI.list);
   switch (e.key) {
     case 'ArrowUp': case 'ArrowDown': {
       const j = i + (e.key === 'ArrowUp' ? -1 : 1);
       if (j < 0) return openDock();
-      if (j >= lists.length) break;
+      if (j >= lists.length) {
+        if (isShown(f($('#podcasts'), 'refresh'))) podZone('refresh');
+        break;
+      }
       podUI.list = lists[j][0];
       renderPodcasts();
       podZone('menu');
@@ -252,6 +303,21 @@ function podMenuKey(e, lists) {
       if (podList()[2].length) podZone('grid');
       break;
     case 'ArrowLeft': return openDock();
+    default: return undefined;
+  }
+  e.preventDefault();
+  return undefined;
+}
+
+// podRefreshKey: OK refreshes, Up goes back to the lists, Right into the
+// list picked, Left to the dock.
+function podRefreshKey(e) {
+  switch (e.key) {
+    case 'Enter': f($('#podcasts'), 'refresh').click(); break;
+    case 'ArrowUp': podZone('menu'); break;
+    case 'ArrowRight': if (podList()[2].length) podZone('grid'); break;
+    case 'ArrowLeft': openDock(); break;
+    case 'ArrowDown': break;
     default: return undefined;
   }
   e.preventDefault();
@@ -359,27 +425,41 @@ async function searchShows(q) {
   openSettingsList('podfound');
 }
 
+// subscribers is a channel's following as YouTube says it: "3.39M
+// subscribers".
+const subscribers = (n) => `${new Intl.NumberFormat([], { notation: 'compact', maximumSignificantDigits: 3 }).format(n)} subscriber${n === 1 ? '' : 's'}`;
+
 function podFoundRows(add) {
   const found = state.podFound || [];
   for (const c of found) {
-    const have = podShows().some((s) => s.url === c.url);
+    // A channel found is its videos as a show.
+    const have = podShows().some((s) => s.url === c.url || s.url === `${c.url}/videos`);
     add({
       id: c.url, kind: have ? 'info' : 'action', verb: 'adds it', label: c.title,
-      sub: [c.subscribers, c.description].filter(Boolean).join('. ').slice(0, 140),
+      sub: [c.subscribers ? subscribers(c.subscribers) : '', c.description].filter(Boolean).join('. ').slice(0, 140),
       value: have ? 'Added' : 'Add', run: () => addShow(c),
     });
   }
   if (!found.length) add({ id: 'none', kind: 'info', label: 'Nothing found', sub: 'Try other words, or paste the show\'s address' });
 }
 
+// addShow adds a show found, one at a time: it's listed first, a few
+// seconds.
+let podAdding = '';
 async function addShow(c) {
-  toast(`Adding ${c.title}...`, 30000);
+  if (podAdding) return toast(`Still adding ${podAdding}...`, 2000);
+  podAdding = c.title;
+  toast(`Adding ${c.title}...`, 120_000);
+  let show;
   try {
-    await api().AddPodcast(c.url, 0);
+    show = await api().AddPodcast(c.url, 0);
   } catch (e) {
     return toast(String(e && e.message ? e.message : e), 6000);
+  } finally {
+    podAdding = '';
   }
-  toast(`Added ${c.title}`, 2000);
+  const n = (show.episodes || []).length;
+  toast(`Added ${show.title || c.title}, ${n} episode${n === 1 ? '' : 's'}`, 2500);
   closeSettingsList();
   await loadPodcasts();
   return undefined;

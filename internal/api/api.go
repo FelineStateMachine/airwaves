@@ -61,6 +61,7 @@ type Backend interface {
 	// to add, and an episode played from a point, with how far it was
 	// watched.
 	Podcasts(ctx context.Context) (*podcast.State, error)
+	RefreshPodcasts(ctx context.Context) (*podcast.State, error)
 	SearchPodcasts(ctx context.Context, query string) ([]podcast.Found, error)
 	AddPodcast(ctx context.Context, url string, minMinutes float64) (*podcast.Show, error)
 	RemovePodcast(ctx context.Context, id string) error
@@ -289,6 +290,9 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("GET /api/podcasts", func(w http.ResponseWriter, r *http.Request) {
 		reply(w)(b.Podcasts(r.Context()))
+	})
+	mux.HandleFunc("POST /api/podcasts/refresh", func(w http.ResponseWriter, r *http.Request) {
+		reply(w)(b.RefreshPodcasts(r.Context()))
 	})
 	mux.HandleFunc("GET /api/podcasts/search", func(w http.ResponseWriter, r *http.Request) {
 		reply(w)(b.SearchPodcasts(r.Context(), r.URL.Query().Get("q")))

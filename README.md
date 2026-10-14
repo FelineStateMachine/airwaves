@@ -165,7 +165,7 @@ had.
 | --- | --- |
 | G | Guide: arrows move, and Up and Down wrap round the channels. The filters (Favorites, Sports...; also `[` `]`) are Down from the top bar, which is Left from the earliest program. Enter watches what's on, or shows a program to come's actions; hold Enter, or I, for any program's: watch, record (which opens to this one, every episode or new only), favorite, hide. Home jumps to now, R / Shift R / N record, Shift F favorite, H hide (U undoes) |
 | D | Recordings: Left (or `[` `]`) for Library, Coming up, Series. Enter shows a recording's actions: resume, from the start, watched, delete (press twice); for one recording now, watch from the start, 30 more minutes, stop (keeping it) and delete; Shift Enter starts over, W marks watched, Delete twice removes; on a series K sets how many to keep, N new episodes only |
-| P | Podcasts: video podcasts from YouTube, on demand. The rail has Latest (every show's newest), Continue and each show; Enter shows an episode's actions: play or resume, from the start, watched. Shows are added in Settings, Podcasts, by search or a channel's or playlist's address |
+| P | Podcasts: video podcasts from YouTube, on demand. The rail has Latest (every show's newest), Continue and each show, and under them Refresh (also R), which looks for new episodes now; Enter shows an episode's actions: play or resume, from the start, watched. Shows are added in Settings, Podcasts, by search or a channel's or playlist's address |
 | W | Weather: current conditions, alerts, the next 24 hours, 7-day, radar loop and satellite; Up and Down move through them, Left to watch the weather channel |
 | `,` or S | More: Settings, a tab for each area in the rail (Display, Watching, Channels, Reception, Recordings, Server, About). Up and Down pick a tab, Enter goes in, Back returns to the tabs; Page Up and Down (a controller's LB and RB, also `[` `]`) change tab |
 | A | Settings' Reception tab: what the tuners measured, by RF channel (the ones the scan found first), with the transmitters licensed on each. Up and Down pick one, Enter watches its first channel; above them the tuner, Measure now, which reads every RF channel on a free tuner and shows its progress, and Scan for channels (press twice) |
@@ -289,7 +289,7 @@ come, on now or not yet processed, are left out.
 each was watched (and any older ones part watched), backed up like the recordings:
 
 - every 6 hours it lists the show's newest 40 videos with yt-dlp, and every 30 minutes reads
-  its channel's feed for new uploads in between;
+  its channel's feed for new uploads in between; Refresh, in the app, lists every show now;
 - a video new to a show is looked up (its length, date, description and picture), a dozen
   an update, a few seconds apart, so YouTube isn't asked too much;
 - the newest unwatched episode of each show has where it streams from found ahead, so it
@@ -299,9 +299,14 @@ Nothing is downloaded: an episode streams from YouTube while it's watched, H.264
 1080p with English sound, its picture copied rather than transcoded, and played like a
 recording, from where it was left. One show failing to list says so on that show alone.
 
+Listing a show takes a few seconds. Adding one, or Refresh, does it at once; the background
+listings and lookups take turns with the YouTube channels' jobs, one yt-dlp job at a time,
+since listing a channel's whole catalog for its schedule can take minutes.
+
 | | |
 | --- | --- |
-| `GET /api/podcasts` | `{"shows": [{"id", "title", "url", "thumbnail", "minMinutes", "error", "episodes": [{"id", "showId", "title", "description", "published", "duration", "thumbnail", "position", "watched"}]}], "updating"}`, episodes newest first |
+| `GET /api/podcasts` | `{"shows": [{"id", "title", "url", "thumbnail", "minMinutes", "error", "episodes": [{"id", "showId", "title", "description", "published", "duration", "thumbnail", "position", "watched"}]}], "updating", "listed"}`, episodes newest first; `listed` is since when every show has been listed |
+| `POST /api/podcasts/refresh` | Lists every show now, a few at once, and replies as `GET /api/podcasts`; new episodes are looked up after |
 | `GET /api/podcasts/search?q=` | YouTube channels: `[{"id", "title", "url", "thumbnail", "description", "subscribers"}]` |
 | `POST /api/podcasts/shows` | `{"url", "minMinutes"}`: adds a show, listed before the reply, which is the show; 400 for what isn't one |
 | `DELETE /api/podcasts/shows/{id}` | Takes a show out |

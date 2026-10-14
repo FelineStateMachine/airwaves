@@ -347,6 +347,15 @@ func (a *App) Podcasts() (*podcast.State, error) {
 	return c.Podcasts(a.ctx)
 }
 
+// RefreshPodcasts lists every show again now, for the newest episodes.
+func (a *App) RefreshPodcasts() (*podcast.State, error) {
+	c, _, err := a.server()
+	if err != nil {
+		return nil, err
+	}
+	return c.RefreshPodcasts(a.ctx)
+}
+
 // SearchPodcasts finds YouTube channels to add as shows.
 func (a *App) SearchPodcasts(query string) ([]podcast.Found, error) {
 	c, _, err := a.server()

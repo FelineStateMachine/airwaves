@@ -70,6 +70,10 @@ export function Record(arg1) {
   return window['go']['main']['App']['Record'](arg1);
 }
 
+export function RefreshPodcasts() {
+  return window['go']['main']['App']['RefreshPodcasts']();
+}
+
 export function RemovePodcast(arg1) {
   return window['go']['main']['App']['RemovePodcast'](arg1);
 }

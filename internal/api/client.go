@@ -228,6 +228,12 @@ func (c *Client) Podcasts(ctx context.Context) (*podcast.State, error) {
 	return &s, c.call(ctx, http.MethodGet, "/api/podcasts", nil, &s)
 }
 
+// RefreshPodcasts implements Backend.
+func (c *Client) RefreshPodcasts(ctx context.Context) (*podcast.State, error) {
+	var s podcast.State
+	return &s, c.call(ctx, http.MethodPost, "/api/podcasts/refresh", nil, &s)
+}
+
 // SearchPodcasts implements Backend.
 func (c *Client) SearchPodcasts(ctx context.Context, query string) ([]podcast.Found, error) {
 	var out []podcast.Found

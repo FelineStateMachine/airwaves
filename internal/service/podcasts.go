@@ -21,6 +21,16 @@ func (s *Service) Podcasts(context.Context) (*podcast.State, error) {
 	return &st, nil
 }
 
+// RefreshPodcasts lists every show again now, and returns the library
+// as refreshed.
+func (s *Service) RefreshPodcasts(ctx context.Context) (*podcast.State, error) {
+	if s.podcasts == nil {
+		return nil, ErrNoPodcasts
+	}
+	st := s.podcasts.Refresh(ctx)
+	return &st, nil
+}
+
 // SearchPodcasts finds YouTube channels to add as shows.
 func (s *Service) SearchPodcasts(ctx context.Context, query string) ([]podcast.Found, error) {
 	if s.podcasts == nil {
