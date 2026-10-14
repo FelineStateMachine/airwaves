@@ -544,8 +544,8 @@ body:not(.mode-guide) .g-cell.rec-on::after { animation: none; } /* hidden, so s
 .r-panel { display: none !important; min-height: 0; }
 .r-panel.on { display: grid !important; }
 .r-lib.on { grid-template-rows: auto minmax(0, 1fr); grid-template-columns: minmax(0, 1fr); gap: 24px; }
-.r-detail { display: grid; grid-template-columns: minmax(0, 1fr) min(34%, 420px); gap: 30px; min-height: var(--pip-h); align-items: end; }
-.r-detail .rd-title { font: 800 clamp(34px, calc(4 * var(--vw)), 54px)/.95 var(--f-display); margin: 6px 0 6px; }
+.r-detail { --rd-title: clamp(34px, calc(4 * var(--vw)), 54px); display: grid; grid-template-columns: minmax(0, 1fr) min(34%, 420px); gap: 30px; min-height: var(--pip-h); align-items: end; }
+.r-detail .rd-title { font: 800 var(--rd-title)/.95 var(--f-display); margin: 6px 0 6px; }
 .r-detail .rd-kicker { font: 500 12px var(--f-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--amber); }
 .r-detail .rd-ep { font-style: italic; min-height: 1.4em; }
 .r-detail .rd-desc { margin: 10px 0 0; color: var(--muted); max-width: 70ch; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
@@ -596,7 +596,16 @@ body:not(.mode-guide) .g-cell.rec-on::after { animation: none; } /* hidden, so s
 
 /* ---------- Podcasts ---------- */
 /* Recordings' library, for episodes: the one picked above a grid. */
-.p-main { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 24px; min-height: 0; }
+.p-main { display: grid; grid-template-rows: auto minmax(0, 1fr); grid-template-columns: minmax(0, 1fr); gap: 24px; min-height: 0; }
+/* The episode picked takes the same room whichever it is, so the grid
+   under it stays put: room for the kicker (16px), two lines of title and
+   its margins (12px), three lines of description and its margin (10px),
+   and the actions (32px) and the hint (15px) with theirs (24px). The words
+   sit at the bottom, by the actions; the picture is its column's width. */
+#podcasts .r-detail { height: calc(16px + 1.9 * var(--rd-title) + 12px + 4.2em + 10px + 32px + 15px + 24px); }
+#podcasts .rd-kicker { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#podcasts .rd-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+#podcasts .rd-art { align-self: end; width: 100%; }
 .p-menu { overflow: auto; min-height: 0; scrollbar-width: none; }
 /* Refresh, under the lists: every show listed again now. */
 .p-refresh { display: grid; gap: 8px; padding: 0 14px; }
@@ -786,9 +795,15 @@ body.pf-touch .s-main { grid-template-rows: minmax(0, 1fr); }
   body.pf-touch .view.railed { padding-top: 64px; grid-template-columns: 190px minmax(0, 1fr); gap: 20px; }
   body.pf-touch .rm-item .rm-label { font-size: 19px; }
   body.pf-touch .p-menu .rm-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  body.pf-touch .r-detail { min-height: 0; grid-template-columns: minmax(0, 1fr) min(30%, 300px); gap: 20px; }
-  body.pf-touch .r-detail .rd-title { font-size: 30px; -webkit-line-clamp: 2; display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
+  body.pf-touch .r-detail { --rd-title: 30px; min-height: 0; grid-template-columns: minmax(0, 1fr) min(30%, 300px); gap: 20px; }
+  body.pf-touch .r-detail .rd-title { -webkit-line-clamp: 2; display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
   body.pf-touch .r-detail .rd-desc { -webkit-line-clamp: 2; }
+  /* Two lines of description, no hint, and actions a finger can hit, in
+     one row that scrolls sideways, as the guide's do. */
+  body.pf-touch #podcasts .r-detail { height: calc(16px + 1.9 * var(--rd-title) + 12px + 2.8em + 10px + 44px + 12px); }
+  body.pf-touch #podcasts .rd-actions { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding: 4px; margin: 8px -4px -4px; }
+  body.pf-touch #podcasts .rd-actions::-webkit-scrollbar { display: none; }
+  body.pf-touch #podcasts .rd-actions > * { flex-shrink: 0; }
   body.pf-touch .p-main, body.pf-touch .r-lib.on { gap: 14px; }
   body.pf-touch #banner { padding: 16px 20px 14px; grid-template-columns: 130px minmax(0, 1fr); gap: 8px 20px; }
   body.pf-touch .bn-num { font-size: 64px; }
