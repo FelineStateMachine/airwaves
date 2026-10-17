@@ -1,0 +1,6 @@
+#!/bin/sh
+# CI for src.rest: go vet ./... and go test ./..., which cover the parsers,
+# the tuner, recording, the API and the embedded interface (README, Layout).
+set -eu
+go vet ./...
+go test ./...
